@@ -38,6 +38,11 @@ func TestLocalFileToOpenSubsonicStream(t *testing.T) {
 		t.Fatalf("buildApplication() error = %v", err)
 	}
 	defer app.Close()
+	rootResponse := httptest.NewRecorder()
+	app.handler.ServeHTTP(rootResponse, httptest.NewRequest(http.MethodGet, "/", nil))
+	if rootResponse.Code != http.StatusOK {
+		t.Fatalf("root status = %d, body = %s", rootResponse.Code, rootResponse.Body.String())
+	}
 
 	indexes := httptest.NewRecorder()
 	app.handler.ServeHTTP(indexes, httptest.NewRequest(http.MethodGet,

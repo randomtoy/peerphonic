@@ -49,7 +49,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	streaming := services.NewStreamingService(catalog, provider)
 	mux := http.NewServeMux()
 	mux.Handle("/rest/", opensubsonic.NewHandler(catalog, streaming, cfg.Username, cfg.Password))
-	mux.Handle("/api/v1/", peerphonic.NewHandler())
+	mux.Handle("/", peerphonic.NewHandler())
 	return &application{handler: mux, catalog: catalog}, nil
 }
 
