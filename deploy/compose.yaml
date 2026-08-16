@@ -1,0 +1,14 @@
+services:
+  peerphonic:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - "${MUSIC_DIR:?set MUSIC_DIR to the host music directory}:/music:ro"
+      - "./data:/data"
+    environment:
+      PEERPHONIC_USERNAME: "${PEERPHONIC_USERNAME:-admin}"
+      PEERPHONIC_PASSWORD: "${PEERPHONIC_PASSWORD:?set PEERPHONIC_PASSWORD}"
+    restart: unless-stopped

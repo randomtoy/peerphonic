@@ -1,0 +1,9 @@
+{
+  "address": ":8080",
+  "music_dir": "/srv/music",
+  "database": "/srv/peerphonic/peerphonic.db",
+  "cache_dir": "/srv/peerphonic/cache",
+  "username": "music",
+  "password": "change-me",
+  "scan_on_start": true
+}

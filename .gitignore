@@ -1,0 +1,7 @@
+/backend/peerphonic
+/backend/*.db
+/backend/*.db-shm
+/backend/*.db-wal
+/backend/cache/
+/deploy/data/
+.DS_Store
