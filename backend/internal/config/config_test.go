@@ -1,0 +1,45 @@
+package config
+
+import (
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func TestLoadPrecedence(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	configPath := filepath.Join(dir, "config.json")
+	if err := os.WriteFile(configPath, []byte(`{"music_dir":"from-file","address":":1000","username":"file"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	env := map[string]string{
+		"PEERPHONIC_ADDRESS":  ":2000",
+		"PEERPHONIC_USERNAME": "env",
+	}
+	lookup := func(key string) (string, bool) { value, ok := env[key]; return value, ok }
+
+	cfg, err := Load([]string{"--config", configPath, "--address", ":3000"}, lookup)
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.Address != ":3000" {
+		t.Errorf("Address = %q, want :3000", cfg.Address)
+	}
+	if cfg.Username != "env" {
+		t.Errorf("Username = %q, want env", cfg.Username)
+	}
+	if filepath.Base(cfg.MusicDir) != "from-file" {
+		t.Errorf("MusicDir = %q, want path ending in from-file", cfg.MusicDir)
+	}
+}
+
+func TestLoadRequiresMusicDirectory(t *testing.T) {
+	t.Parallel()
+
+	_, err := Load(nil, func(string) (string, bool) { return "", false })
+	if err == nil {
+		t.Fatal("Load() error = nil, want missing music directory error")
+	}
+}
