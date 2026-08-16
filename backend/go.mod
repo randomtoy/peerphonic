@@ -2,7 +2,10 @@ module github.com/randomtoy/peerphonic/backend
 
 go 1.25.0
 
-require modernc.org/sqlite v1.56.0
+require (
+	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
+	modernc.org/sqlite v1.56.0
+)
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
