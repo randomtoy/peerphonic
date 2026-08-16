@@ -3,6 +3,7 @@ package local
 import (
 	"context"
 	"fmt"
+	"mime"
 	"os"
 	"path/filepath"
 	"strings"
@@ -53,7 +54,8 @@ func (p *Provider) Resolve(_ context.Context, ref domain.SourceRef) (ports.Resol
 		return ports.ResolvedSource{}, fmt.Errorf("local media %q is not a regular file", ref.Key)
 	}
 	return ports.ResolvedSource{
-		Content: file, Name: info.Name(), Size: info.Size(), ModTime: info.ModTime(),
+		Content: file, Name: info.Name(), ContentType: mime.TypeByExtension(filepath.Ext(info.Name())),
+		Size: info.Size(), ModTime: info.ModTime(),
 	}, nil
 }
 
