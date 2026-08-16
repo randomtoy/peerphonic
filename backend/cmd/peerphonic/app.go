@@ -1,0 +1,61 @@
+package main
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"net/http"
+
+	"github.com/randomtoy/peerphonic/backend/internal/adapters/metadata"
+	"github.com/randomtoy/peerphonic/backend/internal/adapters/providers/local"
+	"github.com/randomtoy/peerphonic/backend/internal/adapters/storage/sqlite"
+	"github.com/randomtoy/peerphonic/backend/internal/api/opensubsonic"
+	"github.com/randomtoy/peerphonic/backend/internal/api/peerphonic"
+	"github.com/randomtoy/peerphonic/backend/internal/config"
+	"github.com/randomtoy/peerphonic/backend/internal/core/services"
+	"github.com/randomtoy/peerphonic/backend/internal/scanner"
+)
+
+type application struct {
+	handler http.Handler
+	catalog *sqlite.Catalog
+}
+
+func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logger) (*application, error) {
+	catalog, err := sqlite.Open(ctx, cfg.Database)
+	if err != nil {
+		return nil, err
+	}
+	fail := func(err error) (*application, error) {
+		catalog.Close()
+		return nil, err
+	}
+
+	provider, err := local.New(cfg.MusicDir)
+	if err != nil {
+		return fail(err)
+	}
+	if cfg.Scan {
+		report, err := scanner.New(cfg.MusicDir, catalog, metadata.TagExtractor{}).Scan(ctx)
+		if err != nil {
+			return fail(err)
+		}
+		logger.Info("music scan completed", "tracks", report.Tracks, "warnings", len(report.Warnings))
+		for _, warning := range report.Warnings {
+			logger.Warn("music file skipped", "path", warning.Path, "error", warning.Err)
+		}
+	}
+
+	streaming := services.NewStreamingService(catalog, provider)
+	mux := http.NewServeMux()
+	mux.Handle("/rest/", opensubsonic.NewHandler(catalog, streaming, cfg.Username, cfg.Password))
+	mux.Handle("/api/v1/", peerphonic.NewHandler())
+	return &application{handler: mux, catalog: catalog}, nil
+}
+
+func (a *application) Close() error {
+	if err := a.catalog.Close(); err != nil {
+		return fmt.Errorf("close catalog: %w", err)
+	}
+	return nil
+}

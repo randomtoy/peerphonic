@@ -1,0 +1,59 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+
+	"github.com/randomtoy/peerphonic/backend/internal/config"
+	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
+)
+
+func TestLocalFileToOpenSubsonicStream(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	mediaPath := filepath.Join(root, "Artist", "Album", "Song.mp3")
+	if err := os.MkdirAll(filepath.Dir(mediaPath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	media := bytes.Repeat([]byte{0}, 256)
+	if err := os.WriteFile(mediaPath, media, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Config{
+		MusicDir: root, Database: filepath.Join(t.TempDir(), "peerphonic.db"),
+		Username: "admin", Password: "secret", Scan: true,
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	app, err := buildApplication(context.Background(), cfg, logger)
+	if err != nil {
+		t.Fatalf("buildApplication() error = %v", err)
+	}
+	defer app.Close()
+
+	indexes := httptest.NewRecorder()
+	app.handler.ServeHTTP(indexes, httptest.NewRequest(http.MethodGet,
+		"/rest/getIndexes?u=admin&p=secret&f=json", nil))
+	if indexes.Code != http.StatusOK || !strings.Contains(indexes.Body.String(), "Artist") {
+		t.Fatalf("indexes status = %d, body = %s", indexes.Code, indexes.Body.String())
+	}
+
+	trackID := domain.StableID("track", "local", "Artist/Album/Song.mp3")
+	stream := httptest.NewRecorder()
+	app.handler.ServeHTTP(stream, httptest.NewRequest(http.MethodGet,
+		"/rest/stream?u=admin&p=secret&id="+trackID, nil))
+	if stream.Code != http.StatusOK {
+		t.Fatalf("stream status = %d, body = %s", stream.Code, stream.Body.String())
+	}
+	if !bytes.Equal(stream.Body.Bytes(), media) {
+		t.Fatalf("streamed %d bytes, want %d", stream.Body.Len(), len(media))
+	}
+}
