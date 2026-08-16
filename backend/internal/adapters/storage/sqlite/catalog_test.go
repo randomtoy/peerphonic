@@ -43,6 +43,13 @@ func TestCatalogRoundTripAndReplacement(t *testing.T) {
 	if err != nil || len(artists) != 1 || artists[0].Name != "Artist" {
 		t.Fatalf("Artists() = %#v, %v", artists, err)
 	}
+	if artists[0].AlbumCount != 1 {
+		t.Fatalf("artist album count = %d, want 1", artists[0].AlbumCount)
+	}
+	allAlbums, err := catalog.Albums(ctx, 0, 10)
+	if err != nil || len(allAlbums) != 1 || allAlbums[0].ID != "album-1" {
+		t.Fatalf("Albums() = %#v, %v", allAlbums, err)
+	}
 	albums, err := catalog.AlbumsByArtist(ctx, "artist-1")
 	if err != nil || len(albums) != 1 || albums[0].SongCount != 1 {
 		t.Fatalf("AlbumsByArtist() = %#v, %v", albums, err)

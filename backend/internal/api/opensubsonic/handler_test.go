@@ -101,3 +101,51 @@ func TestRejectsWrongPassword(t *testing.T) {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
+
+func TestID3BrowsingEndpointsUsedByAmperfy(t *testing.T) {
+	t.Parallel()
+
+	handler, track := newTestHandler(t)
+	auth := "?u=alice&p=secret&v=1.16.1&c=Amperfy"
+	tests := []struct {
+		path     string
+		contains []string
+	}{
+		{path: "/rest/getGenres.view" + auth, contains: []string{"<genres></genres>"}},
+		{path: "/rest/getArtists.view" + auth, contains: []string{
+			"<artists", `id="artist_test"`, `albumCount="1"`,
+		}},
+		{path: "/rest/getArtist.view" + auth + "&id=artist_test", contains: []string{
+			`<artist id="artist_test"`, `<album id="album_test"`,
+		}},
+		{path: "/rest/getAlbumList2.view" + auth + "&type=alphabeticalByName&size=500&offset=0", contains: []string{
+			"<albumList2>", `<album id="album_test"`,
+		}},
+		{path: "/rest/getAlbum.view" + auth + "&id=album_test", contains: []string{
+			`<album id="album_test"`, `<song id="` + track.ID + `"`, `albumId="album_test"`,
+		}},
+		{path: "/rest/getSong.view" + auth + "&id=" + track.ID, contains: []string{
+			`<song id="` + track.ID + `"`,
+		}},
+		{path: "/rest/getPlaylists.view" + auth, contains: []string{"<playlists></playlists>"}},
+		{path: "/rest/getOpenSubsonicExtensions.view" + auth, contains: []string{
+			"<openSubsonicExtensions></openSubsonicExtensions>",
+		}},
+	}
+
+	for _, test := range tests {
+		test := test
+		t.Run(test.path, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.path, nil))
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+			for _, expected := range test.contains {
+				if !strings.Contains(response.Body.String(), expected) {
+					t.Errorf("body does not contain %q: %s", expected, response.Body.String())
+				}
+			}
+		})
+	}
+}

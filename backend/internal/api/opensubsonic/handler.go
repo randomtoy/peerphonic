@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"path"
 	"sort"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -60,11 +61,135 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.getIndexes(writer, request)
 	case "getMusicDirectory":
 		h.getMusicDirectory(writer, request)
+	case "getGenres":
+		h.write(writer, request, http.StatusOK, response{Genres: &genresResponse{Genres: []genre{}}})
+	case "getArtists":
+		h.getArtists(writer, request)
+	case "getArtist":
+		h.getArtist(writer, request)
+	case "getAlbumList2":
+		h.getAlbumList2(writer, request)
+	case "getAlbum":
+		h.getAlbum(writer, request)
+	case "getSong":
+		h.getSong(writer, request)
+	case "getPlaylists":
+		h.write(writer, request, http.StatusOK, response{Playlists: &playlists{Items: []playlist{}}})
+	case "getOpenSubsonicExtensions":
+		h.write(writer, request, http.StatusOK, response{Extensions: &extensions{Items: []extension{}}})
 	case "stream", "download":
 		h.stream(writer, request)
 	default:
 		h.writeError(writer, request, http.StatusNotFound, 0, "Endpoint not implemented")
 	}
+}
+
+func (h *Handler) getArtists(writer http.ResponseWriter, request *http.Request) {
+	items, err := h.catalog.Artists(request.Context())
+	if err != nil {
+		h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to read the music catalog")
+		return
+	}
+	groups := make(map[string][]artistID3)
+	for _, item := range items {
+		name := indexName(item.Name)
+		groups[name] = append(groups[name], artistID3{
+			ID: item.ID, Name: item.Name, AlbumCount: item.AlbumCount,
+		})
+	}
+	names := make([]string, 0, len(groups))
+	for name := range groups {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	payload := &artistsID3{IgnoredArticles: "The An A", Indexes: []indexID3{}}
+	for _, name := range names {
+		payload.Indexes = append(payload.Indexes, indexID3{Name: name, Artists: groups[name]})
+	}
+	h.write(writer, request, http.StatusOK, response{Artists: payload})
+}
+
+func (h *Handler) getArtist(writer http.ResponseWriter, request *http.Request) {
+	id := request.Form.Get("id")
+	if id == "" {
+		h.writeError(writer, request, http.StatusBadRequest, 10, "Required parameter id is missing")
+		return
+	}
+	albums, err := h.catalog.AlbumsByArtist(request.Context(), id)
+	if err != nil {
+		h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to read the music catalog")
+		return
+	}
+	if len(albums) == 0 {
+		h.writeError(writer, request, http.StatusNotFound, 70, "Artist not found")
+		return
+	}
+	item := &artistID3{ID: id, Name: albums[0].Artist, AlbumCount: len(albums), Albums: []albumID3{}}
+	for _, album := range albums {
+		item.Albums = append(item.Albums, makeAlbumID3(album))
+	}
+	h.write(writer, request, http.StatusOK, response{ArtistDetail: item})
+}
+
+func (h *Handler) getAlbumList2(writer http.ResponseWriter, request *http.Request) {
+	offset, limit, err := pageParameters(request)
+	if err != nil {
+		h.writeError(writer, request, http.StatusBadRequest, 10, err.Error())
+		return
+	}
+	albums, err := h.catalog.Albums(request.Context(), offset, limit)
+	if err != nil {
+		h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to read the music catalog")
+		return
+	}
+	payload := &albumList2{Albums: make([]albumID3, 0, len(albums))}
+	for _, album := range albums {
+		payload.Albums = append(payload.Albums, makeAlbumID3(album))
+	}
+	h.write(writer, request, http.StatusOK, response{AlbumList2: payload})
+}
+
+func (h *Handler) getAlbum(writer http.ResponseWriter, request *http.Request) {
+	id := request.Form.Get("id")
+	if id == "" {
+		h.writeError(writer, request, http.StatusBadRequest, 10, "Required parameter id is missing")
+		return
+	}
+	tracks, err := h.catalog.TracksByAlbum(request.Context(), id)
+	if err != nil {
+		h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to read the music catalog")
+		return
+	}
+	if len(tracks) == 0 {
+		h.writeError(writer, request, http.StatusNotFound, 70, "Album not found")
+		return
+	}
+	album := albumFromTracks(tracks)
+	payload := makeAlbumID3(album)
+	payload.Songs = make([]child, 0, len(tracks))
+	for _, track := range tracks {
+		payload.Songs = append(payload.Songs, trackChild(track))
+	}
+	h.write(writer, request, http.StatusOK, response{Album: &payload})
+}
+
+func (h *Handler) getSong(writer http.ResponseWriter, request *http.Request) {
+	id := request.Form.Get("id")
+	if id == "" {
+		h.writeError(writer, request, http.StatusBadRequest, 10, "Required parameter id is missing")
+		return
+	}
+	track, err := h.catalog.Track(request.Context(), id)
+	if errors.Is(err, ports.ErrNotFound) {
+		h.writeError(writer, request, http.StatusNotFound, 70, "Song not found")
+		return
+	}
+	if err != nil {
+		h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to read the music catalog")
+		return
+	}
+	song := trackChild(track)
+	h.write(writer, request, http.StatusOK, response{Song: &song})
 }
 
 func (h *Handler) getIndexes(writer http.ResponseWriter, request *http.Request) {
@@ -243,5 +368,49 @@ func trackChild(item domain.Track) child {
 		Artist: item.Artist, IsDir: false, Track: item.TrackNumber, Year: item.Year,
 		Duration: int(item.Duration.Seconds()), Size: item.Size, BitRate: item.BitRate,
 		Suffix: item.Suffix, ContentType: item.ContentType, Type: "music",
+		AlbumID: item.AlbumID, ArtistID: item.ArtistID, DiscNumber: item.DiscNumber,
 	}
+}
+
+func makeAlbumID3(item domain.Album) albumID3 {
+	return albumID3{
+		ID: item.ID, Parent: item.ArtistID, Name: item.Name, Title: item.Name,
+		Album: item.Name, Artist: item.Artist, ArtistID: item.ArtistID, IsDir: true,
+		SongCount: item.SongCount, Duration: int(item.Duration.Seconds()), Year: item.Year,
+	}
+}
+
+func albumFromTracks(tracks []domain.Track) domain.Album {
+	first := tracks[0]
+	album := domain.Album{
+		ID: first.AlbumID, Name: first.Album, Artist: first.AlbumArtist,
+		ArtistID: first.ArtistID, Year: first.Year, SongCount: len(tracks),
+	}
+	for _, track := range tracks {
+		album.Duration += track.Duration
+		if album.Year == 0 && track.Year != 0 {
+			album.Year = track.Year
+		}
+	}
+	return album
+}
+
+func pageParameters(request *http.Request) (offset, limit int, err error) {
+	limit = 10
+	if value := request.Form.Get("size"); value != "" {
+		limit, err = strconv.Atoi(value)
+		if err != nil || limit < 0 {
+			return 0, 0, errors.New("parameter size must be a non-negative integer")
+		}
+	}
+	if limit > 500 {
+		limit = 500
+	}
+	if value := request.Form.Get("offset"); value != "" {
+		offset, err = strconv.Atoi(value)
+		if err != nil || offset < 0 {
+			return 0, 0, errors.New("parameter offset must be a non-negative integer")
+		}
+	}
+	return offset, limit, nil
 }

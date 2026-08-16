@@ -15,6 +15,7 @@ type Catalog interface {
 	ReplaceProviderTracks(ctx context.Context, provider string, tracks []domain.Track) error
 	Track(ctx context.Context, id string) (domain.Track, error)
 	Artists(ctx context.Context) ([]domain.Artist, error)
+	Albums(ctx context.Context, offset, limit int) ([]domain.Album, error)
 	AlbumsByArtist(ctx context.Context, artistID string) ([]domain.Album, error)
 	TracksByAlbum(ctx context.Context, albumID string) ([]domain.Track, error)
 }

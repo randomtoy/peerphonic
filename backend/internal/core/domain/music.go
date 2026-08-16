@@ -33,8 +33,9 @@ type Track struct {
 }
 
 type Artist struct {
-	ID   string
-	Name string
+	ID         string
+	Name       string
+	AlbumCount int
 }
 
 type Album struct {

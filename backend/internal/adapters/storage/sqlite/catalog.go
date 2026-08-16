@@ -171,7 +171,7 @@ func (c *Catalog) Track(ctx context.Context, id string) (domain.Track, error) {
 }
 
 func (c *Catalog) Artists(ctx context.Context) ([]domain.Artist, error) {
-	rows, err := c.db.QueryContext(ctx, `SELECT artist_id, album_artist
+	rows, err := c.db.QueryContext(ctx, `SELECT artist_id, album_artist, COUNT(DISTINCT album_id)
 		FROM tracks GROUP BY artist_id, album_artist ORDER BY album_artist COLLATE NOCASE`)
 	if err != nil {
 		return nil, fmt.Errorf("query artists: %w", err)
@@ -181,7 +181,7 @@ func (c *Catalog) Artists(ctx context.Context) ([]domain.Artist, error) {
 	var artists []domain.Artist
 	for rows.Next() {
 		var artist domain.Artist
-		if err := rows.Scan(&artist.ID, &artist.Name); err != nil {
+		if err := rows.Scan(&artist.ID, &artist.Name, &artist.AlbumCount); err != nil {
 			return nil, fmt.Errorf("scan artist: %w", err)
 		}
 		artists = append(artists, artist)
@@ -190,6 +190,18 @@ func (c *Catalog) Artists(ctx context.Context) ([]domain.Artist, error) {
 		return nil, fmt.Errorf("iterate artists: %w", err)
 	}
 	return artists, nil
+}
+
+func (c *Catalog) Albums(ctx context.Context, offset, limit int) ([]domain.Album, error) {
+	rows, err := c.db.QueryContext(ctx, `SELECT album_id, album, album_artist, artist_id,
+		MIN(NULLIF(year, 0)), COUNT(*), SUM(duration_ms)
+		FROM tracks GROUP BY album_id, album, album_artist, artist_id
+		ORDER BY album COLLATE NOCASE, album_artist COLLATE NOCASE LIMIT ? OFFSET ?`, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("query all albums: %w", err)
+	}
+	defer rows.Close()
+	return scanAlbums(rows)
 }
 
 func (c *Catalog) AlbumsByArtist(ctx context.Context, artistID string) ([]domain.Album, error) {
@@ -202,6 +214,10 @@ func (c *Catalog) AlbumsByArtist(ctx context.Context, artistID string) ([]domain
 	}
 	defer rows.Close()
 
+	return scanAlbums(rows)
+}
+
+func scanAlbums(rows *sql.Rows) ([]domain.Album, error) {
 	var albums []domain.Album
 	for rows.Next() {
 		var album domain.Album
