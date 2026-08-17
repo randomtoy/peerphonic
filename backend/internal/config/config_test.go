@@ -37,6 +37,9 @@ func TestLoadPrecedence(t *testing.T) {
 	if cfg.CacheSizeBytes != 4096 {
 		t.Errorf("CacheSizeBytes = %d, want 4096", cfg.CacheSizeBytes)
 	}
+	if filepath.Base(cfg.TorrentDir) != "torrents" {
+		t.Errorf("TorrentDir = %q, want path ending in torrents", cfg.TorrentDir)
+	}
 }
 
 func TestLoadRejectsInvalidCacheSize(t *testing.T) {

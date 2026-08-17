@@ -36,7 +36,7 @@ func TestLocalFileToOpenSubsonicStream(t *testing.T) {
 	}
 	cfg := config.Config{
 		MusicDir: root, Database: filepath.Join(t.TempDir(), "peerphonic.db"),
-		CacheDir: t.TempDir(), CacheSizeBytes: 1024,
+		CacheDir: t.TempDir(), CacheSizeBytes: 1024, TorrentDir: t.TempDir(),
 		Username: "admin", Password: "secret", Scan: true,
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))

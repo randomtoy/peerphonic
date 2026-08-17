@@ -2,11 +2,14 @@ package ports
 
 import (
 	"context"
+	"errors"
 	"io"
 	"time"
 
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 )
+
+var ErrSourceUnavailable = errors.New("source unavailable")
 
 type ReadSeekCloser interface {
 	io.Reader

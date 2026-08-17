@@ -12,4 +12,4 @@ COPY --from=build /out/peerphonic /peerphonic
 VOLUME ["/data", "/music"]
 EXPOSE 8080
 ENTRYPOINT ["/peerphonic", "serve"]
-CMD ["--music", "/music", "--database", "/data/peerphonic.db", "--cache", "/data/cache"]
+CMD ["--music", "/music", "--database", "/data/peerphonic.db", "--cache", "/data/cache", "--torrents", "/data/torrents"]

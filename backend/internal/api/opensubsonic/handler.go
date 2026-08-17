@@ -418,6 +418,10 @@ func (h *Handler) stream(writer http.ResponseWriter, request *http.Request) {
 			h.writeError(writer, request, http.StatusNotFound, 70, "Song not found")
 			return
 		}
+		if errors.Is(err, ports.ErrSourceUnavailable) {
+			h.writeError(writer, request, http.StatusServiceUnavailable, 0, "Song source is not available yet")
+			return
+		}
 		h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to open the song")
 		return
 	}

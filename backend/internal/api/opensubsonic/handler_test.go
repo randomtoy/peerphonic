@@ -13,6 +13,7 @@ import (
 
 	blobfs "github.com/randomtoy/peerphonic/backend/internal/adapters/blob/filesystem"
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/providers/local"
+	torrentprovider "github.com/randomtoy/peerphonic/backend/internal/adapters/providers/torrent"
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/storage/sqlite"
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
@@ -118,6 +119,36 @@ func TestBrowseAndStreamRange(t *testing.T) {
 	}
 	if stream.Body.String() != "2345" {
 		t.Fatalf("stream body = %q, want 2345", stream.Body.String())
+	}
+}
+
+func TestMetadataOnlyTorrentTrackIsTemporarilyUnavailable(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	catalog, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close()
+	track := domain.Track{
+		ID: "torrent-track", Title: "Remote", Artist: "Artist", ArtistID: "artist",
+		Album: "Album", AlbumID: "album", AlbumArtist: "Artist",
+	}
+	source := domain.TrackSource{
+		Track: track, Ref: domain.SourceRef{Provider: torrentprovider.Name, Key: "hash/Remote.mp3"},
+	}
+	if err := catalog.ReplaceProviderTracks(ctx, torrentprovider.Name, []domain.TrackSource{source}, nil); err != nil {
+		t.Fatal(err)
+	}
+	streams := services.NewStreamingService(catalog, torrentprovider.New())
+	handler := NewHandler(catalog, streams, nil, "alice", "secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+		"/rest/stream?u=alice&p=secret&id="+track.ID, nil))
+	if response.Code != http.StatusServiceUnavailable ||
+		!strings.Contains(response.Body.String(), "Song source is not available yet") {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
 

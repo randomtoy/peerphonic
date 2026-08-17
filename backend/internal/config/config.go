@@ -18,6 +18,7 @@ type Config struct {
 	Database       string `json:"database"`
 	CacheDir       string `json:"cache_dir"`
 	CacheSizeBytes int64  `json:"cache_size_bytes"`
+	TorrentDir     string `json:"torrent_dir"`
 	Username       string `json:"username"`
 	Password       string `json:"password"`
 	Scan           bool   `json:"scan_on_start"`
@@ -29,6 +30,7 @@ func Defaults() Config {
 		Database:       "peerphonic.db",
 		CacheDir:       "cache",
 		CacheSizeBytes: 10 << 30,
+		TorrentDir:     "torrents",
 		Username:       "admin",
 		Password:       "admin",
 		Scan:           true,
@@ -62,6 +64,7 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	flags.StringVar(&cfg.Database, "database", cfg.Database, "SQLite database path")
 	flags.StringVar(&cfg.CacheDir, "cache", cfg.CacheDir, "media cache directory")
 	flags.Int64Var(&cfg.CacheSizeBytes, "cache-size", cfg.CacheSizeBytes, "maximum media cache size in bytes")
+	flags.StringVar(&cfg.TorrentDir, "torrents", cfg.TorrentDir, "directory containing torrent metadata")
 	flags.StringVar(&cfg.Username, "username", cfg.Username, "OpenSubsonic username")
 	flags.StringVar(&cfg.Password, "password", cfg.Password, "OpenSubsonic password")
 	flags.BoolVar(&cfg.Scan, "scan", cfg.Scan, "scan music directory on startup")
@@ -90,6 +93,10 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	cfg.CacheDir, err = filepath.Abs(cfg.CacheDir)
 	if err != nil {
 		return Config{}, fmt.Errorf("resolve cache directory: %w", err)
+	}
+	cfg.TorrentDir, err = filepath.Abs(cfg.TorrentDir)
+	if err != nil {
+		return Config{}, fmt.Errorf("resolve torrent metadata directory: %w", err)
 	}
 	return cfg, nil
 }
@@ -122,12 +129,13 @@ func readFile(path string, cfg *Config) error {
 
 func applyEnv(cfg *Config, lookup func(string) (string, bool)) error {
 	for key, target := range map[string]*string{
-		"PEERPHONIC_ADDRESS":   &cfg.Address,
-		"PEERPHONIC_MUSIC_DIR": &cfg.MusicDir,
-		"PEERPHONIC_DATABASE":  &cfg.Database,
-		"PEERPHONIC_CACHE_DIR": &cfg.CacheDir,
-		"PEERPHONIC_USERNAME":  &cfg.Username,
-		"PEERPHONIC_PASSWORD":  &cfg.Password,
+		"PEERPHONIC_ADDRESS":     &cfg.Address,
+		"PEERPHONIC_MUSIC_DIR":   &cfg.MusicDir,
+		"PEERPHONIC_DATABASE":    &cfg.Database,
+		"PEERPHONIC_CACHE_DIR":   &cfg.CacheDir,
+		"PEERPHONIC_TORRENT_DIR": &cfg.TorrentDir,
+		"PEERPHONIC_USERNAME":    &cfg.Username,
+		"PEERPHONIC_PASSWORD":    &cfg.Password,
 	} {
 		if value, ok := lookup(key); ok {
 			*target = value

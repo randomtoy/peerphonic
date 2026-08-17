@@ -15,6 +15,7 @@ changing the client-facing streaming flow.
 - artist/album/track browsing and HTTP range streaming;
 - embedded and folder cover artwork stored through the blob storage boundary;
 - shared media cache with a size limit, LRU eviction, and pinned entries;
+- metadata-only catalog import from `.torrent` files without downloading media;
 - a small Peerphonic health endpoint at `/api/v1/health`.
 
 The implemented OpenSubsonic endpoints are:
@@ -80,6 +81,7 @@ then CLI flags.
 | `database` | `PEERPHONIC_DATABASE` | `--database` | `peerphonic.db` |
 | `cache_dir` | `PEERPHONIC_CACHE_DIR` | `--cache` | `cache` |
 | `cache_size_bytes` | `PEERPHONIC_CACHE_SIZE_BYTES` | `--cache-size` | `10737418240` (10 GiB) |
+| `torrent_dir` | `PEERPHONIC_TORRENT_DIR` | `--torrents` | `torrents` |
 | `username` | `PEERPHONIC_USERNAME` | `--username` | `admin` |
 | `password` | `PEERPHONIC_PASSWORD` | `--password` | `admin` |
 | `scan_on_start` | `PEERPHONIC_SCAN_ON_START` | `--scan` | `true` |
@@ -111,6 +113,18 @@ whether bytes are local, cached, or remote.
 Cache usage is available from `GET /api/v1/cache/status`. Cached audio is kept
 separate from artwork, and unpinned entries are evicted by least recent access
 when the configured size limit is exceeded.
+
+Place `.torrent` files in the configured torrent directory and start a library
+scan. Audio entries appear in the same catalog without downloading their media.
+Playback remains unavailable until torrent transport is added in a later milestone.
+
+Torrent metadata can also be uploaded with the Peerphonic API using the same
+credentials as OpenSubsonic:
+
+```bash
+curl -u admin:admin --data-binary @album.torrent \
+  http://localhost:8080/api/v1/torrents
+```
 
 ## Development
 

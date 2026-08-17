@@ -4,6 +4,7 @@
   "database": "/srv/peerphonic/peerphonic.db",
   "cache_dir": "/srv/peerphonic/cache",
   "cache_size_bytes": 10737418240,
+  "torrent_dir": "/srv/peerphonic/torrents",
   "username": "music",
   "password": "change-me",
   "scan_on_start": true
