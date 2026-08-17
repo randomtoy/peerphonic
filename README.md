@@ -13,6 +13,7 @@ changing the client-facing streaming flow.
 - XML and JSON OpenSubsonic responses;
 - password, hex-encoded password, and token/salt authentication;
 - artist/album/track browsing and HTTP range streaming;
+- embedded and folder cover artwork stored through the blob storage boundary;
 - a small Peerphonic health endpoint at `/api/v1/health`.
 
 The implemented OpenSubsonic endpoints are:
@@ -29,6 +30,7 @@ The implemented OpenSubsonic endpoints are:
 /rest/getAlbumList2[.view]
 /rest/getAlbum[.view]
 /rest/getSong[.view]
+/rest/getCoverArt[.view]
 /rest/search3[.view]
 /rest/getPlaylists[.view]
 /rest/getOpenSubsonicExtensions[.view]

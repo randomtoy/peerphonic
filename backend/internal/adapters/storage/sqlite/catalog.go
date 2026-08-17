@@ -128,8 +128,8 @@ func (c *Catalog) ReplaceProviderTracks(ctx context.Context, provider string, tr
 	statement, err := tx.PrepareContext(ctx, `INSERT INTO tracks (
 		id, provider, source_key, title, artist, artist_id, album, album_id,
 		album_artist, track_number, disc_number, year, duration_ms, size_bytes,
-		bit_rate, suffix, content_type
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+		bit_rate, suffix, content_type, cover_art_id
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare track insert: %w", err)
 	}
@@ -143,7 +143,7 @@ func (c *Catalog) ReplaceProviderTracks(ctx context.Context, provider string, tr
 			track.ID, track.Source.Provider, track.Source.Key, track.Title, track.Artist,
 			track.ArtistID, track.Album, track.AlbumID, track.AlbumArtist,
 			track.TrackNumber, track.DiscNumber, track.Year, track.Duration.Milliseconds(),
-			track.Size, track.BitRate, track.Suffix, track.ContentType,
+			track.Size, track.BitRate, track.Suffix, track.ContentType, track.CoverArtID,
 		); err != nil {
 			return fmt.Errorf("insert track %q: %w", track.ID, err)
 		}
@@ -156,7 +156,7 @@ func (c *Catalog) ReplaceProviderTracks(ctx context.Context, provider string, tr
 
 const trackColumns = `id, provider, source_key, title, artist, artist_id, album,
 	album_id, album_artist, track_number, disc_number, year, duration_ms,
-	size_bytes, bit_rate, suffix, content_type`
+	size_bytes, bit_rate, suffix, content_type, cover_art_id`
 
 func (c *Catalog) Track(ctx context.Context, id string) (domain.Track, error) {
 	row := c.db.QueryRowContext(ctx, "SELECT "+trackColumns+" FROM tracks WHERE id = ?", id)
@@ -194,7 +194,7 @@ func (c *Catalog) Artists(ctx context.Context) ([]domain.Artist, error) {
 
 func (c *Catalog) Albums(ctx context.Context, offset, limit int) ([]domain.Album, error) {
 	rows, err := c.db.QueryContext(ctx, `SELECT album_id, album, album_artist, artist_id,
-		MIN(NULLIF(year, 0)), COUNT(*), SUM(duration_ms)
+		MIN(NULLIF(year, 0)), COUNT(*), SUM(duration_ms), MIN(NULLIF(cover_art_id, ''))
 		FROM tracks GROUP BY album_id, album, album_artist, artist_id
 		ORDER BY album COLLATE NOCASE, album_artist COLLATE NOCASE LIMIT ? OFFSET ?`, limit, offset)
 	if err != nil {
@@ -206,7 +206,7 @@ func (c *Catalog) Albums(ctx context.Context, offset, limit int) ([]domain.Album
 
 func (c *Catalog) AlbumsByArtist(ctx context.Context, artistID string) ([]domain.Album, error) {
 	rows, err := c.db.QueryContext(ctx, `SELECT album_id, album, album_artist, artist_id,
-		MIN(NULLIF(year, 0)), COUNT(*), SUM(duration_ms)
+		MIN(NULLIF(year, 0)), COUNT(*), SUM(duration_ms), MIN(NULLIF(cover_art_id, ''))
 		FROM tracks WHERE artist_id = ? GROUP BY album_id, album, album_artist, artist_id
 		ORDER BY album COLLATE NOCASE`, artistID)
 	if err != nil {
@@ -222,13 +222,15 @@ func scanAlbums(rows *sql.Rows) ([]domain.Album, error) {
 	for rows.Next() {
 		var album domain.Album
 		var year sql.NullInt64
+		var coverArtID sql.NullString
 		var durationMS int64
 		if err := rows.Scan(&album.ID, &album.Name, &album.Artist, &album.ArtistID,
-			&year, &album.SongCount, &durationMS); err != nil {
+			&year, &album.SongCount, &durationMS, &coverArtID); err != nil {
 			return nil, fmt.Errorf("scan album: %w", err)
 		}
 		album.Year = int(year.Int64)
 		album.Duration = time.Duration(durationMS) * time.Millisecond
+		album.CoverArtID = coverArtID.String
 		albums = append(albums, album)
 	}
 	if err := rows.Err(); err != nil {
@@ -351,7 +353,7 @@ func scanTrack(row rowScanner) (domain.Track, error) {
 		&track.ID, &track.Source.Provider, &track.Source.Key, &track.Title, &track.Artist,
 		&track.ArtistID, &track.Album, &track.AlbumID, &track.AlbumArtist,
 		&track.TrackNumber, &track.DiscNumber, &track.Year, &durationMS,
-		&track.Size, &track.BitRate, &track.Suffix, &track.ContentType,
+		&track.Size, &track.BitRate, &track.Suffix, &track.ContentType, &track.CoverArtID,
 	)
 	track.Duration = time.Duration(durationMS) * time.Millisecond
 	return track, err

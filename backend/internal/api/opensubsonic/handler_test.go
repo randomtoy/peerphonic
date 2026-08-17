@@ -11,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	blobfs "github.com/randomtoy/peerphonic/backend/internal/adapters/blob/filesystem"
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/providers/local"
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/storage/sqlite"
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
@@ -34,11 +35,20 @@ func newTestHandler(t *testing.T, scans ...scanController) (http.Handler, domain
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { catalog.Close() })
+	blobs, err := blobfs.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	artwork := services.NewArtworkService(blobs)
+	coverArtID, err := artwork.Put(ctx, testCoverPNG)
+	if err != nil {
+		t.Fatal(err)
+	}
 	track := domain.Track{
 		ID: "track_test", Title: "Song", Artist: "Artist", ArtistID: "artist_test",
 		Album: "Album", AlbumID: "album_test", AlbumArtist: "Artist",
 		Source:      domain.SourceRef{Provider: local.Name, Key: "Artist/Album/song.mp3"},
-		TrackNumber: 1, Size: 10, Suffix: "mp3", ContentType: "audio/mpeg",
+		TrackNumber: 1, Size: 10, Suffix: "mp3", ContentType: "audio/mpeg", CoverArtID: coverArtID,
 	}
 	if err := catalog.ReplaceProviderTracks(ctx, local.Name, []domain.Track{track}); err != nil {
 		t.Fatal(err)
@@ -48,8 +58,10 @@ func newTestHandler(t *testing.T, scans ...scanController) (http.Handler, domain
 		t.Fatal(err)
 	}
 	streams := services.NewStreamingService(catalog, provider)
-	return NewHandler(catalog, streams, "alice", "secret", scans...), track
+	return NewHandler(catalog, streams, artwork, "alice", "secret", scans...), track
 }
+
+var testCoverPNG = []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
 
 type scanControllerStub struct {
 	started bool
@@ -105,6 +117,23 @@ func TestBrowseAndStreamRange(t *testing.T) {
 	}
 }
 
+func TestGetCoverArtReturnsStoredImage(t *testing.T) {
+	t.Parallel()
+
+	handler, track := newTestHandler(t)
+	request := httptest.NewRequest(http.MethodGet,
+		"/rest/getCoverArt?u=alice&p=secret&id="+track.CoverArtID+"&size=64", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || response.Header().Get("Content-Type") != "image/png" {
+		t.Fatalf("status = %d, content type = %q, body = %s",
+			response.Code, response.Header().Get("Content-Type"), response.Body.String())
+	}
+	if response.Body.String() != string(testCoverPNG) {
+		t.Fatalf("body = %q", response.Body.String())
+	}
+}
+
 func TestRejectsWrongPassword(t *testing.T) {
 	t.Parallel()
 
@@ -137,6 +166,7 @@ func TestID3BrowsingEndpointsUsedByAmperfy(t *testing.T) {
 		}},
 		{path: "/rest/getAlbum.view" + auth + "&id=album_test", contains: []string{
 			`<album id="album_test"`, `<song id="` + track.ID + `"`, `albumId="album_test"`,
+			`coverArt="` + track.CoverArtID + `"`,
 		}},
 		{path: "/rest/getSong.view" + auth + "&id=" + track.ID, contains: []string{
 			`<song id="` + track.ID + `"`,

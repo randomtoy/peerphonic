@@ -30,6 +30,7 @@ type Track struct {
 	BitRate     int
 	Suffix      string
 	ContentType string
+	CoverArtID  string
 }
 
 type Artist struct {

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 
+	"github.com/randomtoy/peerphonic/backend/internal/adapters/blob/filesystem"
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/metadata"
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/providers/local"
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/storage/sqlite"
@@ -35,7 +36,12 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	if err != nil {
 		return fail(err)
 	}
-	libraryScanner := scanner.New(cfg.MusicDir, catalog, metadata.TagExtractor{})
+	blobs, err := filesystem.New(cfg.CacheDir)
+	if err != nil {
+		return fail(err)
+	}
+	artwork := services.NewArtworkService(blobs)
+	libraryScanner := scanner.New(cfg.MusicDir, catalog, metadata.TagExtractor{}, artwork)
 	scanManager := scanner.NewManager(ctx, libraryScanner)
 	if cfg.Scan {
 		report, err := scanManager.ScanNow(ctx)
@@ -44,13 +50,13 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		}
 		logger.Info("music scan completed", "tracks", report.Tracks, "warnings", len(report.Warnings))
 		for _, warning := range report.Warnings {
-			logger.Warn("music file skipped", "path", warning.Path, "error", warning.Err)
+			logger.Warn("music scan warning", "path", warning.Path, "error", warning.Err)
 		}
 	}
 
 	streaming := services.NewStreamingService(catalog, provider)
 	mux := http.NewServeMux()
-	mux.Handle("/rest/", opensubsonic.NewHandler(catalog, streaming, cfg.Username, cfg.Password, scanManager))
+	mux.Handle("/rest/", opensubsonic.NewHandler(catalog, streaming, artwork, cfg.Username, cfg.Password, scanManager))
 	mux.Handle("/", peerphonic.NewHandler())
 	return &application{handler: mux, catalog: catalog}, nil
 }

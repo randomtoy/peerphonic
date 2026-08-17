@@ -2,6 +2,7 @@ package metadata
 
 import (
 	"bytes"
+	"encoding/binary"
 	"os"
 	"path/filepath"
 	"testing"
@@ -129,6 +130,75 @@ func TestTagExtractorFallsBackFromPlaceholderArtist(t *testing.T) {
 	if got.Artist != "Черная Метка" || got.AlbumArtist != "Черная Метка" {
 		t.Fatalf("Extract() = %#v", got)
 	}
+}
+
+func TestTagExtractorPrefersEmbeddedArtwork(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	embedded := append([]byte(nil), testPNGBytes...)
+	embedded = append(embedded, "embedded"...)
+	if err := os.WriteFile(filepath.Join(dir, "cover.jpg"), []byte("folder artwork"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "track.mp3")
+	audio := append(id3v23PictureTag(embedded), bytes.Repeat(mp3.SilentBytes, 10)...)
+	if err := os.WriteFile(path, audio, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := (TagExtractor{}).Extract(path, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Artwork == nil || !bytes.Equal(got.Artwork.Data, embedded) {
+		t.Fatalf("artwork = %#v", got.Artwork)
+	}
+}
+
+func TestTagExtractorUsesFolderArtwork(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	cover := []byte{0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 'J', 'F', 'I', 'F'}
+	if err := os.WriteFile(filepath.Join(dir, "cover 13.jpg"), cover, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "track.mp3")
+	if err := os.WriteFile(path, bytes.Repeat(mp3.SilentBytes, 10), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := (TagExtractor{}).Extract(path, info)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Artwork == nil || !bytes.Equal(got.Artwork.Data, cover) {
+		t.Fatalf("artwork = %#v", got.Artwork)
+	}
+}
+
+var testPNGBytes = []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+
+func id3v23PictureTag(picture []byte) []byte {
+	payload := []byte{0}
+	payload = append(payload, "image/png"...)
+	payload = append(payload, 0, 3, 0)
+	payload = append(payload, picture...)
+	frame := []byte("APIC")
+	size := make([]byte, 4)
+	binary.BigEndian.PutUint32(size, uint32(len(payload)))
+	frame = append(frame, size...)
+	frame = append(frame, 0, 0)
+	frame = append(frame, payload...)
+	header := []byte{'I', 'D', '3', 3, 0, 0, 0, 0, 0, byte(len(frame))}
+	return append(header, frame...)
 }
 
 func id3v1Tag(t *testing.T, title, artist, album string) []byte {

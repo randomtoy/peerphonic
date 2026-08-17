@@ -26,7 +26,7 @@ func TestCatalogRoundTripAndReplacement(t *testing.T) {
 		Album: "Album", AlbumID: "album-1", AlbumArtist: "Artist",
 		Source:      domain.SourceRef{Provider: "local", Key: "Artist/Album/One.flac"},
 		TrackNumber: 1, Year: 2026, Duration: 3*time.Minute + 5*time.Second,
-		Size: 42, BitRate: 900, Suffix: "flac", ContentType: "audio/flac",
+		Size: 42, BitRate: 900, Suffix: "flac", ContentType: "audio/flac", CoverArtID: "art-1",
 	}
 	if err := catalog.ReplaceProviderTracks(ctx, "local", []domain.Track{track}); err != nil {
 		t.Fatalf("ReplaceProviderTracks() error = %v", err)
@@ -36,7 +36,8 @@ func TestCatalogRoundTripAndReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Track() error = %v", err)
 	}
-	if got.Title != track.Title || got.Source != track.Source || got.Duration != track.Duration {
+	if got.Title != track.Title || got.Source != track.Source || got.Duration != track.Duration ||
+		got.CoverArtID != track.CoverArtID {
 		t.Fatalf("Track() = %#v, want %#v", got, track)
 	}
 	artists, err := catalog.Artists(ctx)
@@ -49,6 +50,9 @@ func TestCatalogRoundTripAndReplacement(t *testing.T) {
 	allAlbums, err := catalog.Albums(ctx, 0, 10)
 	if err != nil || len(allAlbums) != 1 || allAlbums[0].ID != "album-1" {
 		t.Fatalf("Albums() = %#v, %v", allAlbums, err)
+	}
+	if allAlbums[0].CoverArtID != "art-1" {
+		t.Fatalf("album cover art ID = %q", allAlbums[0].CoverArtID)
 	}
 	albums, err := catalog.AlbumsByArtist(ctx, "artist-1")
 	if err != nil || len(albums) != 1 || albums[0].SongCount != 1 {

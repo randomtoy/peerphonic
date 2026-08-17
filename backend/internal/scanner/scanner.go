@@ -2,6 +2,7 @@ package scanner
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io/fs"
 	"os"
@@ -33,6 +34,11 @@ type Metadata struct {
 	BitRate     int
 	Suffix      string
 	ContentType string
+	Artwork     *Artwork
+}
+
+type Artwork struct {
+	Data []byte
 }
 
 type Extractor interface {
@@ -53,10 +59,19 @@ type Scanner struct {
 	root      string
 	catalog   ports.Catalog
 	extractor Extractor
+	artwork   ArtworkWriter
 }
 
-func New(root string, catalog ports.Catalog, extractor Extractor) *Scanner {
-	return &Scanner{root: root, catalog: catalog, extractor: extractor}
+type ArtworkWriter interface {
+	Put(ctx context.Context, data []byte) (string, error)
+}
+
+func New(root string, catalog ports.Catalog, extractor Extractor, artwork ...ArtworkWriter) *Scanner {
+	result := &Scanner{root: root, catalog: catalog, extractor: extractor}
+	if len(artwork) > 0 {
+		result.artwork = artwork[0]
+	}
+	return result
 }
 
 func (s *Scanner) Scan(ctx context.Context) (Report, error) {
@@ -74,6 +89,7 @@ func (s *Scanner) Scan(ctx context.Context) (Report, error) {
 
 	var tracks []domain.Track
 	var warnings []Warning
+	artworkIDs := make(map[[sha256.Size]byte]string)
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -106,7 +122,22 @@ func (s *Scanner) Scan(ctx context.Context) (Report, error) {
 			warnings = append(warnings, Warning{Path: path, Err: err})
 			return nil
 		}
-		tracks = append(tracks, makeTrack(filepath.ToSlash(key), metadata))
+		track := makeTrack(filepath.ToSlash(key), metadata)
+		if metadata.Artwork != nil && s.artwork != nil {
+			digest := sha256.Sum256(metadata.Artwork.Data)
+			if coverArtID, ok := artworkIDs[digest]; ok {
+				track.CoverArtID = coverArtID
+			} else {
+				coverArtID, err := s.artwork.Put(ctx, metadata.Artwork.Data)
+				if err != nil {
+					warnings = append(warnings, Warning{Path: path, Err: fmt.Errorf("store artwork: %w", err)})
+				} else {
+					artworkIDs[digest] = coverArtID
+					track.CoverArtID = coverArtID
+				}
+			}
+		}
+		tracks = append(tracks, track)
 		return nil
 	})
 	if err != nil {

@@ -30,6 +30,7 @@ const (
 type Handler struct {
 	catalog  ports.Catalog
 	streams  *services.StreamingService
+	artwork  *services.ArtworkService
 	username string
 	password string
 	scans    scanController
@@ -43,10 +44,13 @@ type scanController interface {
 func NewHandler(
 	catalog ports.Catalog,
 	streams *services.StreamingService,
+	artwork *services.ArtworkService,
 	username, password string,
 	scans ...scanController,
 ) http.Handler {
-	handler := &Handler{catalog: catalog, streams: streams, username: username, password: password}
+	handler := &Handler{
+		catalog: catalog, streams: streams, artwork: artwork, username: username, password: password,
+	}
 	if len(scans) > 0 {
 		handler.scans = scans[0]
 	}
@@ -89,6 +93,8 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.getAlbum(writer, request)
 	case "getSong":
 		h.getSong(writer, request)
+	case "getCoverArt":
+		h.getCoverArt(writer, request)
 	case "search3":
 		h.search3(writer, request)
 	case "getPlaylists":
@@ -104,6 +110,38 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	default:
 		h.writeError(writer, request, http.StatusNotFound, 0, "Endpoint not implemented")
 	}
+}
+
+func (h *Handler) getCoverArt(writer http.ResponseWriter, request *http.Request) {
+	id := request.Form.Get("id")
+	if id == "" {
+		h.writeError(writer, request, http.StatusBadRequest, 10, "Required parameter id is missing")
+		return
+	}
+	if value := request.Form.Get("size"); value != "" {
+		size, err := strconv.Atoi(value)
+		if err != nil || size <= 0 {
+			h.writeError(writer, request, http.StatusBadRequest, 10, "Parameter size must be a positive integer")
+			return
+		}
+	}
+	if h.artwork == nil {
+		h.writeError(writer, request, http.StatusInternalServerError, 0, "Artwork storage is not configured")
+		return
+	}
+	resolved, err := h.artwork.Open(request.Context(), id)
+	if errors.Is(err, ports.ErrNotFound) {
+		h.writeError(writer, request, http.StatusNotFound, 70, "Cover art not found")
+		return
+	}
+	if err != nil {
+		h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to open cover art")
+		return
+	}
+	defer resolved.Content.Close()
+	writer.Header().Set("Content-Type", resolved.ContentType)
+	writer.Header().Set("Cache-Control", "public, max-age=86400")
+	http.ServeContent(writer, request, resolved.Name, resolved.ModTime, resolved.Content)
 }
 
 func (h *Handler) search3(writer http.ResponseWriter, request *http.Request) {
@@ -450,7 +488,7 @@ func albumChild(item domain.Album) child {
 	return child{
 		ID: item.ID, Parent: item.ArtistID, Title: item.Name, Album: item.Name,
 		Artist: item.Artist, IsDir: true, Year: item.Year, SongCount: item.SongCount,
-		Duration: int(item.Duration.Seconds()),
+		Duration: int(item.Duration.Seconds()), CoverArt: item.CoverArtID,
 	}
 }
 
@@ -461,6 +499,7 @@ func trackChild(item domain.Track) child {
 		Duration: int(item.Duration.Seconds()), Size: item.Size, BitRate: item.BitRate,
 		Suffix: item.Suffix, ContentType: item.ContentType, Type: "music",
 		AlbumID: item.AlbumID, ArtistID: item.ArtistID, DiscNumber: item.DiscNumber,
+		CoverArt: item.CoverArtID,
 	}
 }
 
@@ -469,6 +508,7 @@ func makeAlbumID3(item domain.Album) albumID3 {
 		ID: item.ID, Parent: item.ArtistID, Name: item.Name, Title: item.Name,
 		Album: item.Name, Artist: item.Artist, ArtistID: item.ArtistID, IsDir: true,
 		SongCount: item.SongCount, Duration: int(item.Duration.Seconds()), Year: item.Year,
+		CoverArt: item.CoverArtID,
 	}
 }
 
@@ -477,6 +517,7 @@ func albumFromTracks(tracks []domain.Track) domain.Album {
 	album := domain.Album{
 		ID: first.AlbumID, Name: first.Album, Artist: first.AlbumArtist,
 		ArtistID: first.ArtistID, Year: first.Year, SongCount: len(tracks),
+		CoverArtID: first.CoverArtID,
 	}
 	for _, track := range tracks {
 		album.Duration += track.Duration

@@ -55,6 +55,7 @@ func (TagExtractor) Extract(path string, info os.FileInfo) (scanner.Metadata, er
 		result.DiscNumber, _ = values.Disc()
 		result.Year = values.Year()
 	}
+	result.Artwork = extractArtwork(path, values)
 	if err := populateAudioProperties(file, extension, &result); err != nil {
 		return scanner.Metadata{}, err
 	}

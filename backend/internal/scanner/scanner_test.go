@@ -15,7 +15,17 @@ func (extractorStub) Extract(path string, info os.FileInfo) (Metadata, error) {
 	return Metadata{
 		Title: filepath.Base(path), Artist: "Track Artist", Album: "Album",
 		AlbumArtist: "Album Artist", Size: info.Size(), Suffix: "mp3", ContentType: "audio/mpeg",
+		Artwork: &Artwork{Data: []byte("image")},
 	}, nil
+}
+
+type artworkWriterStub struct {
+	writes int
+}
+
+func (s *artworkWriterStub) Put(context.Context, []byte) (string, error) {
+	s.writes++
+	return "art_test", nil
 }
 
 func TestScanBuildsAndReplacesLocalCatalog(t *testing.T) {
@@ -39,7 +49,8 @@ func TestScanBuildsAndReplacesLocalCatalog(t *testing.T) {
 	}
 	defer catalog.Close()
 
-	s := New(root, catalog, extractorStub{})
+	artwork := &artworkWriterStub{}
+	s := New(root, catalog, extractorStub{}, artwork)
 	report, err := s.Scan(ctx)
 	if err != nil {
 		t.Fatalf("Scan() error = %v", err)
@@ -58,6 +69,9 @@ func TestScanBuildsAndReplacesLocalCatalog(t *testing.T) {
 	tracks, err := catalog.TracksByAlbum(ctx, albums[0].ID)
 	if err != nil || len(tracks) != 2 {
 		t.Fatalf("TracksByAlbum() = %#v, %v", tracks, err)
+	}
+	if tracks[0].CoverArtID != "art_test" || artwork.writes != 1 {
+		t.Fatalf("cover art ID = %q, writes = %d", tracks[0].CoverArtID, artwork.writes)
 	}
 
 	if err := os.Remove(first); err != nil {

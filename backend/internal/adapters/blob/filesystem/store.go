@@ -30,6 +30,9 @@ func (s *Store) Open(_ context.Context, key string) (ports.ReadSeekCloser, error
 	}
 	file, err := os.Open(path)
 	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ports.ErrNotFound
+		}
 		return nil, fmt.Errorf("open blob: %w", err)
 	}
 	return file, nil

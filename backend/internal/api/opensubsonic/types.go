@@ -85,6 +85,7 @@ type child struct {
 	ArtistID    string `xml:"artistId,attr,omitempty" json:"artistId,omitempty"`
 	DiscNumber  int    `xml:"discNumber,attr,omitempty" json:"discNumber,omitempty"`
 	IsVideo     bool   `xml:"isVideo,attr" json:"isVideo"`
+	CoverArt    string `xml:"coverArt,attr,omitempty" json:"coverArt,omitempty"`
 }
 
 type genresResponse struct {
@@ -126,6 +127,7 @@ type albumID3 struct {
 	SongCount int     `xml:"songCount,attr" json:"songCount"`
 	Duration  int     `xml:"duration,attr" json:"duration"`
 	Year      int     `xml:"year,attr,omitempty" json:"year,omitempty"`
+	CoverArt  string  `xml:"coverArt,attr,omitempty" json:"coverArt,omitempty"`
 	Songs     []child `xml:"song" json:"song,omitempty"`
 }
 
