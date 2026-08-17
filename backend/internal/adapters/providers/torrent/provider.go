@@ -683,7 +683,7 @@ func makeTrack(infoHash string, parts []string, size int64, extension, contentTy
 			title = strings.TrimSpace(candidate)
 		}
 	}
-	artist, album := provisionalArtistAlbum(parts)
+	artist, album, discNumber := provisionalArtistAlbum(parts)
 	artistID := domain.StableID("artist", strings.ToLower(artist))
 	albumID := domain.StableID("album", artistID, strings.ToLower(album))
 	logicalPath := strings.Join(parts, "/")
@@ -692,38 +692,121 @@ func makeTrack(infoHash string, parts []string, size int64, extension, contentTy
 			ID: domain.StableID("track", Name, infoHash, logicalPath), Title: title,
 			Artist: artist, ArtistID: artistID, Album: album, AlbumID: albumID,
 			AlbumArtist: artist, AlbumArtistID: artistID, TrackNumber: trackNumber,
-			Size: size, Suffix: strings.TrimPrefix(extension, "."), ContentType: contentType,
+			DiscNumber: discNumber, Year: leadingYear(album), Size: size,
+			Suffix: strings.TrimPrefix(extension, "."), ContentType: contentType,
 		},
 		Ref: domain.SourceRef{Provider: Name, Key: infoHash + "/" + logicalPath},
 	}
 }
 
-func provisionalArtistAlbum(parts []string) (artist, album string) {
+func provisionalArtistAlbum(parts []string) (artist, album string, discNumber int) {
 	root := parts[0]
 	if len(parts) == 1 {
 		root = strings.TrimSuffix(root, path.Ext(root))
 	}
 	rootArtist, rootAlbum, rootSplit := strings.Cut(root, " - ")
 	directories := parts[:len(parts)-1]
-	switch {
-	case len(directories) >= 3:
-		artist, album = directories[len(directories)-2], directories[len(directories)-1]
-	case len(parts) == 1 && rootSplit:
+	if len(parts) == 1 && rootSplit {
 		artist, album = strings.TrimSpace(rootArtist), "Unknown Album"
-	case rootSplit:
+	} else if len(directories) <= 1 && rootSplit {
 		artist, album = strings.TrimSpace(rootArtist), strings.TrimSpace(rootAlbum)
-	case len(directories) == 2:
-		artist, album = directories[0], directories[1]
-	default:
+	} else if len(directories) <= 1 {
 		artist, album = "Unknown Artist", root
+	} else {
+		albumIndex := len(directories) - 1
+		if number, ok := discDirectoryNumber(directories[albumIndex]); ok && albumIndex > 1 {
+			discNumber = number
+			albumIndex--
+		}
+		album = directories[albumIndex]
+		artistIndex := albumIndex - 1
+		for index := 1; index < albumIndex; index++ {
+			if collectionDirectory(directories[index]) {
+				artistIndex = index - 1
+				break
+			}
+		}
+		if artistIndex >= 0 {
+			artist = directories[artistIndex]
+		}
+		if artistIndex == 0 && rootSplit {
+			artist = strings.TrimSpace(rootArtist)
+		}
 	}
 	if artist == "" {
 		artist = "Unknown Artist"
 	}
+	artist = normalizedArtistDirectory(artist)
 	if album == "" {
 		album = root
 	}
-	return artist, album
+	return artist, album, discNumber
+}
+
+func normalizedArtistDirectory(value string) string {
+	value = strings.TrimSpace(value)
+	lower := strings.ToLower(value)
+	for _, prefix := range []string{"группа ", "группа: "} {
+		if strings.HasPrefix(lower, prefix) {
+			name := strings.TrimSpace(value[len(prefix):])
+			if name != "" {
+				return name
+			}
+		}
+	}
+	return value
+}
+
+func collectionDirectory(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.TrimLeftFunc(value, func(character rune) bool {
+		return unicode.IsDigit(character) || unicode.IsSpace(character) ||
+			character == '.' || character == '-' || character == '_'
+	})
+	for _, marker := range []string{
+		"альбом", "сингл", "сборник", "компиляц", "юбилей", "неофициаль",
+		"релиз", "albums", "singles", "compilation", "collection", "bootleg", "releases",
+	} {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func discDirectoryNumber(value string) (int, bool) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, prefix := range []string{"cd", "disc", "disk", "диск"} {
+		if !strings.HasPrefix(value, prefix) {
+			continue
+		}
+		remainder := strings.TrimLeftFunc(strings.TrimPrefix(value, prefix), func(character rune) bool {
+			return unicode.IsSpace(character) || character == '.' || character == '-' ||
+				character == '_' || character == '№'
+		})
+		end := 0
+		for end < len(remainder) && remainder[end] >= '0' && remainder[end] <= '9' {
+			end++
+		}
+		if end == 0 {
+			return 0, false
+		}
+		number, err := strconv.Atoi(remainder[:end])
+		return number, err == nil && number > 0
+	}
+	return 0, false
+}
+
+func leadingYear(value string) int {
+	value = strings.TrimLeft(value, " ([{")
+	if len(value) < 4 {
+		return 0
+	}
+	year, err := strconv.Atoi(value[:4])
+	if err != nil || year < 1900 || year > 2100 {
+		return 0
+	}
+	return year
 }
 
 func titleAndNumber(value string) (string, int) {

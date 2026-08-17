@@ -76,6 +76,68 @@ func TestReadCatalogSupportsSingleFileTorrent(t *testing.T) {
 	}
 }
 
+func TestReadCatalogRecognizesDiscographySections(t *testing.T) {
+	t.Parallel()
+
+	data := torrentBytes(t, metainfo.Info{
+		Name: "Группа Руки Вверх!", PieceLength: 16 * 1024, Pieces: make([]byte, 20),
+		Files: []metainfo.FileInfo{{
+			Length: 123,
+			Path: []string{
+				"1. Альбомы", "1997. Дышите равномерно", "CD 2", "01 - Доброе утро.mp3",
+			},
+		}},
+	})
+	catalog, err := New().ReadCatalog(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Tracks) != 1 {
+		t.Fatalf("tracks = %#v", catalog.Tracks)
+	}
+	track := catalog.Tracks[0].Track
+	if track.Artist != "Руки Вверх!" || track.Album != "1997. Дышите равномерно" ||
+		track.DiscNumber != 2 || track.Year != 1997 {
+		t.Fatalf("track = %#v", track)
+	}
+}
+
+func TestProvisionalArtistAlbumSupportsCollectionAndArtistRoots(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name       string
+		parts      []string
+		artist     string
+		album      string
+		discNumber int
+	}{
+		{
+			name:   "artist root with section",
+			parts:  []string{"Artist", "Albums", "2001 - Album", "01 Song.mp3"},
+			artist: "Artist", album: "2001 - Album",
+		},
+		{
+			name:   "collection root with artist",
+			parts:  []string{"Music Collection", "Artist", "Album", "01 Song.mp3"},
+			artist: "Artist", album: "Album",
+		},
+		{
+			name:   "collection root with artist section",
+			parts:  []string{"Music Collection", "Artist", "Studio Albums", "Album", "Disc 1", "01 Song.mp3"},
+			artist: "Artist", album: "Album", discNumber: 1,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			artist, album, discNumber := provisionalArtistAlbum(test.parts)
+			if artist != test.artist || album != test.album || discNumber != test.discNumber {
+				t.Fatalf("provisionalArtistAlbum() = %q, %q, %d", artist, album, discNumber)
+			}
+		})
+	}
+}
+
 func TestResolveReportsMetadataOnlySourceAsUnavailable(t *testing.T) {
 	t.Parallel()
 
