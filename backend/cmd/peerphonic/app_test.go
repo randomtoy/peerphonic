@@ -14,6 +14,7 @@ import (
 
 	"github.com/randomtoy/peerphonic/backend/internal/config"
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
+	"github.com/tcolgate/mp3"
 )
 
 func TestLocalFileToOpenSubsonicStream(t *testing.T) {
@@ -24,7 +25,7 @@ func TestLocalFileToOpenSubsonicStream(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(mediaPath), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	media := bytes.Repeat([]byte{0}, 256)
+	media := bytes.Repeat(mp3.SilentBytes, 10)
 	if err := os.WriteFile(mediaPath, media, 0o600); err != nil {
 		t.Fatal(err)
 	}

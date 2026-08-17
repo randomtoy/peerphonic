@@ -5,6 +5,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/tcolgate/mp3"
 )
 
 func TestFallbackMetadataUsesDirectoryLayout(t *testing.T) {
@@ -19,8 +21,8 @@ func TestFallbackMetadataUsesDirectoryLayout(t *testing.T) {
 func TestTagExtractorUsesFallbackWithoutTags(t *testing.T) {
 	t.Parallel()
 
-	path := filepath.Join(t.TempDir(), "invalid.mp3")
-	if err := os.WriteFile(path, bytes.Repeat([]byte{0}, 256), 0o600); err != nil {
+	path := filepath.Join(t.TempDir(), "untagged.mp3")
+	if err := os.WriteFile(path, bytes.Repeat(mp3.SilentBytes, 10), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(path)
@@ -31,7 +33,11 @@ func TestTagExtractorUsesFallbackWithoutTags(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
 	}
-	if got.Title != "invalid" || got.Suffix != "mp3" || got.ContentType != "audio/mpeg" {
+	if got.Title != "untagged" || got.Suffix != "mp3" || got.ContentType != "audio/mpeg" {
 		t.Fatalf("Extract() = %#v", got)
+	}
+	wantBitRate := int(mp3.SilentFrame.Header().BitRate()) / 1000
+	if got.Duration <= 0 || got.BitRate != wantBitRate {
+		t.Fatalf("audio properties = %v, %d kbps", got.Duration, got.BitRate)
 	}
 }

@@ -33,29 +33,31 @@ func (TagExtractor) Extract(path string, info os.FileInfo) (scanner.Metadata, er
 	}
 	defer file.Close()
 	values, err := tag.ReadFrom(file)
-	if err != nil {
-		if errors.Is(err, tag.ErrNoTagsFound) {
-			return result, nil
-		}
+	if err != nil && !errors.Is(err, tag.ErrNoTagsFound) {
 		return scanner.Metadata{}, fmt.Errorf("read tags: %w", err)
 	}
-	if value := strings.TrimSpace(values.Title()); value != "" {
-		result.Title = value
+	if err == nil {
+		if value := strings.TrimSpace(values.Title()); value != "" {
+			result.Title = value
+		}
+		if value := strings.TrimSpace(values.Artist()); value != "" {
+			result.Artist = value
+		}
+		if value := strings.TrimSpace(values.Album()); value != "" {
+			result.Album = value
+		}
+		if value := strings.TrimSpace(values.AlbumArtist()); value != "" {
+			result.AlbumArtist = value
+		} else {
+			result.AlbumArtist = result.Artist
+		}
+		result.TrackNumber, _ = values.Track()
+		result.DiscNumber, _ = values.Disc()
+		result.Year = values.Year()
 	}
-	if value := strings.TrimSpace(values.Artist()); value != "" {
-		result.Artist = value
+	if err := populateAudioProperties(file, extension, &result); err != nil {
+		return scanner.Metadata{}, err
 	}
-	if value := strings.TrimSpace(values.Album()); value != "" {
-		result.Album = value
-	}
-	if value := strings.TrimSpace(values.AlbumArtist()); value != "" {
-		result.AlbumArtist = value
-	} else {
-		result.AlbumArtist = result.Artist
-	}
-	result.TrackNumber, _ = values.Track()
-	result.DiscNumber, _ = values.Disc()
-	result.Year = values.Year()
 	return result, nil
 }
 
