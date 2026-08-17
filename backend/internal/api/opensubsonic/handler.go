@@ -28,13 +28,14 @@ const (
 )
 
 type Handler struct {
-	catalog   ports.Catalog
-	streams   *services.StreamingService
-	artwork   *services.ArtworkService
-	playlists *services.PlaylistService
-	username  string
-	password  string
-	scans     scanController
+	catalog     ports.Catalog
+	streams     *services.StreamingService
+	artwork     *services.ArtworkService
+	playlists   *services.PlaylistService
+	annotations *services.AnnotationService
+	username    string
+	password    string
+	scans       scanController
 }
 
 type scanController interface {
@@ -52,6 +53,9 @@ func NewHandler(
 	handler := &Handler{
 		catalog: catalog, streams: streams, artwork: artwork,
 		playlists: services.NewPlaylistService(catalog), username: username, password: password,
+	}
+	if store, ok := catalog.(ports.MediaAnnotationStore); ok {
+		handler.annotations = services.NewAnnotationService(catalog, store)
 	}
 	if len(scans) > 0 {
 		handler.scans = scans[0]
@@ -113,6 +117,16 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.updatePlaylist(writer, request)
 	case "deletePlaylist":
 		h.deletePlaylist(writer, request)
+	case "star":
+		h.setStarred(writer, request, true)
+	case "unstar":
+		h.setStarred(writer, request, false)
+	case "setRating":
+		h.setRating(writer, request)
+	case "scrobble":
+		h.scrobble(writer, request)
+	case "getStarred", "getStarred2":
+		h.getStarred(writer, request, endpoint)
 	case "getOpenSubsonicExtensions":
 		h.write(writer, request, http.StatusOK, response{Extensions: &extensions{Items: []extension{}}})
 	case "getScanStatus":
@@ -303,12 +317,34 @@ func (h *Handler) getAlbumList2(writer http.ResponseWriter, request *http.Reques
 		h.writeError(writer, request, http.StatusBadRequest, 10, err.Error())
 		return
 	}
+	payload := &albumList2{Albums: []albumID3{}}
+	if request.Form.Get("type") == "starred" {
+		if request.Form.Has("musicFolderId") && request.Form.Get("musicFolderId") != musicFolderID {
+			h.write(writer, request, http.StatusOK, response{AlbumList2: payload})
+			return
+		}
+		if h.annotations == nil {
+			h.writeError(writer, request, http.StatusInternalServerError, 0, "Media annotations are not configured")
+			return
+		}
+		starred, err := h.annotations.Starred(request.Context(), h.username)
+		if err != nil {
+			h.writeAnnotationError(writer, request, err)
+			return
+		}
+		start := min(offset, len(starred.Albums))
+		end := min(start+limit, len(starred.Albums))
+		for _, album := range starred.Albums[start:end] {
+			payload.Albums = append(payload.Albums, makeAlbumID3(album))
+		}
+		h.write(writer, request, http.StatusOK, response{AlbumList2: payload})
+		return
+	}
 	query, empty, err := albumListQuery(request, offset, limit)
 	if err != nil {
 		h.writeError(writer, request, http.StatusBadRequest, 10, err.Error())
 		return
 	}
-	payload := &albumList2{Albums: []albumID3{}}
 	if empty || (request.Form.Has("musicFolderId") && request.Form.Get("musicFolderId") != musicFolderID) {
 		h.write(writer, request, http.StatusOK, response{AlbumList2: payload})
 		return
@@ -351,7 +387,7 @@ func albumListQuery(request *http.Request, offset, limit int) (ports.AlbumListQu
 		} else {
 			query.Order = ports.AlbumOrderYearAsc
 		}
-	case "highest", "frequent", "recent", "starred":
+	case "highest", "frequent", "recent":
 		return query, true, nil
 	case "byGenre":
 		query.Genre = strings.TrimSpace(request.Form.Get("genre"))
@@ -604,6 +640,7 @@ func (h *Handler) writeError(writer http.ResponseWriter, request *http.Request, 
 }
 
 func (h *Handler) write(writer http.ResponseWriter, request *http.Request, status int, payload response) {
+	h.decorateAnnotations(request.Context(), &payload)
 	payload.XMLNS = "http://subsonic.org/restapi"
 	payload.Status = "ok"
 	if payload.Error != nil {

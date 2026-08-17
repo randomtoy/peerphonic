@@ -76,6 +76,35 @@ type Playlist struct {
 	Tracks    []Track
 }
 
+type MediaType string
+
+const (
+	MediaSong   MediaType = "song"
+	MediaAlbum  MediaType = "album"
+	MediaArtist MediaType = "artist"
+)
+
+type MediaRef struct {
+	Type MediaType
+	ID   string
+}
+
+type MediaAnnotation struct {
+	Owner      string
+	Media      MediaRef
+	StarredAt  time.Time
+	Rating     int
+	PlayCount  int64
+	LastPlayed time.Time
+}
+
+type StarredLibrary struct {
+	Artists     []Artist
+	Albums      []Album
+	Tracks      []Track
+	Annotations map[MediaRef]MediaAnnotation
+}
+
 type TrackSource struct {
 	Track        Track
 	Ref          SourceRef

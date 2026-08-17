@@ -112,6 +112,103 @@ func TestPingSupportsTokenAuthenticationAndJSON(t *testing.T) {
 	}
 }
 
+func TestMediaAnnotationLifecycle(t *testing.T) {
+	t.Parallel()
+
+	handler, track := newTestHandler(t)
+	auth := "?u=alice&p=secret&f=json"
+	request := func(path string) *httptest.ResponseRecorder {
+		t.Helper()
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		return response
+	}
+
+	star := request("/rest/star.view" + auth + "&id=" + track.ID +
+		"&albumId=" + track.AlbumID + "&artistId=" + track.ArtistID)
+	if star.Code != http.StatusOK || !strings.Contains(star.Body.String(), `"status":"ok"`) {
+		t.Fatalf("star status = %d, body = %s", star.Code, star.Body.String())
+	}
+	rating := request("/rest/setRating.view" + auth + "&id=" + track.ID + "&rating=4")
+	if rating.Code != http.StatusOK {
+		t.Fatalf("setRating status = %d, body = %s", rating.Code, rating.Body.String())
+	}
+	scrobble := request("/rest/scrobble.view" + auth + "&id=" + track.ID +
+		"&id=" + track.ID + "&time=1786982400000&time=1786982460000")
+	if scrobble.Code != http.StatusOK {
+		t.Fatalf("scrobble status = %d, body = %s", scrobble.Code, scrobble.Body.String())
+	}
+
+	songResponse := request("/rest/getSong.view" + auth + "&id=" + track.ID)
+	var songEnvelope struct {
+		Response struct {
+			Song child `json:"song"`
+		} `json:"subsonic-response"`
+	}
+	if err := json.Unmarshal(songResponse.Body.Bytes(), &songEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	song := songEnvelope.Response.Song
+	if song.Starred == "" || song.UserRating != 4 || song.PlayCount != 2 || song.Played == "" {
+		t.Fatalf("annotated song = %#v", song)
+	}
+
+	starredResponse := request("/rest/getStarred2.view" + auth)
+	var starredEnvelope struct {
+		Response struct {
+			Starred starredLibrary `json:"starred2"`
+		} `json:"subsonic-response"`
+	}
+	if err := json.Unmarshal(starredResponse.Body.Bytes(), &starredEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	starred := starredEnvelope.Response.Starred
+	if len(starred.Songs) != 1 || len(starred.Albums) != 1 || len(starred.Artists) != 1 ||
+		starred.Songs[0].UserRating != 4 || starred.Songs[0].PlayCount != 2 {
+		t.Fatalf("getStarred2 = %#v", starred)
+	}
+	starredAlbums := request("/rest/getAlbumList2.view" + auth + "&type=starred&size=10")
+	if starredAlbums.Code != http.StatusOK || !strings.Contains(starredAlbums.Body.String(), `"id":"album_test"`) {
+		t.Fatalf("starred album list status = %d, body = %s", starredAlbums.Code, starredAlbums.Body.String())
+	}
+
+	unstar := request("/rest/unstar.view" + auth + "&id=" + track.ID)
+	if unstar.Code != http.StatusOK {
+		t.Fatalf("unstar status = %d, body = %s", unstar.Code, unstar.Body.String())
+	}
+	songResponse = request("/rest/getSong.view" + auth + "&id=" + track.ID)
+	songEnvelope = struct {
+		Response struct {
+			Song child `json:"song"`
+		} `json:"subsonic-response"`
+	}{}
+	if err := json.Unmarshal(songResponse.Body.Bytes(), &songEnvelope); err != nil {
+		t.Fatal(err)
+	}
+	song = songEnvelope.Response.Song
+	if song.Starred != "" || song.UserRating != 4 || song.PlayCount != 2 {
+		t.Fatalf("song after unstar = %#v", song)
+	}
+}
+
+func TestMediaAnnotationValidation(t *testing.T) {
+	t.Parallel()
+
+	handler, track := newTestHandler(t)
+	tests := []string{
+		"/rest/star.view?u=alice&p=secret&f=json",
+		"/rest/setRating.view?u=alice&p=secret&f=json&id=" + track.ID + "&rating=6",
+		"/rest/scrobble.view?u=alice&p=secret&f=json&id=" + track.ID + "&time=invalid",
+	}
+	for _, path := range tests {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":10`) {
+			t.Fatalf("request %s status = %d, body = %s", path, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestBrowseAndStreamRange(t *testing.T) {
 	t.Parallel()
 
