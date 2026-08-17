@@ -15,9 +15,10 @@ import (
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/storage/sqlite"
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 	"github.com/randomtoy/peerphonic/backend/internal/core/services"
+	"github.com/randomtoy/peerphonic/backend/internal/scanner"
 )
 
-func newTestHandler(t *testing.T) (http.Handler, domain.Track) {
+func newTestHandler(t *testing.T, scans ...scanController) (http.Handler, domain.Track) {
 	t.Helper()
 	ctx := context.Background()
 	root := t.TempDir()
@@ -47,8 +48,21 @@ func newTestHandler(t *testing.T) (http.Handler, domain.Track) {
 		t.Fatal(err)
 	}
 	streams := services.NewStreamingService(catalog, provider)
-	return NewHandler(catalog, streams, "alice", "secret"), track
+	return NewHandler(catalog, streams, "alice", "secret", scans...), track
 }
+
+type scanControllerStub struct {
+	started bool
+	status  scanner.Status
+}
+
+func (s *scanControllerStub) Start() bool {
+	s.started = true
+	s.status.Scanning = true
+	return true
+}
+
+func (s *scanControllerStub) Status() scanner.Status { return s.status }
 
 func TestPingSupportsTokenAuthenticationAndJSON(t *testing.T) {
 	t.Parallel()
@@ -147,5 +161,23 @@ func TestID3BrowsingEndpointsUsedByAmperfy(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestScanEndpoints(t *testing.T) {
+	t.Parallel()
+
+	controller := &scanControllerStub{status: scanner.Status{Count: 507}}
+	handler, _ := newTestHandler(t, controller)
+	request := httptest.NewRequest(http.MethodGet,
+		"/rest/startScan.view?u=alice&p=secret&v=1.16.1&c=test", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !controller.started {
+		t.Fatalf("status = %d, started = %v, body = %s", response.Code, controller.started, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `scanning="true"`) ||
+		!strings.Contains(response.Body.String(), `count="507"`) {
+		t.Fatalf("body = %s", response.Body.String())
 	}
 }

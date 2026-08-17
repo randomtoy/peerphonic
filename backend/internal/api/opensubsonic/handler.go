@@ -18,6 +18,7 @@ import (
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
 	"github.com/randomtoy/peerphonic/backend/internal/core/services"
+	"github.com/randomtoy/peerphonic/backend/internal/scanner"
 )
 
 const (
@@ -31,10 +32,25 @@ type Handler struct {
 	streams  *services.StreamingService
 	username string
 	password string
+	scans    scanController
 }
 
-func NewHandler(catalog ports.Catalog, streams *services.StreamingService, username, password string) http.Handler {
-	return &Handler{catalog: catalog, streams: streams, username: username, password: password}
+type scanController interface {
+	Start() bool
+	Status() scanner.Status
+}
+
+func NewHandler(
+	catalog ports.Catalog,
+	streams *services.StreamingService,
+	username, password string,
+	scans ...scanController,
+) http.Handler {
+	handler := &Handler{catalog: catalog, streams: streams, username: username, password: password}
+	if len(scans) > 0 {
+		handler.scans = scans[0]
+	}
+	return handler
 }
 
 func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -77,11 +93,30 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.write(writer, request, http.StatusOK, response{Playlists: &playlists{Items: []playlist{}}})
 	case "getOpenSubsonicExtensions":
 		h.write(writer, request, http.StatusOK, response{Extensions: &extensions{Items: []extension{}}})
+	case "getScanStatus":
+		h.getScanStatus(writer, request, false)
+	case "startScan":
+		h.getScanStatus(writer, request, true)
 	case "stream", "download":
 		h.stream(writer, request)
 	default:
 		h.writeError(writer, request, http.StatusNotFound, 0, "Endpoint not implemented")
 	}
+}
+
+func (h *Handler) getScanStatus(writer http.ResponseWriter, request *http.Request, start bool) {
+	if h.scans == nil {
+		h.writeError(writer, request, http.StatusInternalServerError, 0, "Music scanner is not configured")
+		return
+	}
+	if start {
+		h.scans.Start()
+	}
+	status := h.scans.Status()
+	h.write(writer, request, http.StatusOK, response{ScanStatus: &scanStatus{
+		Scanning: status.Scanning,
+		Count:    status.Count,
+	}})
 }
 
 func (h *Handler) getArtists(writer http.ResponseWriter, request *http.Request) {

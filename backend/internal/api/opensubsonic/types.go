@@ -23,6 +23,7 @@ type response struct {
 	Song          *child           `xml:"song,omitempty" json:"song,omitempty"`
 	Playlists     *playlists       `xml:"playlists,omitempty" json:"playlists,omitempty"`
 	Extensions    *extensions      `xml:"openSubsonicExtensions,omitempty" json:"openSubsonicExtensions,omitempty"`
+	ScanStatus    *scanStatus      `xml:"scanStatus,omitempty" json:"scanStatus,omitempty"`
 }
 
 type apiError struct {
@@ -147,4 +148,9 @@ type extensions struct {
 type extension struct {
 	Name     string `xml:"name,attr" json:"name"`
 	Versions []int  `xml:"versions" json:"versions"`
+}
+
+type scanStatus struct {
+	Scanning bool `xml:"scanning,attr" json:"scanning"`
+	Count    int  `xml:"count,attr" json:"count"`
 }

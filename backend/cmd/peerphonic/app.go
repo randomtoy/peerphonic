@@ -35,8 +35,10 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	if err != nil {
 		return fail(err)
 	}
+	libraryScanner := scanner.New(cfg.MusicDir, catalog, metadata.TagExtractor{})
+	scanManager := scanner.NewManager(ctx, libraryScanner)
 	if cfg.Scan {
-		report, err := scanner.New(cfg.MusicDir, catalog, metadata.TagExtractor{}).Scan(ctx)
+		report, err := scanManager.ScanNow(ctx)
 		if err != nil {
 			return fail(err)
 		}
@@ -48,7 +50,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 
 	streaming := services.NewStreamingService(catalog, provider)
 	mux := http.NewServeMux()
-	mux.Handle("/rest/", opensubsonic.NewHandler(catalog, streaming, cfg.Username, cfg.Password))
+	mux.Handle("/rest/", opensubsonic.NewHandler(catalog, streaming, cfg.Username, cfg.Password, scanManager))
 	mux.Handle("/", peerphonic.NewHandler())
 	return &application{handler: mux, catalog: catalog}, nil
 }
