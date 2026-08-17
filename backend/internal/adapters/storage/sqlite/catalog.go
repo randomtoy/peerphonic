@@ -259,6 +259,87 @@ func (c *Catalog) TracksByAlbum(ctx context.Context, albumID string) ([]domain.T
 	return tracks, nil
 }
 
+func (c *Catalog) Search(ctx context.Context, query ports.CatalogSearch) (ports.CatalogSearchResult, error) {
+	artists, err := c.Artists(ctx)
+	if err != nil {
+		return ports.CatalogSearchResult{}, err
+	}
+	allResults := int(^uint(0) >> 1)
+	albums, err := c.Albums(ctx, 0, allResults)
+	if err != nil {
+		return ports.CatalogSearchResult{}, err
+	}
+	songs, err := c.allTracks(ctx)
+	if err != nil {
+		return ports.CatalogSearchResult{}, err
+	}
+
+	needle := strings.ToLower(strings.TrimSpace(query.Text))
+	matchingArtists := filter(artists, func(artist domain.Artist) bool {
+		return containsFolded(artist.Name, needle)
+	})
+	matchingAlbums := filter(albums, func(album domain.Album) bool {
+		return containsFolded(album.Name, needle) || containsFolded(album.Artist, needle)
+	})
+	matchingSongs := filter(songs, func(song domain.Track) bool {
+		return containsFolded(song.Title, needle) || containsFolded(song.Artist, needle) ||
+			containsFolded(song.Album, needle)
+	})
+
+	return ports.CatalogSearchResult{
+		Artists: page(matchingArtists, query.ArtistOffset, query.ArtistCount),
+		Albums:  page(matchingAlbums, query.AlbumOffset, query.AlbumCount),
+		Songs:   page(matchingSongs, query.SongOffset, query.SongCount),
+	}, nil
+}
+
+func (c *Catalog) allTracks(ctx context.Context) ([]domain.Track, error) {
+	rows, err := c.db.QueryContext(ctx, "SELECT "+trackColumns+
+		" FROM tracks ORDER BY title COLLATE NOCASE, artist COLLATE NOCASE")
+	if err != nil {
+		return nil, fmt.Errorf("query all tracks: %w", err)
+	}
+	defer rows.Close()
+
+	var tracks []domain.Track
+	for rows.Next() {
+		track, err := scanTrack(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan track: %w", err)
+		}
+		tracks = append(tracks, track)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate tracks: %w", err)
+	}
+	return tracks, nil
+}
+
+func containsFolded(value, foldedNeedle string) bool {
+	return foldedNeedle == "" || strings.Contains(strings.ToLower(value), foldedNeedle)
+}
+
+func filter[T any](items []T, keep func(T) bool) []T {
+	result := make([]T, 0, len(items))
+	for _, item := range items {
+		if keep(item) {
+			result = append(result, item)
+		}
+	}
+	return result
+}
+
+func page[T any](items []T, offset, count int) []T {
+	if offset < 0 || count <= 0 || offset >= len(items) {
+		return []T{}
+	}
+	end := offset + count
+	if end < offset || end > len(items) {
+		end = len(items)
+	}
+	return items[offset:end]
+}
+
 type rowScanner interface {
 	Scan(dest ...any) error
 }

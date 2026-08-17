@@ -21,6 +21,7 @@ type response struct {
 	Album         *albumID3        `xml:"album,omitempty" json:"album,omitempty"`
 	AlbumList2    *albumList2      `xml:"albumList2,omitempty" json:"albumList2,omitempty"`
 	Song          *child           `xml:"song,omitempty" json:"song,omitempty"`
+	SearchResult3 *searchResult3   `xml:"searchResult3,omitempty" json:"searchResult3,omitempty"`
 	Playlists     *playlists       `xml:"playlists,omitempty" json:"playlists,omitempty"`
 	Extensions    *extensions      `xml:"openSubsonicExtensions,omitempty" json:"openSubsonicExtensions,omitempty"`
 	ScanStatus    *scanStatus      `xml:"scanStatus,omitempty" json:"scanStatus,omitempty"`
@@ -130,6 +131,12 @@ type albumID3 struct {
 
 type albumList2 struct {
 	Albums []albumID3 `xml:"album" json:"album"`
+}
+
+type searchResult3 struct {
+	Artists []artistID3 `xml:"artist" json:"artist"`
+	Albums  []albumID3  `xml:"album" json:"album"`
+	Songs   []child     `xml:"song" json:"song"`
 }
 
 type playlists struct {

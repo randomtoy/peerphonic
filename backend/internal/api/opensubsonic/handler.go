@@ -89,6 +89,8 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.getAlbum(writer, request)
 	case "getSong":
 		h.getSong(writer, request)
+	case "search3":
+		h.search3(writer, request)
 	case "getPlaylists":
 		h.write(writer, request, http.StatusOK, response{Playlists: &playlists{Items: []playlist{}}})
 	case "getOpenSubsonicExtensions":
@@ -102,6 +104,61 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	default:
 		h.writeError(writer, request, http.StatusNotFound, 0, "Endpoint not implemented")
 	}
+}
+
+func (h *Handler) search3(writer http.ResponseWriter, request *http.Request) {
+	if !request.Form.Has("query") {
+		h.writeError(writer, request, http.StatusBadRequest, 10, "Required parameter query is missing")
+		return
+	}
+	payload := &searchResult3{
+		Artists: []artistID3{},
+		Albums:  []albumID3{},
+		Songs:   []child{},
+	}
+	if folderID := request.Form.Get("musicFolderId"); folderID != "" && folderID != musicFolderID {
+		h.write(writer, request, http.StatusOK, response{SearchResult3: payload})
+		return
+	}
+
+	artistOffset, artistCount, err := searchPageParameters(request, "artist")
+	if err != nil {
+		h.writeError(writer, request, http.StatusBadRequest, 10, err.Error())
+		return
+	}
+	albumOffset, albumCount, err := searchPageParameters(request, "album")
+	if err != nil {
+		h.writeError(writer, request, http.StatusBadRequest, 10, err.Error())
+		return
+	}
+	songOffset, songCount, err := searchPageParameters(request, "song")
+	if err != nil {
+		h.writeError(writer, request, http.StatusBadRequest, 10, err.Error())
+		return
+	}
+
+	result, err := h.catalog.Search(request.Context(), ports.CatalogSearch{
+		Text:         request.Form.Get("query"),
+		ArtistOffset: artistOffset, ArtistCount: artistCount,
+		AlbumOffset: albumOffset, AlbumCount: albumCount,
+		SongOffset: songOffset, SongCount: songCount,
+	})
+	if err != nil {
+		h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to search the music catalog")
+		return
+	}
+	for _, artist := range result.Artists {
+		payload.Artists = append(payload.Artists, artistID3{
+			ID: artist.ID, Name: artist.Name, AlbumCount: artist.AlbumCount,
+		})
+	}
+	for _, album := range result.Albums {
+		payload.Albums = append(payload.Albums, makeAlbumID3(album))
+	}
+	for _, song := range result.Songs {
+		payload.Songs = append(payload.Songs, trackChild(song))
+	}
+	h.write(writer, request, http.StatusOK, response{SearchResult3: payload})
 }
 
 func (h *Handler) getScanStatus(writer http.ResponseWriter, request *http.Request, start bool) {
@@ -448,4 +505,26 @@ func pageParameters(request *http.Request) (offset, limit int, err error) {
 		}
 	}
 	return offset, limit, nil
+}
+
+func searchPageParameters(request *http.Request, kind string) (offset, count int, err error) {
+	count = 20
+	countName := kind + "Count"
+	if value := request.Form.Get(countName); value != "" {
+		count, err = strconv.Atoi(value)
+		if err != nil || count < 0 {
+			return 0, 0, fmt.Errorf("parameter %s must be a non-negative integer", countName)
+		}
+	}
+	if count > 500 {
+		count = 500
+	}
+	offsetName := kind + "Offset"
+	if value := request.Form.Get(offsetName); value != "" {
+		offset, err = strconv.Atoi(value)
+		if err != nil || offset < 0 {
+			return 0, 0, fmt.Errorf("parameter %s must be a non-negative integer", offsetName)
+		}
+	}
+	return offset, count, nil
 }

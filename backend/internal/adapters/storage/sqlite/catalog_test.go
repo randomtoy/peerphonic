@@ -95,3 +95,55 @@ func TestCatalogReplacementIsAtomic(t *testing.T) {
 		t.Fatalf("original track lost after rollback: %v", err)
 	}
 }
+
+func TestCatalogSearchIsUnicodeAwareAndPagedIndependently(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	catalog, err := Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close()
+	tracks := []domain.Track{
+		{
+			ID: "track-crow", Title: "Пластилиновая Ворона", Artist: "Черная Метка",
+			ArtistID: "artist-black", Album: "Hard Covers", AlbumID: "album-hard",
+			AlbumArtist: "Черная Метка", Source: domain.SourceRef{Provider: "local", Key: "crow.mp3"},
+		},
+		{
+			ID: "track-song", Title: "Another Song", Artist: "Other Artist",
+			ArtistID: "artist-other", Album: "Other Album", AlbumID: "album-other",
+			AlbumArtist: "Other Artist", Source: domain.SourceRef{Provider: "local", Key: "song.mp3"},
+		},
+	}
+	if err := catalog.ReplaceProviderTracks(ctx, "local", tracks); err != nil {
+		t.Fatal(err)
+	}
+
+	result, err := catalog.Search(ctx, ports.CatalogSearch{
+		Text: "черная", ArtistCount: 10, AlbumCount: 10, SongCount: 10,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Artists) != 1 || result.Artists[0].ID != "artist-black" {
+		t.Fatalf("artists = %#v", result.Artists)
+	}
+	if len(result.Albums) != 1 || result.Albums[0].ID != "album-hard" {
+		t.Fatalf("albums = %#v", result.Albums)
+	}
+	if len(result.Songs) != 1 || result.Songs[0].ID != "track-crow" {
+		t.Fatalf("songs = %#v", result.Songs)
+	}
+
+	result, err = catalog.Search(ctx, ports.CatalogSearch{
+		Text: "", ArtistOffset: 1, ArtistCount: 1, AlbumCount: 0, SongOffset: 1, SongCount: 1,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Artists) != 1 || len(result.Albums) != 0 || len(result.Songs) != 1 {
+		t.Fatalf("paged result = %#v", result)
+	}
+}

@@ -141,6 +141,9 @@ func TestID3BrowsingEndpointsUsedByAmperfy(t *testing.T) {
 		{path: "/rest/getSong.view" + auth + "&id=" + track.ID, contains: []string{
 			`<song id="` + track.ID + `"`,
 		}},
+		{path: "/rest/search3.view" + auth + "&query=artist&artistCount=20&albumCount=20&songCount=20", contains: []string{
+			"<searchResult3>", `<artist id="artist_test"`, `<album id="album_test"`, `<song id="` + track.ID + `"`,
+		}},
 		{path: "/rest/getPlaylists.view" + auth, contains: []string{"<playlists></playlists>"}},
 		{path: "/rest/getOpenSubsonicExtensions.view" + auth, contains: []string{
 			"<openSubsonicExtensions></openSubsonicExtensions>",
@@ -161,6 +164,40 @@ func TestID3BrowsingEndpointsUsedByAmperfy(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestSearch3SupportsEmptyQueryAndIndependentCounts(t *testing.T) {
+	t.Parallel()
+
+	handler, track := newTestHandler(t)
+	request := httptest.NewRequest(http.MethodGet,
+		"/rest/search3?u=alice&p=secret&f=json&query=&artistCount=0&albumCount=0&songCount=1", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	for _, expected := range []string{`"artist":[]`, `"album":[]`, `"song":[`, `"id":"` + track.ID + `"`} {
+		if !strings.Contains(response.Body.String(), expected) {
+			t.Errorf("body does not contain %q: %s", expected, response.Body.String())
+		}
+	}
+}
+
+func TestSearch3ValidatesParameters(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newTestHandler(t)
+	for _, path := range []string{
+		"/rest/search3?u=alice&p=secret&f=json",
+		"/rest/search3?u=alice&p=secret&f=json&query=song&songCount=-1",
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":10`) {
+			t.Fatalf("path = %s, status = %d, body = %s", path, response.Code, response.Body.String())
+		}
 	}
 }
 

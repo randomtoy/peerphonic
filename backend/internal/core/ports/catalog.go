@@ -18,4 +18,21 @@ type Catalog interface {
 	Albums(ctx context.Context, offset, limit int) ([]domain.Album, error)
 	AlbumsByArtist(ctx context.Context, artistID string) ([]domain.Album, error)
 	TracksByAlbum(ctx context.Context, albumID string) ([]domain.Track, error)
+	Search(ctx context.Context, query CatalogSearch) (CatalogSearchResult, error)
+}
+
+type CatalogSearch struct {
+	Text         string
+	ArtistOffset int
+	ArtistCount  int
+	AlbumOffset  int
+	AlbumCount   int
+	SongOffset   int
+	SongCount    int
+}
+
+type CatalogSearchResult struct {
+	Artists []domain.Artist
+	Albums  []domain.Album
+	Songs   []domain.Track
 }

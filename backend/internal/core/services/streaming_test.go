@@ -22,6 +22,9 @@ func (c catalogStub) Artists(context.Context) ([]domain.Artist, error)          
 func (c catalogStub) Albums(context.Context, int, int) ([]domain.Album, error)            { return nil, nil }
 func (c catalogStub) AlbumsByArtist(context.Context, string) ([]domain.Album, error)      { return nil, nil }
 func (c catalogStub) TracksByAlbum(context.Context, string) ([]domain.Track, error)       { return nil, nil }
+func (c catalogStub) Search(context.Context, ports.CatalogSearch) (ports.CatalogSearchResult, error) {
+	return ports.CatalogSearchResult{}, nil
+}
 
 type providerStub struct {
 	resolved domain.SourceRef

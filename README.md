@@ -29,6 +29,7 @@ The implemented OpenSubsonic endpoints are:
 /rest/getAlbumList2[.view]
 /rest/getAlbum[.view]
 /rest/getSong[.view]
+/rest/search3[.view]
 /rest/getPlaylists[.view]
 /rest/getOpenSubsonicExtensions[.view]
 /rest/getScanStatus[.view]
