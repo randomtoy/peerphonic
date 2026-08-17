@@ -126,6 +126,37 @@ func TestTagExtractorDecodesCP1251ID3v1(t *testing.T) {
 	}
 }
 
+func TestTagExtractorNormalizesMalformedID3Genres(t *testing.T) {
+	t.Parallel()
+
+	tests := map[string]string{
+		"05":              "",
+		"(22)Death Metal": "Death Metal",
+	}
+	for encoded, want := range tests {
+		encoded, want := encoded, want
+		t.Run(encoded, func(t *testing.T) {
+			t.Parallel()
+			path := filepath.Join(t.TempDir(), "track.mp3")
+			audio := append(id3v23GenreTag(encoded), bytes.Repeat(mp3.SilentBytes, 10)...)
+			if err := os.WriteFile(path, audio, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := (TagExtractor{}).Extract(path, info)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Genre != want {
+				t.Fatalf("genre = %q, want %q", got.Genre, want)
+			}
+		})
+	}
+}
+
 func TestTagExtractorFallsBackFromPlaceholderArtist(t *testing.T) {
 	t.Parallel()
 
@@ -211,6 +242,18 @@ func id3v23PictureTag(picture []byte) []byte {
 	payload = append(payload, 0, 3, 0)
 	payload = append(payload, picture...)
 	frame := []byte("APIC")
+	size := make([]byte, 4)
+	binary.BigEndian.PutUint32(size, uint32(len(payload)))
+	frame = append(frame, size...)
+	frame = append(frame, 0, 0)
+	frame = append(frame, payload...)
+	header := []byte{'I', 'D', '3', 3, 0, 0, 0, 0, 0, byte(len(frame))}
+	return append(header, frame...)
+}
+
+func id3v23GenreTag(value string) []byte {
+	payload := append([]byte{0}, value...)
+	frame := []byte("TCON")
 	size := make([]byte, 4)
 	binary.BigEndian.PutUint32(size, uint32(len(payload)))
 	frame = append(frame, size...)

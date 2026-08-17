@@ -56,7 +56,7 @@ func (TagExtractor) Extract(path string, info os.FileInfo) (scanner.Metadata, er
 		result.DiscNumber, _ = values.Disc()
 		result.Year = values.Year()
 		if value, ok := usableMetadataText(values.Genre()); ok {
-			result.Genre = value
+			result.Genre = normalizeGenre(value)
 		}
 	}
 	result.Artwork = extractArtwork(path, values)
