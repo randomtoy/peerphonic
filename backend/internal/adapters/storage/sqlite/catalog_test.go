@@ -28,7 +28,7 @@ func TestCatalogRoundTripAndReplacement(t *testing.T) {
 		Size: 42, BitRate: 900, Suffix: "flac", ContentType: "audio/flac", CoverArtID: "art-1",
 	}
 	source := domain.SourceRef{Provider: "local", Key: "Artist/Album/One.flac"}
-	if err := catalog.ReplaceProviderTracks(ctx, "local", []domain.TrackSource{{Track: track, Ref: source}}); err != nil {
+	if err := catalog.ReplaceProviderTracks(ctx, "local", []domain.TrackSource{{Track: track, Ref: source}}, nil); err != nil {
 		t.Fatalf("ReplaceProviderTracks() error = %v", err)
 	}
 
@@ -67,7 +67,7 @@ func TestCatalogRoundTripAndReplacement(t *testing.T) {
 		t.Fatalf("TracksByAlbum() = %#v, %v", tracks, err)
 	}
 
-	if err := catalog.ReplaceProviderTracks(ctx, "local", nil); err != nil {
+	if err := catalog.ReplaceProviderTracks(ctx, "local", nil, nil); err != nil {
 		t.Fatalf("empty ReplaceProviderTracks() error = %v", err)
 	}
 	_, err = catalog.Track(ctx, track.ID)
@@ -92,17 +92,55 @@ func TestCatalogReplacementIsAtomic(t *testing.T) {
 	originalSource := domain.TrackSource{
 		Track: original, Ref: domain.SourceRef{Provider: "local", Key: "original.mp3"},
 	}
-	if err := catalog.ReplaceProviderTracks(ctx, "local", []domain.TrackSource{originalSource}); err != nil {
+	if err := catalog.ReplaceProviderTracks(ctx, "local", []domain.TrackSource{originalSource}, nil); err != nil {
 		t.Fatal(err)
 	}
 	invalid := originalSource
 	invalid.Track.ID = "invalid"
 	invalid.Ref.Provider = "remote"
-	if err := catalog.ReplaceProviderTracks(ctx, "local", []domain.TrackSource{invalid}); err == nil {
+	if err := catalog.ReplaceProviderTracks(ctx, "local", []domain.TrackSource{invalid}, nil); err == nil {
 		t.Fatal("ReplaceProviderTracks() error = nil, want provider mismatch")
 	}
 	if _, err := catalog.Track(ctx, original.ID); err != nil {
 		t.Fatalf("original track lost after rollback: %v", err)
+	}
+}
+
+func TestCatalogRetainsAlbumAliasesAcrossMetadataChanges(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	catalog, err := Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close()
+
+	source := domain.TrackSource{
+		Track: domain.Track{
+			ID: "track-1", Title: "Song", Artist: "Artist", ArtistID: "artist",
+			Album: "First", AlbumID: "album-first", AlbumArtist: "Artist",
+		},
+		Ref: domain.SourceRef{Provider: "local", Key: "song.mp3"},
+	}
+	if err := catalog.ReplaceProviderTracks(ctx, "local", []domain.TrackSource{source}, nil); err != nil {
+		t.Fatal(err)
+	}
+	source.Track.Album = "Second"
+	source.Track.AlbumID = "album-second"
+	if err := catalog.ReplaceProviderTracks(ctx, "local", []domain.TrackSource{source}, nil); err != nil {
+		t.Fatal(err)
+	}
+	source.Track.Album = "Third"
+	source.Track.AlbumID = "album-third"
+	if err := catalog.ReplaceProviderTracks(ctx, "local", []domain.TrackSource{source}, nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, albumID := range []string{"album-first", "album-second", "album-third"} {
+		tracks, err := catalog.TracksByAlbum(ctx, albumID)
+		if err != nil || len(tracks) != 1 || tracks[0].AlbumID != "album-third" {
+			t.Fatalf("TracksByAlbum(%q) = %#v, %v", albumID, tracks, err)
+		}
 	}
 }
 
@@ -126,10 +164,10 @@ func TestCatalogKeepsTrackUntilItsLastSourceIsRemoved(t *testing.T) {
 	remoteSource := domain.TrackSource{
 		Track: track, Ref: domain.SourceRef{Provider: "remote", Key: "peer/shared.mp3"},
 	}
-	if err := catalog.ReplaceProviderTracks(ctx, "local", []domain.TrackSource{localSource}); err != nil {
+	if err := catalog.ReplaceProviderTracks(ctx, "local", []domain.TrackSource{localSource}, nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := catalog.ReplaceProviderTracks(ctx, "remote", []domain.TrackSource{remoteSource}); err != nil {
+	if err := catalog.ReplaceProviderTracks(ctx, "remote", []domain.TrackSource{remoteSource}, nil); err != nil {
 		t.Fatal(err)
 	}
 	sources, err := catalog.Sources(ctx, track.ID)
@@ -137,7 +175,7 @@ func TestCatalogKeepsTrackUntilItsLastSourceIsRemoved(t *testing.T) {
 		t.Fatalf("Sources() = %#v, %v; want two sources", sources, err)
 	}
 
-	if err := catalog.ReplaceProviderTracks(ctx, "local", nil); err != nil {
+	if err := catalog.ReplaceProviderTracks(ctx, "local", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := catalog.Track(ctx, track.ID); err != nil {
@@ -148,7 +186,7 @@ func TestCatalogKeepsTrackUntilItsLastSourceIsRemoved(t *testing.T) {
 		t.Fatalf("Sources() after local removal = %#v, %v", sources, err)
 	}
 
-	if err := catalog.ReplaceProviderTracks(ctx, "remote", nil); err != nil {
+	if err := catalog.ReplaceProviderTracks(ctx, "remote", nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := catalog.Track(ctx, track.ID); !errors.Is(err, ports.ErrNotFound) {
@@ -183,7 +221,7 @@ func TestCatalogSearchIsUnicodeAwareAndPagedIndependently(t *testing.T) {
 			Ref: domain.SourceRef{Provider: "local", Key: "song.mp3"},
 		},
 	}
-	if err := catalog.ReplaceProviderTracks(ctx, "local", tracks); err != nil {
+	if err := catalog.ReplaceProviderTracks(ctx, "local", tracks, nil); err != nil {
 		t.Fatal(err)
 	}
 

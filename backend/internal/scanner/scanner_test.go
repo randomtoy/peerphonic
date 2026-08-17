@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/storage/sqlite"
+	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 )
 
 type extractorStub struct{}
@@ -108,7 +109,7 @@ func TestScanGroupsInferredMultiArtistFolderAsCompilation(t *testing.T) {
 	if err := os.Mkdir(compilationDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"first.mp3", "second.mp3"} {
+	for _, name := range []string{"first.mp3", "second.mp3", "third.mp3"} {
 		if err := os.WriteFile(filepath.Join(compilationDir, name), []byte("audio"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -126,14 +127,20 @@ func TestScanGroupsInferredMultiArtistFolderAsCompilation(t *testing.T) {
 	if err != nil || len(albums) != 1 {
 		t.Fatalf("Albums() = %#v, %v", albums, err)
 	}
-	if albums[0].Name != "Compilation Volume" || albums[0].Artist != "Various Artists" || albums[0].SongCount != 2 {
+	if albums[0].Name != "Compilation Volume" || albums[0].Artist != "Various Artists" || albums[0].SongCount != 3 {
 		t.Fatalf("album = %#v", albums[0])
 	}
 	tracks, err := catalog.TracksByAlbum(ctx, albums[0].ID)
-	if err != nil || len(tracks) != 2 {
+	if err != nil || len(tracks) != 3 {
 		t.Fatalf("TracksByAlbum() = %#v, %v", tracks, err)
 	}
 	if tracks[0].ArtistID == tracks[1].ArtistID || tracks[0].AlbumArtistID != albums[0].ArtistID {
 		t.Fatalf("track identities = %#v", tracks)
+	}
+	legacyArtistID := domain.StableID("artist", "first artist")
+	legacyAlbumID := domain.StableID("album", legacyArtistID, "va")
+	legacyTracks, err := catalog.TracksByAlbum(ctx, legacyAlbumID)
+	if err != nil || len(legacyTracks) != 2 || legacyTracks[0].AlbumID != albums[0].ID {
+		t.Fatalf("TracksByAlbum(legacy) = %#v, %v", legacyTracks, err)
 	}
 }

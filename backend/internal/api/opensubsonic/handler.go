@@ -300,10 +300,11 @@ func (h *Handler) getAlbum(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	album := albumFromTracks(tracks)
+	album.ID = id
 	payload := makeAlbumID3(album)
 	payload.Songs = make([]child, 0, len(tracks))
 	for _, track := range tracks {
-		payload.Songs = append(payload.Songs, trackChild(track))
+		payload.Songs = append(payload.Songs, trackChildForAlbum(track, id))
 	}
 	h.write(writer, request, http.StatusOK, response{Album: &payload})
 }
@@ -396,7 +397,7 @@ func (h *Handler) getMusicDirectory(writer http.ResponseWriter, request *http.Re
 		}
 		directory.Name = tracks[0].Album
 		for _, item := range tracks {
-			directory.Children = append(directory.Children, trackChild(item))
+			directory.Children = append(directory.Children, trackChildForAlbum(item, id))
 		}
 	default:
 		h.writeError(writer, request, http.StatusNotFound, 70, "Directory not found")
@@ -506,6 +507,13 @@ func trackChild(item domain.Track) child {
 		AlbumID: item.AlbumID, ArtistID: item.ArtistID, DiscNumber: item.DiscNumber,
 		CoverArt: item.CoverArtID,
 	}
+}
+
+func trackChildForAlbum(item domain.Track, albumID string) child {
+	result := trackChild(item)
+	result.Parent = albumID
+	result.AlbumID = albumID
+	return result
 }
 
 func makeAlbumID3(item domain.Album) albumID3 {

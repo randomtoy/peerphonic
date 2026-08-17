@@ -93,6 +93,7 @@ func (s *Scanner) Scan(ctx context.Context) (Report, error) {
 	var warnings []Warning
 	artworkIDs := make(map[[sha256.Size]byte]string)
 	explicitAlbumArtists := make(map[string]bool)
+	originalAlbumIDs := make(map[string]string)
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -127,6 +128,7 @@ func (s *Scanner) Scan(ctx context.Context) (Report, error) {
 		}
 		track := makeTrack(filepath.ToSlash(key), metadata)
 		explicitAlbumArtists[track.Track.ID] = metadata.AlbumArtistExplicit
+		originalAlbumIDs[track.Track.ID] = track.Track.AlbumID
 		if metadata.Artwork != nil && s.artwork != nil {
 			digest := sha256.Sum256(metadata.Artwork.Data)
 			if coverArtID, ok := artworkIDs[digest]; ok {
@@ -148,10 +150,26 @@ func (s *Scanner) Scan(ctx context.Context) (Report, error) {
 		return Report{}, fmt.Errorf("walk music directory: %w", err)
 	}
 	normalizeCompilationAlbums(tracks, explicitAlbumArtists)
-	if err := s.catalog.ReplaceProviderTracks(ctx, LocalProvider, tracks); err != nil {
+	aliases := changedAlbumAliases(tracks, originalAlbumIDs)
+	if err := s.catalog.ReplaceProviderTracks(ctx, LocalProvider, tracks, aliases); err != nil {
 		return Report{}, fmt.Errorf("replace local catalog: %w", err)
 	}
 	return Report{Tracks: len(tracks), Warnings: warnings}, nil
+}
+
+func changedAlbumAliases(tracks []domain.TrackSource, originalAlbumIDs map[string]string) []ports.AlbumAlias {
+	unique := make(map[ports.AlbumAlias]struct{})
+	for _, source := range tracks {
+		originalID := originalAlbumIDs[source.Track.ID]
+		if originalID != "" && originalID != source.Track.AlbumID {
+			unique[ports.AlbumAlias{AliasID: originalID, TrackID: source.Track.ID}] = struct{}{}
+		}
+	}
+	aliases := make([]ports.AlbumAlias, 0, len(unique))
+	for alias := range unique {
+		aliases = append(aliases, alias)
+	}
+	return aliases
 }
 
 func makeTrack(key string, metadata Metadata) domain.TrackSource {

@@ -115,13 +115,53 @@ func (c *Catalog) applyMigration(ctx context.Context, name string) error {
 	return nil
 }
 
-func (c *Catalog) ReplaceProviderTracks(ctx context.Context, provider string, sources []domain.TrackSource) error {
+func (c *Catalog) ReplaceProviderTracks(
+	ctx context.Context,
+	provider string,
+	sources []domain.TrackSource,
+	albumAliases []ports.AlbumAlias,
+) error {
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin catalog replacement: %w", err)
 	}
 	defer tx.Rollback()
+	previousAlbums := make(map[string]string, len(sources))
+	previousAliases := make(map[string][]string, len(sources))
+	incomingTrackIDs := make(map[string]struct{}, len(sources))
+	for _, source := range sources {
+		incomingTrackIDs[source.Track.ID] = struct{}{}
+		var albumID string
+		err := tx.QueryRowContext(ctx, "SELECT album_id FROM tracks WHERE id = ?", source.Track.ID).Scan(&albumID)
+		if err == nil {
+			previousAlbums[source.Track.ID] = albumID
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("query previous album for track %q: %w", source.Track.ID, err)
+		}
+		rows, err := tx.QueryContext(ctx, `SELECT alias_id FROM album_alias_tracks
+			WHERE provider = ? AND track_id = ?`, provider, source.Track.ID)
+		if err != nil {
+			return fmt.Errorf("query previous aliases for track %q: %w", source.Track.ID, err)
+		}
+		for rows.Next() {
+			var aliasID string
+			if err := rows.Scan(&aliasID); err != nil {
+				rows.Close()
+				return fmt.Errorf("scan previous alias for track %q: %w", source.Track.ID, err)
+			}
+			previousAliases[source.Track.ID] = append(previousAliases[source.Track.ID], aliasID)
+		}
+		if err := rows.Close(); err != nil {
+			return fmt.Errorf("close previous aliases for track %q: %w", source.Track.ID, err)
+		}
+		if err := rows.Err(); err != nil {
+			return fmt.Errorf("iterate previous aliases for track %q: %w", source.Track.ID, err)
+		}
+	}
 
+	if _, err := tx.ExecContext(ctx, "DELETE FROM album_alias_tracks WHERE provider = ?", provider); err != nil {
+		return fmt.Errorf("clear provider album aliases: %w", err)
+	}
 	if _, err := tx.ExecContext(ctx, "DELETE FROM track_sources WHERE provider = ?", provider); err != nil {
 		return fmt.Errorf("clear provider sources: %w", err)
 	}
@@ -162,6 +202,14 @@ func (c *Catalog) ReplaceProviderTracks(ctx context.Context, provider string, so
 		return fmt.Errorf("prepare source insert: %w", err)
 	}
 	defer sourceStatement.Close()
+	aliasStatement, err := tx.PrepareContext(ctx, `INSERT INTO album_alias_tracks (
+		provider, alias_id, track_id
+	) VALUES (?, ?, ?)
+	ON CONFLICT(provider, alias_id, track_id) DO NOTHING`)
+	if err != nil {
+		return fmt.Errorf("prepare album alias insert: %w", err)
+	}
+	defer aliasStatement.Close()
 
 	for _, source := range sources {
 		track := source.Track
@@ -182,6 +230,23 @@ func (c *Catalog) ReplaceProviderTracks(ctx context.Context, provider string, so
 		}
 		if _, err := sourceStatement.ExecContext(ctx, track.ID, source.Ref.Provider, source.Ref.Key); err != nil {
 			return fmt.Errorf("insert source for track %q: %w", track.ID, err)
+		}
+		if previousAlbumID := previousAlbums[track.ID]; previousAlbumID != "" && previousAlbumID != track.AlbumID {
+			albumAliases = append(albumAliases, ports.AlbumAlias{AliasID: previousAlbumID, TrackID: track.ID})
+		}
+		for _, aliasID := range previousAliases[track.ID] {
+			albumAliases = append(albumAliases, ports.AlbumAlias{AliasID: aliasID, TrackID: track.ID})
+		}
+	}
+	for _, alias := range albumAliases {
+		if alias.AliasID == "" || alias.TrackID == "" {
+			continue
+		}
+		if _, ok := incomingTrackIDs[alias.TrackID]; !ok {
+			return fmt.Errorf("album alias %q refers to unknown provider track %q", alias.AliasID, alias.TrackID)
+		}
+		if _, err := aliasStatement.ExecContext(ctx, provider, alias.AliasID, alias.TrackID); err != nil {
+			return fmt.Errorf("insert album alias %q: %w", alias.AliasID, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -326,6 +391,24 @@ func scanAlbums(rows *sql.Rows) ([]domain.Album, error) {
 }
 
 func (c *Catalog) TracksByAlbum(ctx context.Context, albumID string) ([]domain.Track, error) {
+	tracks, err := c.tracksByCanonicalAlbum(ctx, albumID)
+	if err != nil || len(tracks) > 0 {
+		return tracks, err
+	}
+	rows, err := c.db.QueryContext(ctx, "SELECT "+trackColumns+` FROM tracks
+		WHERE EXISTS (
+			SELECT 1 FROM album_alias_tracks
+			WHERE album_alias_tracks.alias_id = ?
+				AND album_alias_tracks.track_id = tracks.id
+		) ORDER BY disc_number, track_number, title COLLATE NOCASE`, albumID)
+	if err != nil {
+		return nil, fmt.Errorf("query album alias tracks: %w", err)
+	}
+	defer rows.Close()
+	return scanTracks(rows, "album alias")
+}
+
+func (c *Catalog) tracksByCanonicalAlbum(ctx context.Context, albumID string) ([]domain.Track, error) {
 	rows, err := c.db.QueryContext(ctx, "SELECT "+trackColumns+` FROM tracks WHERE album_id = ?
 		ORDER BY disc_number, track_number, title COLLATE NOCASE`, albumID)
 	if err != nil {
@@ -333,16 +416,20 @@ func (c *Catalog) TracksByAlbum(ctx context.Context, albumID string) ([]domain.T
 	}
 	defer rows.Close()
 
+	return scanTracks(rows, "album")
+}
+
+func scanTracks(rows *sql.Rows, kind string) ([]domain.Track, error) {
 	var tracks []domain.Track
 	for rows.Next() {
 		track, err := scanTrack(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scan album track: %w", err)
+			return nil, fmt.Errorf("scan %s track: %w", kind, err)
 		}
 		tracks = append(tracks, track)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate album tracks: %w", err)
+		return nil, fmt.Errorf("iterate %s tracks: %w", kind, err)
 	}
 	return tracks, nil
 }

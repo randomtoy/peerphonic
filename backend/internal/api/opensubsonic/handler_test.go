@@ -15,6 +15,7 @@ import (
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/providers/local"
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/storage/sqlite"
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
+	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
 	"github.com/randomtoy/peerphonic/backend/internal/core/services"
 	"github.com/randomtoy/peerphonic/backend/internal/scanner"
 )
@@ -52,7 +53,8 @@ func newTestHandler(t *testing.T, scans ...scanController) (http.Handler, domain
 	source := domain.TrackSource{
 		Track: track, Ref: domain.SourceRef{Provider: local.Name, Key: "Artist/Album/song.mp3"},
 	}
-	if err := catalog.ReplaceProviderTracks(ctx, local.Name, []domain.TrackSource{source}); err != nil {
+	aliases := []ports.AlbumAlias{{AliasID: "album_legacy", TrackID: track.ID}}
+	if err := catalog.ReplaceProviderTracks(ctx, local.Name, []domain.TrackSource{source}, aliases); err != nil {
 		t.Fatal(err)
 	}
 	provider, err := local.New(root)
@@ -169,6 +171,9 @@ func TestID3BrowsingEndpointsUsedByAmperfy(t *testing.T) {
 		{path: "/rest/getAlbum.view" + auth + "&id=album_test", contains: []string{
 			`<album id="album_test"`, `<song id="` + track.ID + `"`, `albumId="album_test"`,
 			`coverArt="` + track.CoverArtID + `"`,
+		}},
+		{path: "/rest/getAlbum.view" + auth + "&id=album_legacy", contains: []string{
+			`<album id="album_legacy"`, `<song id="` + track.ID + `"`, `albumId="album_legacy"`,
 		}},
 		{path: "/rest/getSong.view" + auth + "&id=" + track.ID, contains: []string{
 			`<song id="` + track.ID + `"`,

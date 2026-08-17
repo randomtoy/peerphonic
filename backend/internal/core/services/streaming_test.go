@@ -17,7 +17,7 @@ type catalogStub struct {
 	sourcesErr error
 }
 
-func (c catalogStub) ReplaceProviderTracks(context.Context, string, []domain.TrackSource) error {
+func (c catalogStub) ReplaceProviderTracks(context.Context, string, []domain.TrackSource, []ports.AlbumAlias) error {
 	return nil
 }
 func (c catalogStub) Track(context.Context, string) (domain.Track, error) { return c.track, nil }
