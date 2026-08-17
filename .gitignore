@@ -3,5 +3,6 @@
 /backend/*.db-shm
 /backend/*.db-wal
 /backend/cache/
+/backend/torrents/
 /deploy/data/
 .DS_Store
