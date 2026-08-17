@@ -37,16 +37,16 @@ func (TagExtractor) Extract(path string, info os.FileInfo) (scanner.Metadata, er
 		return scanner.Metadata{}, fmt.Errorf("read tags: %w", err)
 	}
 	if err == nil {
-		if value := strings.TrimSpace(values.Title()); value != "" {
+		if value, ok := usableMetadataText(values.Title()); ok {
 			result.Title = value
 		}
-		if value := strings.TrimSpace(values.Artist()); value != "" {
+		if value, ok := usableMetadataText(values.Artist()); ok {
 			result.Artist = value
 		}
-		if value := strings.TrimSpace(values.Album()); value != "" {
+		if value, ok := usableMetadataText(values.Album()); ok {
 			result.Album = value
 		}
-		if value := strings.TrimSpace(values.AlbumArtist()); value != "" {
+		if value, ok := usableMetadataText(values.AlbumArtist()); ok {
 			result.AlbumArtist = value
 		} else {
 			result.AlbumArtist = result.Artist
@@ -67,6 +67,14 @@ func fallbackMetadata(path string) scanner.Metadata {
 	title := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	album := filepath.Base(albumDir)
 	artist := filepath.Base(artistDir)
+	if filenameArtist, filenameTitle, matched := artistAndTitleFromFilename(title); matched {
+		title = filenameTitle
+		if filenameArtist != "" {
+			artist = filenameArtist
+		} else {
+			artist = "Unknown Artist"
+		}
+	}
 	if album == "." || album == string(filepath.Separator) || album == "" {
 		album = "Unknown Album"
 	}
@@ -74,6 +82,29 @@ func fallbackMetadata(path string) scanner.Metadata {
 		artist = "Unknown Artist"
 	}
 	return scanner.Metadata{Title: title, Artist: artist, Album: album}
+}
+
+func artistAndTitleFromFilename(filename string) (string, string, bool) {
+	withoutTrack := strings.TrimLeftFunc(filename, func(value rune) bool {
+		return value >= '0' && value <= '9'
+	})
+	if withoutTrack == filename {
+		return "", "", false
+	}
+	withoutTrack = strings.TrimSpace(withoutTrack)
+	if withoutTrack != "" && strings.ContainsRune("._-", rune(withoutTrack[0])) {
+		withoutTrack = strings.TrimSpace(withoutTrack[1:])
+	}
+	artist, title, ok := strings.Cut(withoutTrack, " - ")
+	if !ok {
+		return "", "", false
+	}
+	artist, _ = usableMetadataText(artist)
+	title, titleOK := usableMetadataText(title)
+	if !titleOK {
+		return "", "", false
+	}
+	return artist, title, true
 }
 
 func contentType(extension string) string {
