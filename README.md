@@ -15,6 +15,7 @@ changing the client-facing streaming flow.
 - artist/album/track browsing and HTTP range streaming;
 - genre browsing and album filtering from embedded tags;
 - paged album lists ordered by name, artist, import time, year, or randomly;
+- persistent ordered playlists through the OpenSubsonic API;
 - embedded and folder cover artwork stored through the blob storage boundary;
 - cached OpenSubsonic artwork resizing for mobile clients;
 - shared media cache with a size limit, LRU eviction, and pinned entries;
@@ -42,6 +43,10 @@ The implemented OpenSubsonic endpoints are:
 /rest/getCoverArt[.view]
 /rest/search3[.view]
 /rest/getPlaylists[.view]
+/rest/getPlaylist[.view]
+/rest/createPlaylist[.view]
+/rest/updatePlaylist[.view]
+/rest/deletePlaylist[.view]
 /rest/getOpenSubsonicExtensions[.view]
 /rest/getScanStatus[.view]
 /rest/startScan[.view]

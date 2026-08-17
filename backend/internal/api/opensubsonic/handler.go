@@ -28,12 +28,13 @@ const (
 )
 
 type Handler struct {
-	catalog  ports.Catalog
-	streams  *services.StreamingService
-	artwork  *services.ArtworkService
-	username string
-	password string
-	scans    scanController
+	catalog   ports.Catalog
+	streams   *services.StreamingService
+	artwork   *services.ArtworkService
+	playlists *services.PlaylistService
+	username  string
+	password  string
+	scans     scanController
 }
 
 type scanController interface {
@@ -49,7 +50,8 @@ func NewHandler(
 	scans ...scanController,
 ) http.Handler {
 	handler := &Handler{
-		catalog: catalog, streams: streams, artwork: artwork, username: username, password: password,
+		catalog: catalog, streams: streams, artwork: artwork,
+		playlists: services.NewPlaylistService(catalog), username: username, password: password,
 	}
 	if len(scans) > 0 {
 		handler.scans = scans[0]
@@ -102,7 +104,15 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	case "search3":
 		h.search3(writer, request)
 	case "getPlaylists":
-		h.write(writer, request, http.StatusOK, response{Playlists: &playlists{Items: []playlist{}}})
+		h.getPlaylists(writer, request)
+	case "getPlaylist":
+		h.getPlaylist(writer, request)
+	case "createPlaylist":
+		h.createPlaylist(writer, request)
+	case "updatePlaylist":
+		h.updatePlaylist(writer, request)
+	case "deletePlaylist":
+		h.deletePlaylist(writer, request)
 	case "getOpenSubsonicExtensions":
 		h.write(writer, request, http.StatusOK, response{Extensions: &extensions{Items: []extension{}}})
 	case "getScanStatus":

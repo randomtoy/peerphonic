@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"encoding/json"
 	"fmt"
 	"image"
 	"image/color"
@@ -274,6 +275,119 @@ func TestID3BrowsingEndpointsUsedByAmperfy(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestPlaylistLifecycle(t *testing.T) {
+	t.Parallel()
+
+	handler, track := newTestHandler(t)
+	auth := "?u=alice&p=secret&f=json"
+	request := func(path string) *httptest.ResponseRecorder {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		return response
+	}
+
+	created := request("/rest/createPlaylist" + auth + "&name=Roadtrip&songId=" + track.ID)
+	if created.Code != http.StatusOK {
+		t.Fatalf("create status = %d, body = %s", created.Code, created.Body.String())
+	}
+	var createdBody struct {
+		Response struct {
+			Playlist playlist `json:"playlist"`
+		} `json:"subsonic-response"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &createdBody); err != nil {
+		t.Fatal(err)
+	}
+	id := createdBody.Response.Playlist.ID
+	if id == "" || createdBody.Response.Playlist.SongCount != 1 || len(createdBody.Response.Playlist.Entries) != 1 {
+		t.Fatalf("created playlist = %#v", createdBody.Response.Playlist)
+	}
+
+	listed := request("/rest/getPlaylists" + auth)
+	if listed.Code != http.StatusOK || !strings.Contains(listed.Body.String(), `"id":"`+id+`"`) ||
+		!strings.Contains(listed.Body.String(), `"songCount":1`) {
+		t.Fatalf("list status = %d, body = %s", listed.Code, listed.Body.String())
+	}
+
+	updated := request("/rest/updatePlaylist" + auth + "&playlistId=" + id +
+		"&name=Renamed&comment=Mobile&public=true&songIndexToRemove=0&songIdToAdd=" + track.ID)
+	if updated.Code != http.StatusOK || !strings.Contains(updated.Body.String(), `"status":"ok"`) {
+		t.Fatalf("update status = %d, body = %s", updated.Code, updated.Body.String())
+	}
+
+	replaced := request("/rest/createPlaylist" + auth + "&playlistId=" + id +
+		"&songId=" + track.ID + "&songId=" + track.ID)
+	if replaced.Code != http.StatusOK || !strings.Contains(replaced.Body.String(), `"songCount":2`) {
+		t.Fatalf("replace status = %d, body = %s", replaced.Code, replaced.Body.String())
+	}
+
+	detail := request("/rest/getPlaylist" + auth + "&id=" + id)
+	if detail.Code != http.StatusOK || !strings.Contains(detail.Body.String(), `"name":"Renamed"`) ||
+		!strings.Contains(detail.Body.String(), `"comment":"Mobile"`) ||
+		!strings.Contains(detail.Body.String(), `"public":true`) ||
+		strings.Count(detail.Body.String(), `"id":"`+track.ID+`"`) != 2 {
+		t.Fatalf("detail status = %d, body = %s", detail.Code, detail.Body.String())
+	}
+	xmlDetail := request("/rest/getPlaylist?u=alice&p=secret&id=" + id)
+	if xmlDetail.Code != http.StatusOK || !strings.Contains(xmlDetail.Body.String(), `<playlist id="`+id+`"`) ||
+		strings.Count(xmlDetail.Body.String(), `<entry id="`+track.ID+`"`) != 2 {
+		t.Fatalf("XML detail status = %d, body = %s", xmlDetail.Code, xmlDetail.Body.String())
+	}
+
+	deleted := request("/rest/deletePlaylist" + auth + "&id=" + id)
+	if deleted.Code != http.StatusOK {
+		t.Fatalf("delete status = %d, body = %s", deleted.Code, deleted.Body.String())
+	}
+	missing := request("/rest/getPlaylist" + auth + "&id=" + id)
+	if missing.Code != http.StatusNotFound || !strings.Contains(missing.Body.String(), `"code":70`) {
+		t.Fatalf("missing status = %d, body = %s", missing.Code, missing.Body.String())
+	}
+}
+
+func TestPlaylistEndpointsValidateMutations(t *testing.T) {
+	t.Parallel()
+
+	handler, track := newTestHandler(t)
+	auth := "?u=alice&p=secret&f=json"
+	tests := []struct {
+		path     string
+		contains string
+	}{
+		{path: "/rest/createPlaylist" + auth, contains: "name"},
+		{path: "/rest/getPlaylist" + auth, contains: "id"},
+		{path: "/rest/updatePlaylist" + auth, contains: "playlistId"},
+		{path: "/rest/deletePlaylist" + auth, contains: "id"},
+		{path: "/rest/createPlaylist" + auth + "&name=List&songId=missing", contains: "not found"},
+	}
+	for _, test := range tests {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.path, nil))
+		if response.Code < 400 || !strings.Contains(strings.ToLower(response.Body.String()), strings.ToLower(test.contains)) {
+			t.Fatalf("path = %s, status = %d, body = %s", test.path, response.Code, response.Body.String())
+		}
+	}
+
+	created := httptest.NewRecorder()
+	handler.ServeHTTP(created, httptest.NewRequest(http.MethodGet,
+		"/rest/createPlaylist"+auth+"&name=List&songId="+track.ID, nil))
+	var body struct {
+		Response struct {
+			Playlist playlist `json:"playlist"`
+		} `json:"subsonic-response"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{"&public=maybe", "&songIndexToRemove=-1", "&songIndexToRemove=2"} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+			"/rest/updatePlaylist"+auth+"&playlistId="+body.Response.Playlist.ID+suffix, nil))
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("suffix = %s, status = %d, body = %s", suffix, response.Code, response.Body.String())
+		}
 	}
 }
 

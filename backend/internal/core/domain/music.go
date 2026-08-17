@@ -63,6 +63,19 @@ type Genre struct {
 	AlbumCount int
 }
 
+type Playlist struct {
+	ID        string
+	Name      string
+	Comment   string
+	Owner     string
+	Public    bool
+	Created   time.Time
+	Changed   time.Time
+	SongCount int
+	Duration  time.Duration
+	Tracks    []Track
+}
+
 type TrackSource struct {
 	Track        Track
 	Ref          SourceRef

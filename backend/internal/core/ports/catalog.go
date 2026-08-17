@@ -26,6 +26,10 @@ type Catalog interface {
 	TracksByGenre(ctx context.Context, genre string, offset, limit int) ([]domain.Track, error)
 	RandomTracks(ctx context.Context, query RandomTracksQuery) ([]domain.Track, error)
 	Search(ctx context.Context, query CatalogSearch) (CatalogSearchResult, error)
+	Playlists(ctx context.Context, owner string) ([]domain.Playlist, error)
+	Playlist(ctx context.Context, id string) (domain.Playlist, error)
+	SavePlaylist(ctx context.Context, playlist domain.Playlist) error
+	DeletePlaylist(ctx context.Context, id string) error
 }
 
 type AlbumOrder string

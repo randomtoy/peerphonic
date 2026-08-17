@@ -25,6 +25,7 @@ type response struct {
 	Song          *child           `xml:"song,omitempty" json:"song,omitempty"`
 	SearchResult3 *searchResult3   `xml:"searchResult3,omitempty" json:"searchResult3,omitempty"`
 	Playlists     *playlists       `xml:"playlists,omitempty" json:"playlists,omitempty"`
+	Playlist      *playlist        `xml:"playlist,omitempty" json:"playlist,omitempty"`
 	Extensions    *extensions      `xml:"openSubsonicExtensions,omitempty" json:"openSubsonicExtensions,omitempty"`
 	ScanStatus    *scanStatus      `xml:"scanStatus,omitempty" json:"scanStatus,omitempty"`
 }
@@ -154,8 +155,16 @@ type playlists struct {
 }
 
 type playlist struct {
-	ID   string `xml:"id,attr" json:"id"`
-	Name string `xml:"name,attr" json:"name"`
+	ID        string  `xml:"id,attr" json:"id"`
+	Name      string  `xml:"name,attr" json:"name"`
+	Comment   string  `xml:"comment,attr,omitempty" json:"comment,omitempty"`
+	Owner     string  `xml:"owner,attr" json:"owner"`
+	Public    bool    `xml:"public,attr" json:"public"`
+	Created   string  `xml:"created,attr" json:"created"`
+	Changed   string  `xml:"changed,attr" json:"changed"`
+	SongCount int     `xml:"songCount,attr" json:"songCount"`
+	Duration  int     `xml:"duration,attr" json:"duration"`
+	Entries   []child `xml:"entry" json:"entry,omitempty"`
 }
 
 type extensions struct {

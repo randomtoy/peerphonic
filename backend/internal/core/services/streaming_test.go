@@ -41,6 +41,12 @@ func (c catalogStub) TracksByGenre(context.Context, string, int, int) ([]domain.
 func (c catalogStub) RandomTracks(context.Context, ports.RandomTracksQuery) ([]domain.Track, error) {
 	return nil, nil
 }
+func (c catalogStub) Playlists(context.Context, string) ([]domain.Playlist, error) { return nil, nil }
+func (c catalogStub) Playlist(context.Context, string) (domain.Playlist, error) {
+	return domain.Playlist{}, ports.ErrNotFound
+}
+func (c catalogStub) SavePlaylist(context.Context, domain.Playlist) error { return nil }
+func (c catalogStub) DeletePlaylist(context.Context, string) error        { return nil }
 func (c catalogStub) Search(context.Context, ports.CatalogSearch) (ports.CatalogSearchResult, error) {
 	return ports.CatalogSearchResult{}, nil
 }
