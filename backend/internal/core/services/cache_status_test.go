@@ -26,6 +26,21 @@ func (s cacheUsageSourceStub) CacheUsage(context.Context) (domain.CacheUsage, er
 	return s.usage, s.err
 }
 
+type evictingCacheUsageSourceStub struct {
+	usage   domain.CacheUsage
+	freed   int64
+	request int64
+}
+
+func (s *evictingCacheUsageSourceStub) CacheUsage(context.Context) (domain.CacheUsage, error) {
+	return s.usage, nil
+}
+
+func (s *evictingCacheUsageSourceStub) Evict(_ context.Context, bytes int64) (int64, error) {
+	s.request = bytes
+	return s.freed, nil
+}
+
 func TestCacheStatusCombinesProviderManagedUsage(t *testing.T) {
 	t.Parallel()
 
@@ -56,5 +71,22 @@ func TestCacheStatusReturnsProviderUsageError(t *testing.T) {
 	_, err := status.Stats(context.Background())
 	if !errors.Is(err, want) {
 		t.Fatalf("Stats() error = %v, want %v", err, want)
+	}
+}
+
+func TestCacheStatusPrunesCombinedUsageOverCapacity(t *testing.T) {
+	t.Parallel()
+
+	provider := &evictingCacheUsageSourceStub{
+		usage: domain.CacheUsage{Name: "remote", Size: 90}, freed: 10,
+	}
+	status := NewCacheStatus(cacheStatsSourceStub{stats: domain.CacheStats{
+		Capacity: 100, Size: 20,
+	}}, provider)
+	if err := status.Prune(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.request != 10 {
+		t.Fatalf("Evict() bytes = %d, want 10", provider.request)
 	}
 }

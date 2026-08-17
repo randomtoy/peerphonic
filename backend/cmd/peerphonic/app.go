@@ -72,6 +72,11 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		return fail(fmt.Errorf("prune media cache: %w", err))
 	}
 	cacheStatus := services.NewCacheStatus(mediaCache, torrentProvider)
+	torrentProvider.SetCacheChangedHandler(func() {
+		if err := cacheStatus.Prune(context.WithoutCancel(ctx)); err != nil {
+			logger.Warn("media cache pruning failed", "error", err)
+		}
+	})
 	localScanner := scanner.New(cfg.MusicDir, catalog, metadata.TagExtractor{}, artwork)
 	torrentScanner := torrentscanner.NewWithEnrichment(
 		cfg.TorrentDir, catalog, torrentProvider, metadata.TagExtractor{}, artwork,
@@ -86,6 +91,9 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		logger.Info("music scan completed", "tracks", report.Tracks, "warnings", len(report.Warnings))
 		for _, warning := range report.Warnings {
 			logger.Warn("music scan warning", "path", warning.Path, "error", warning.Err)
+		}
+		if err := cacheStatus.Prune(ctx); err != nil {
+			return fail(fmt.Errorf("prune provider cache: %w", err))
 		}
 	}
 

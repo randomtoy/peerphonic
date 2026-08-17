@@ -11,6 +11,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -42,8 +43,15 @@ type Provider struct {
 	metadataRoot string
 	dataRoot     string
 
-	clientMu sync.Mutex
-	client   *torrentclient.Client
+	clientMu  sync.Mutex
+	client    *torrentclient.Client
+	operation sync.RWMutex
+
+	cacheMu        sync.Mutex
+	cacheFiles     map[string]cacheFile
+	active         map[string]int
+	lastAccessed   map[string]time.Time
+	onCacheChanged func()
 
 	artworkMu sync.RWMutex
 	artworks  map[string]domain.SourceRef
@@ -73,10 +81,26 @@ type catalogFile struct {
 	contentType string
 }
 
+type cacheFile struct {
+	infoHash    string
+	logicalPath string
+}
+
+type evictionCandidate struct {
+	key          string
+	infoHash     string
+	path         string
+	lastAccessed time.Time
+	size         int64
+}
+
 func New() *Provider {
 	return &Provider{
-		artworks: make(map[string]domain.SourceRef),
-		trackIDs: make(map[string]string),
+		artworks:     make(map[string]domain.SourceRef),
+		trackIDs:     make(map[string]string),
+		cacheFiles:   make(map[string]cacheFile),
+		active:       make(map[string]int),
+		lastAccessed: make(map[string]time.Time),
 	}
 }
 
@@ -124,6 +148,12 @@ func (p *Provider) SetCompletedHandler(handler func(CompletedFile)) {
 	p.completionMu.Lock()
 	p.onCompleted = handler
 	p.completionMu.Unlock()
+}
+
+func (p *Provider) SetCacheChangedHandler(handler func()) {
+	p.cacheMu.Lock()
+	p.onCacheChanged = handler
+	p.cacheMu.Unlock()
 }
 
 // CachedPath returns a fully materialized file without starting the torrent
@@ -184,7 +214,62 @@ func (p *Provider) CacheUsage(ctx context.Context) (domain.CacheUsage, error) {
 	return usage, nil
 }
 
+// Evict removes least recently accessed torrent files. Active torrents are
+// skipped, and an inactive torrent is dropped from the client before any of
+// its files are removed so piece completion is re-evaluated on the next open.
+func (p *Provider) Evict(ctx context.Context, bytes int64) (int64, error) {
+	if bytes <= 0 {
+		return 0, nil
+	}
+	p.operation.Lock()
+	defer p.operation.Unlock()
+
+	candidates, err := p.evictionCandidates(ctx)
+	if err != nil {
+		return 0, err
+	}
+	sort.Slice(candidates, func(left, right int) bool {
+		return candidates[left].lastAccessed.Before(candidates[right].lastAccessed)
+	})
+	dropped := make(map[string]bool)
+	var freed int64
+	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return freed, err
+		}
+		p.cacheMu.Lock()
+		active := p.active[candidate.infoHash]
+		p.cacheMu.Unlock()
+		if active > 0 {
+			continue
+		}
+		if !dropped[candidate.infoHash] {
+			p.dropTorrent(candidate.infoHash)
+			dropped[candidate.infoHash] = true
+		}
+		if err := os.Remove(candidate.path); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return freed, fmt.Errorf("remove cached torrent file %q: %w", candidate.path, err)
+		}
+		freed += candidate.size
+		p.cacheMu.Lock()
+		delete(p.lastAccessed, candidate.key)
+		p.cacheMu.Unlock()
+		if freed >= bytes {
+			break
+		}
+	}
+	return freed, nil
+}
+
 func (p *Provider) Close() error {
+	p.cacheMu.Lock()
+	p.onCacheChanged = nil
+	p.cacheMu.Unlock()
+	p.operation.Lock()
+	defer p.operation.Unlock()
 	p.completionMu.Lock()
 	p.closing = true
 	p.completionMu.Unlock()
@@ -240,6 +325,7 @@ func (p *Provider) ReadCatalog(reader io.Reader) (Catalog, error) {
 	for _, file := range audioFiles {
 		track := makeTrack(infoHash, file.parts, file.length, file.extension, file.contentType)
 		p.registerTrack(track.Ref.Key, track.Track.ID)
+		p.registerCacheFile(track.Ref.Key, infoHash, strings.Join(file.parts, "/"))
 		if artwork, ok := bestArtwork(file.parts, artworkFiles); ok {
 			logicalPath := strings.Join(artwork.parts, "/")
 			id := domain.StableID("torrentart", infoHash, logicalPath)
@@ -248,10 +334,17 @@ func (p *Provider) ReadCatalog(reader io.Reader) (Catalog, error) {
 		}
 		result.Tracks = append(result.Tracks, track)
 	}
+	for _, file := range artworkFiles {
+		logicalPath := strings.Join(file.parts, "/")
+		p.registerCacheFile(infoHash+"/"+logicalPath, infoHash, logicalPath)
+	}
 	return result, nil
 }
 
 func (p *Provider) open(ctx context.Context, ref domain.SourceRef) (ports.ResolvedSource, error) {
+	p.operation.RLock()
+	defer p.operation.RUnlock()
+
 	infoHash, logicalPath, err := parseSourceKey(ref.Key)
 	if err != nil {
 		return ports.ResolvedSource{}, err
@@ -280,6 +373,7 @@ func (p *Provider) open(ctx context.Context, ref domain.SourceRef) (ports.Resolv
 		reader := file.NewReader()
 		reader.SetContext(ctx)
 		reader.SetReadahead(streamReadahead)
+		p.retain(infoHash, ref.Key)
 		return ports.ResolvedSource{
 			Content: &boundedReader{
 				ReadSeekCloser: reader,
@@ -288,12 +382,70 @@ func (p *Provider) open(ctx context.Context, ref domain.SourceRef) (ports.Resolv
 				onComplete: func() {
 					p.notifyCompleted(ref, logicalPath)
 				},
+				onClose: func() { p.release(infoHash) },
 			},
 			Name: path.Base(logicalPath), ContentType: contentType(logicalPath),
 			Size: file.Length(), ModTime: time.Time{},
 		}, nil
 	}
 	return ports.ResolvedSource{}, fmt.Errorf("%w: torrent file %q is missing", ports.ErrSourceUnavailable, logicalPath)
+}
+
+func (p *Provider) evictionCandidates(ctx context.Context) ([]evictionCandidate, error) {
+	p.cacheMu.Lock()
+	files := make(map[string]cacheFile, len(p.cacheFiles))
+	accessed := make(map[string]time.Time, len(p.lastAccessed))
+	for key, file := range p.cacheFiles {
+		files[key] = file
+	}
+	for key, value := range p.lastAccessed {
+		accessed[key] = value
+	}
+	p.cacheMu.Unlock()
+
+	var candidates []evictionCandidate
+	for key, file := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		filePath := filepath.Join(p.dataRoot, filepath.FromSlash(file.logicalPath))
+		info, err := os.Stat(filePath)
+		if os.IsNotExist(err) {
+			filePath += ".part"
+			info, err = os.Stat(filePath)
+		}
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect cached torrent file %q: %w", filePath, err)
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		lastAccessed := accessed[key]
+		if lastAccessed.IsZero() {
+			lastAccessed = info.ModTime()
+		}
+		candidates = append(candidates, evictionCandidate{
+			key: key, infoHash: file.infoHash, path: filePath,
+			lastAccessed: lastAccessed, size: allocatedFileSize(info),
+		})
+	}
+	return candidates, nil
+}
+
+func (p *Provider) dropTorrent(infoHash string) {
+	hash := metainfo.NewHashFromHex(infoHash)
+	p.clientMu.Lock()
+	client := p.client
+	p.clientMu.Unlock()
+	if client == nil {
+		return
+	}
+	if torrent, ok := client.Torrent(hash); ok {
+		torrent.Drop()
+	}
 }
 
 func (p *Provider) ensureClient() (*torrentclient.Client, error) {
@@ -355,7 +507,38 @@ func (p *Provider) registerTrack(sourceKey, trackID string) {
 	p.completionMu.Unlock()
 }
 
+func (p *Provider) registerCacheFile(key, infoHash, logicalPath string) {
+	p.cacheMu.Lock()
+	p.cacheFiles[key] = cacheFile{infoHash: infoHash, logicalPath: logicalPath}
+	p.cacheMu.Unlock()
+}
+
+func (p *Provider) retain(infoHash, key string) {
+	p.cacheMu.Lock()
+	p.active[infoHash]++
+	p.lastAccessed[key] = time.Now().UTC()
+	p.cacheMu.Unlock()
+}
+
+func (p *Provider) release(infoHash string) {
+	p.cacheMu.Lock()
+	if p.active[infoHash] <= 1 {
+		delete(p.active, infoHash)
+	} else {
+		p.active[infoHash]--
+	}
+	handler := p.onCacheChanged
+	p.cacheMu.Unlock()
+	if handler != nil {
+		handler()
+	}
+}
+
 func (p *Provider) notifyCompleted(ref domain.SourceRef, logicalPath string) {
+	infoHash, _, err := parseSourceKey(ref.Key)
+	if err != nil {
+		return
+	}
 	p.completionMu.Lock()
 	trackID := p.trackIDs[ref.Key]
 	handler := p.onCompleted
@@ -365,12 +548,14 @@ func (p *Provider) notifyCompleted(ref domain.SourceRef, logicalPath string) {
 	}
 	p.completionWG.Add(1)
 	p.completionMu.Unlock()
+	p.retain(infoHash, ref.Key)
 	file := CompletedFile{
 		TrackID: trackID,
 		Path:    filepath.Join(p.dataRoot, filepath.FromSlash(logicalPath)),
 	}
 	go func() {
 		defer p.completionWG.Done()
+		defer p.release(infoHash)
 		handler(file)
 	}()
 }
@@ -428,6 +613,8 @@ type boundedReader struct {
 	contiguous  bool
 	completed   bool
 	onComplete  func()
+	onClose     func()
+	closeOnce   sync.Once
 }
 
 func (r *boundedReader) Read(buffer []byte) (int, error) {
@@ -463,6 +650,16 @@ func (r *boundedReader) Seek(offset int64, whence int) (int64, error) {
 		}
 	}
 	return position, err
+}
+
+func (r *boundedReader) Close() error {
+	err := r.ReadSeekCloser.Close()
+	r.closeOnce.Do(func() {
+		if r.onClose != nil {
+			r.onClose()
+		}
+	})
+	return err
 }
 
 func safePath(root string, fileParts []string) ([]string, error) {

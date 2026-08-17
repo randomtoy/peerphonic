@@ -112,9 +112,12 @@ Metadata and media/blob storage are separate boundaries. The OpenSubsonic stream
 handler resolves a domain source through `StreamingService`; it does not know
 whether bytes are local, cached, or remote.
 
-Cache usage is available from `GET /api/v1/cache/status`. Cached audio is kept
-separate from artwork, and unpinned entries are evicted by least recent access
-when the configured size limit is exceeded.
+Cache usage is available from `GET /api/v1/cache/status`. The total includes
+the shared media cache and provider-managed data such as complete and partial
+torrent files. The response includes a component breakdown and counts partial
+entries separately. Physical disk allocation is used for sparse partial files.
+Unpinned and inactive entries are evicted by least recent access when the
+combined configured size limit is exceeded.
 
 Place `.torrent` files in the configured torrent directory and start a library
 scan. Audio entries and references to included cover images appear in the catalog
@@ -123,6 +126,11 @@ track or cover request. The reader prioritizes only the requested byte range and
 a small readahead window, so OpenSubsonic clients can begin playback while the
 selected track is downloading. Downloaded pieces are reused from
 `cache_dir/torrents` on later requests.
+
+Torrent cache cleanup never removes data from an actively streamed torrent.
+Before removing inactive torrent files, Peerphonic detaches that torrent from
+the client so its piece state is safely re-evaluated the next time the track is
+played.
 
 After a track has been read completely from start to finish, Peerphonic inspects
 the materialized cache file in the background and updates its title, track/disc

@@ -134,6 +134,87 @@ func TestCacheUsageAllowsMissingDataDirectory(t *testing.T) {
 	}
 }
 
+func TestEvictRemovesOldestInactiveCachedTorrentFile(t *testing.T) {
+	t.Parallel()
+
+	data := torrentBytes(t, metainfo.Info{
+		Name: "Artist - Album", PieceLength: 16 * 1024, Pieces: make([]byte, 20),
+		Files: []metainfo.FileInfo{
+			{Length: 4096, Path: []string{"01 Old.mp3"}},
+			{Length: 4096, Path: []string{"02 New.mp3"}},
+		},
+	})
+	dataRoot := t.TempDir()
+	provider, err := NewStreaming(t.TempDir(), dataRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := provider.ReadCatalog(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(dataRoot, catalog.Name)
+	if err := os.MkdirAll(root, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"01 Old.mp3", "02 New.mp3"} {
+		if err := os.WriteFile(filepath.Join(root, name), bytes.Repeat([]byte("x"), 4096), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	provider.cacheMu.Lock()
+	provider.lastAccessed[catalog.Tracks[0].Ref.Key] = time.Unix(1, 0)
+	provider.lastAccessed[catalog.Tracks[1].Ref.Key] = time.Unix(2, 0)
+	provider.cacheMu.Unlock()
+
+	freed, err := provider.Evict(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if freed <= 0 {
+		t.Fatalf("Evict() freed = %d", freed)
+	}
+	if _, err := os.Stat(filepath.Join(root, "01 Old.mp3")); !os.IsNotExist(err) {
+		t.Fatalf("old file stat error = %v, want not exist", err)
+	}
+	if _, err := os.Stat(filepath.Join(root, "02 New.mp3")); err != nil {
+		t.Fatalf("new file stat error = %v", err)
+	}
+}
+
+func TestEvictSkipsActiveTorrent(t *testing.T) {
+	t.Parallel()
+
+	data := torrentBytes(t, metainfo.Info{
+		Name: "Artist - Active.mp3", Length: 4096, PieceLength: 16 * 1024, Pieces: make([]byte, 20),
+	})
+	dataRoot := t.TempDir()
+	provider, err := NewStreaming(t.TempDir(), dataRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := provider.ReadCatalog(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	filePath := filepath.Join(dataRoot, catalog.Name)
+	if err := os.WriteFile(filePath, bytes.Repeat([]byte("x"), 4096), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	provider.retain(catalog.InfoHash, catalog.Tracks[0].Ref.Key)
+	freed, err := provider.Evict(context.Background(), 4096)
+	provider.release(catalog.InfoHash)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if freed != 0 {
+		t.Fatalf("Evict() freed = %d, want 0", freed)
+	}
+	if _, err := os.Stat(filePath); err != nil {
+		t.Fatalf("active file stat error = %v", err)
+	}
+}
+
 func TestStreamingProviderReadsPersistedTorrentFileAndArtwork(t *testing.T) {
 	t.Parallel()
 
@@ -238,6 +319,32 @@ func TestStreamingProviderReadsPersistedTorrentFileAndArtwork(t *testing.T) {
 	cover.Content.Close()
 	if err != nil || !bytes.Equal(streamedArtwork, artwork) {
 		t.Fatalf("artwork = %x, err = %v", streamedArtwork, err)
+	}
+	provider.cacheMu.Lock()
+	provider.lastAccessed[catalog.Tracks[0].Ref.Key] = time.Unix(1, 0)
+	provider.cacheMu.Unlock()
+	freed, err := provider.Evict(context.Background(), 1)
+	if err != nil || freed <= 0 {
+		t.Fatalf("Evict() freed = %d, error = %v", freed, err)
+	}
+	if _, err := os.Stat(filepath.Join(targetRoot, "01 Song.mp3")); !os.IsNotExist(err) {
+		t.Fatalf("evicted track stat error = %v, want not exist", err)
+	}
+	hash := metainfo.NewHashFromHex(catalog.InfoHash)
+	if _, ok := provider.client.Torrent(hash); ok {
+		t.Fatal("torrent remained attached after cache eviction")
+	}
+	reopened, err := provider.Resolve(ctx, catalog.Tracks[0].Ref)
+	if err != nil {
+		t.Fatalf("Resolve() after eviction error = %v", err)
+	}
+	reopened.Content.Close()
+	torrent, ok := provider.client.Torrent(hash)
+	if !ok {
+		t.Fatal("torrent was not reattached after cache eviction")
+	}
+	if torrent.BytesCompleted() >= info.TotalLength() {
+		t.Fatalf("torrent completed bytes after eviction = %d", torrent.BytesCompleted())
 	}
 }
 
