@@ -115,41 +115,73 @@ func (c *Catalog) applyMigration(ctx context.Context, name string) error {
 	return nil
 }
 
-func (c *Catalog) ReplaceProviderTracks(ctx context.Context, provider string, tracks []domain.Track) error {
+func (c *Catalog) ReplaceProviderTracks(ctx context.Context, provider string, sources []domain.TrackSource) error {
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("begin catalog replacement: %w", err)
 	}
 	defer tx.Rollback()
 
-	if _, err := tx.ExecContext(ctx, "DELETE FROM tracks WHERE provider = ?", provider); err != nil {
-		return fmt.Errorf("clear provider catalog: %w", err)
+	if _, err := tx.ExecContext(ctx, "DELETE FROM track_sources WHERE provider = ?", provider); err != nil {
+		return fmt.Errorf("clear provider sources: %w", err)
 	}
-	statement, err := tx.PrepareContext(ctx, `INSERT INTO tracks (
-		id, provider, source_key, title, artist, artist_id, album, album_id,
+	if _, err := tx.ExecContext(ctx, `DELETE FROM tracks
+		WHERE NOT EXISTS (SELECT 1 FROM track_sources WHERE track_sources.track_id = tracks.id)`); err != nil {
+		return fmt.Errorf("clear orphaned tracks: %w", err)
+	}
+	trackStatement, err := tx.PrepareContext(ctx, `INSERT INTO tracks (
+		id, title, artist, artist_id, album, album_id,
 		album_artist, album_artist_id, track_number, disc_number, year, duration_ms, size_bytes,
 		bit_rate, suffix, content_type, cover_art_id
-	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+	) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+	ON CONFLICT(id) DO UPDATE SET
+		title = excluded.title,
+		artist = excluded.artist,
+		artist_id = excluded.artist_id,
+		album = excluded.album,
+		album_id = excluded.album_id,
+		album_artist = excluded.album_artist,
+		album_artist_id = excluded.album_artist_id,
+		track_number = excluded.track_number,
+		disc_number = excluded.disc_number,
+		year = excluded.year,
+		duration_ms = excluded.duration_ms,
+		size_bytes = excluded.size_bytes,
+		bit_rate = excluded.bit_rate,
+		suffix = excluded.suffix,
+		content_type = excluded.content_type,
+		cover_art_id = excluded.cover_art_id`)
 	if err != nil {
 		return fmt.Errorf("prepare track insert: %w", err)
 	}
-	defer statement.Close()
+	defer trackStatement.Close()
+	sourceStatement, err := tx.PrepareContext(ctx, `INSERT INTO track_sources (
+		track_id, provider, source_key
+	) VALUES (?, ?, ?)`)
+	if err != nil {
+		return fmt.Errorf("prepare source insert: %w", err)
+	}
+	defer sourceStatement.Close()
 
-	for _, track := range tracks {
-		if track.Source.Provider != provider {
-			return fmt.Errorf("track %q belongs to provider %q, want %q", track.ID, track.Source.Provider, provider)
+	for _, source := range sources {
+		track := source.Track
+		if source.Ref.Provider != provider {
+			return fmt.Errorf("track %q belongs to provider %q, want %q", track.ID, source.Ref.Provider, provider)
 		}
 		albumArtistID := track.AlbumArtistID
 		if albumArtistID == "" {
 			albumArtistID = track.ArtistID
 		}
-		if _, err := statement.ExecContext(ctx,
-			track.ID, track.Source.Provider, track.Source.Key, track.Title, track.Artist,
+		if _, err := trackStatement.ExecContext(ctx,
+			track.ID, track.Title, track.Artist,
 			track.ArtistID, track.Album, track.AlbumID, track.AlbumArtist, albumArtistID,
 			track.TrackNumber, track.DiscNumber, track.Year, track.Duration.Milliseconds(),
 			track.Size, track.BitRate, track.Suffix, track.ContentType, track.CoverArtID,
 		); err != nil {
 			return fmt.Errorf("insert track %q: %w", track.ID, err)
+		}
+		if _, err := sourceStatement.ExecContext(ctx, track.ID, source.Ref.Provider, source.Ref.Key); err != nil {
+			return fmt.Errorf("insert source for track %q: %w", track.ID, err)
 		}
 	}
 	if err := tx.Commit(); err != nil {
@@ -158,8 +190,8 @@ func (c *Catalog) ReplaceProviderTracks(ctx context.Context, provider string, tr
 	return nil
 }
 
-const trackColumns = `id, provider, source_key, title, artist, artist_id, album,
-	album_id, album_artist, album_artist_id, track_number, disc_number, year, duration_ms,
+const trackColumns = `id, title, artist, artist_id, album, album_id, album_artist,
+	album_artist_id, track_number, disc_number, year, duration_ms,
 	size_bytes, bit_rate, suffix, content_type, cover_art_id`
 
 func (c *Catalog) Track(ctx context.Context, id string) (domain.Track, error) {
@@ -172,6 +204,31 @@ func (c *Catalog) Track(ctx context.Context, id string) (domain.Track, error) {
 		return domain.Track{}, fmt.Errorf("query track: %w", err)
 	}
 	return track, nil
+}
+
+func (c *Catalog) Sources(ctx context.Context, trackID string) ([]domain.SourceRef, error) {
+	rows, err := c.db.QueryContext(ctx, `SELECT provider, source_key FROM track_sources
+		WHERE track_id = ? ORDER BY provider, source_key`, trackID)
+	if err != nil {
+		return nil, fmt.Errorf("query track sources: %w", err)
+	}
+	defer rows.Close()
+
+	var sources []domain.SourceRef
+	for rows.Next() {
+		var source domain.SourceRef
+		if err := rows.Scan(&source.Provider, &source.Key); err != nil {
+			return nil, fmt.Errorf("scan track source: %w", err)
+		}
+		sources = append(sources, source)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate track sources: %w", err)
+	}
+	if len(sources) == 0 {
+		return nil, ports.ErrNotFound
+	}
+	return sources, nil
 }
 
 func (c *Catalog) Artists(ctx context.Context) ([]domain.Artist, error) {
@@ -379,7 +436,7 @@ func scanTrack(row rowScanner) (domain.Track, error) {
 	var track domain.Track
 	var durationMS int64
 	err := row.Scan(
-		&track.ID, &track.Source.Provider, &track.Source.Key, &track.Title, &track.Artist,
+		&track.ID, &track.Title, &track.Artist,
 		&track.ArtistID, &track.Album, &track.AlbumID, &track.AlbumArtist,
 		&track.AlbumArtistID,
 		&track.TrackNumber, &track.DiscNumber, &track.Year, &durationMS,

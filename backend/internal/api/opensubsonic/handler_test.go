@@ -47,10 +47,12 @@ func newTestHandler(t *testing.T, scans ...scanController) (http.Handler, domain
 	track := domain.Track{
 		ID: "track_test", Title: "Song", Artist: "Artist", ArtistID: "artist_test",
 		Album: "Album", AlbumID: "album_test", AlbumArtist: "Artist",
-		Source:      domain.SourceRef{Provider: local.Name, Key: "Artist/Album/song.mp3"},
 		TrackNumber: 1, Size: 10, Suffix: "mp3", ContentType: "audio/mpeg", CoverArtID: coverArtID,
 	}
-	if err := catalog.ReplaceProviderTracks(ctx, local.Name, []domain.Track{track}); err != nil {
+	source := domain.TrackSource{
+		Track: track, Ref: domain.SourceRef{Provider: local.Name, Key: "Artist/Album/song.mp3"},
+	}
+	if err := catalog.ReplaceProviderTracks(ctx, local.Name, []domain.TrackSource{source}); err != nil {
 		t.Fatal(err)
 	}
 	provider, err := local.New(root)

@@ -24,11 +24,11 @@ func TestCatalogRoundTripAndReplacement(t *testing.T) {
 	track := domain.Track{
 		ID: "track-1", Title: "One", Artist: "Artist", ArtistID: "artist-1",
 		Album: "Album", AlbumID: "album-1", AlbumArtist: "Artist",
-		Source:      domain.SourceRef{Provider: "local", Key: "Artist/Album/One.flac"},
 		TrackNumber: 1, Year: 2026, Duration: 3*time.Minute + 5*time.Second,
 		Size: 42, BitRate: 900, Suffix: "flac", ContentType: "audio/flac", CoverArtID: "art-1",
 	}
-	if err := catalog.ReplaceProviderTracks(ctx, "local", []domain.Track{track}); err != nil {
+	source := domain.SourceRef{Provider: "local", Key: "Artist/Album/One.flac"}
+	if err := catalog.ReplaceProviderTracks(ctx, "local", []domain.TrackSource{{Track: track, Ref: source}}); err != nil {
 		t.Fatalf("ReplaceProviderTracks() error = %v", err)
 	}
 
@@ -36,9 +36,13 @@ func TestCatalogRoundTripAndReplacement(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Track() error = %v", err)
 	}
-	if got.Title != track.Title || got.Source != track.Source || got.Duration != track.Duration ||
+	if got.Title != track.Title || got.Duration != track.Duration ||
 		got.CoverArtID != track.CoverArtID {
 		t.Fatalf("Track() = %#v, want %#v", got, track)
+	}
+	sources, err := catalog.Sources(ctx, track.ID)
+	if err != nil || len(sources) != 1 || sources[0] != source {
+		t.Fatalf("Sources() = %#v, %v", sources, err)
 	}
 	artists, err := catalog.Artists(ctx)
 	if err != nil || len(artists) != 1 || artists[0].Name != "Artist" {
@@ -84,19 +88,71 @@ func TestCatalogReplacementIsAtomic(t *testing.T) {
 	original := domain.Track{
 		ID: "original", Title: "Original", Artist: "Artist", ArtistID: "artist",
 		Album: "Album", AlbumID: "album", AlbumArtist: "Artist",
-		Source: domain.SourceRef{Provider: "local", Key: "original.mp3"},
 	}
-	if err := catalog.ReplaceProviderTracks(ctx, "local", []domain.Track{original}); err != nil {
+	originalSource := domain.TrackSource{
+		Track: original, Ref: domain.SourceRef{Provider: "local", Key: "original.mp3"},
+	}
+	if err := catalog.ReplaceProviderTracks(ctx, "local", []domain.TrackSource{originalSource}); err != nil {
 		t.Fatal(err)
 	}
-	invalid := original
-	invalid.ID = "invalid"
-	invalid.Source.Provider = "remote"
-	if err := catalog.ReplaceProviderTracks(ctx, "local", []domain.Track{invalid}); err == nil {
+	invalid := originalSource
+	invalid.Track.ID = "invalid"
+	invalid.Ref.Provider = "remote"
+	if err := catalog.ReplaceProviderTracks(ctx, "local", []domain.TrackSource{invalid}); err == nil {
 		t.Fatal("ReplaceProviderTracks() error = nil, want provider mismatch")
 	}
 	if _, err := catalog.Track(ctx, original.ID); err != nil {
 		t.Fatalf("original track lost after rollback: %v", err)
+	}
+}
+
+func TestCatalogKeepsTrackUntilItsLastSourceIsRemoved(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	catalog, err := Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close()
+
+	track := domain.Track{
+		ID: "shared-track", Title: "Shared", Artist: "Artist", ArtistID: "artist",
+		Album: "Album", AlbumID: "album", AlbumArtist: "Artist",
+	}
+	localSource := domain.TrackSource{
+		Track: track, Ref: domain.SourceRef{Provider: "local", Key: "shared.mp3"},
+	}
+	remoteSource := domain.TrackSource{
+		Track: track, Ref: domain.SourceRef{Provider: "remote", Key: "peer/shared.mp3"},
+	}
+	if err := catalog.ReplaceProviderTracks(ctx, "local", []domain.TrackSource{localSource}); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.ReplaceProviderTracks(ctx, "remote", []domain.TrackSource{remoteSource}); err != nil {
+		t.Fatal(err)
+	}
+	sources, err := catalog.Sources(ctx, track.ID)
+	if err != nil || len(sources) != 2 {
+		t.Fatalf("Sources() = %#v, %v; want two sources", sources, err)
+	}
+
+	if err := catalog.ReplaceProviderTracks(ctx, "local", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.Track(ctx, track.ID); err != nil {
+		t.Fatalf("Track() after local removal error = %v", err)
+	}
+	sources, err = catalog.Sources(ctx, track.ID)
+	if err != nil || len(sources) != 1 || sources[0] != remoteSource.Ref {
+		t.Fatalf("Sources() after local removal = %#v, %v", sources, err)
+	}
+
+	if err := catalog.ReplaceProviderTracks(ctx, "remote", nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.Track(ctx, track.ID); !errors.Is(err, ports.ErrNotFound) {
+		t.Fatalf("Track() after final removal error = %v, want ErrNotFound", err)
 	}
 }
 
@@ -109,16 +165,22 @@ func TestCatalogSearchIsUnicodeAwareAndPagedIndependently(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer catalog.Close()
-	tracks := []domain.Track{
+	tracks := []domain.TrackSource{
 		{
-			ID: "track-crow", Title: "Пластилиновая Ворона", Artist: "Черная Метка",
-			ArtistID: "artist-black", Album: "Hard Covers", AlbumID: "album-hard",
-			AlbumArtist: "Черная Метка", Source: domain.SourceRef{Provider: "local", Key: "crow.mp3"},
+			Track: domain.Track{
+				ID: "track-crow", Title: "Пластилиновая Ворона", Artist: "Черная Метка",
+				ArtistID: "artist-black", Album: "Hard Covers", AlbumID: "album-hard",
+				AlbumArtist: "Черная Метка",
+			},
+			Ref: domain.SourceRef{Provider: "local", Key: "crow.mp3"},
 		},
 		{
-			ID: "track-song", Title: "Another Song", Artist: "Other Artist",
-			ArtistID: "artist-other", Album: "Other Album", AlbumID: "album-other",
-			AlbumArtist: "Other Artist", Source: domain.SourceRef{Provider: "local", Key: "song.mp3"},
+			Track: domain.Track{
+				ID: "track-song", Title: "Another Song", Artist: "Other Artist",
+				ArtistID: "artist-other", Album: "Other Album", AlbumID: "album-other",
+				AlbumArtist: "Other Artist",
+			},
+			Ref: domain.SourceRef{Provider: "local", Key: "song.mp3"},
 		},
 	}
 	if err := catalog.ReplaceProviderTracks(ctx, "local", tracks); err != nil {

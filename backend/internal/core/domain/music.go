@@ -22,7 +22,6 @@ type Track struct {
 	AlbumID       string
 	AlbumArtist   string
 	AlbumArtistID string
-	Source        SourceRef
 	TrackNumber   int
 	DiscNumber    int
 	Year          int
@@ -57,11 +56,8 @@ type SearchQuery struct {
 }
 
 type TrackSource struct {
-	Ref      SourceRef
-	Title    string
-	Artist   string
-	Album    string
-	Duration time.Duration
+	Track Track
+	Ref   SourceRef
 }
 
 // StableID creates an opaque, deterministic identifier for a domain entity.

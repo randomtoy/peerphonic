@@ -12,12 +12,18 @@ import (
 )
 
 type catalogStub struct {
-	track domain.Track
-	err   error
+	track      domain.Track
+	sources    []domain.SourceRef
+	sourcesErr error
 }
 
-func (c catalogStub) ReplaceProviderTracks(context.Context, string, []domain.Track) error { return nil }
-func (c catalogStub) Track(context.Context, string) (domain.Track, error)                 { return c.track, c.err }
+func (c catalogStub) ReplaceProviderTracks(context.Context, string, []domain.TrackSource) error {
+	return nil
+}
+func (c catalogStub) Track(context.Context, string) (domain.Track, error) { return c.track, nil }
+func (c catalogStub) Sources(context.Context, string) ([]domain.SourceRef, error) {
+	return c.sources, c.sourcesErr
+}
 func (c catalogStub) Artist(context.Context, string) (domain.Artist, error) {
 	return domain.Artist{}, nil
 }
@@ -30,15 +36,22 @@ func (c catalogStub) Search(context.Context, ports.CatalogSearch) (ports.Catalog
 }
 
 type providerStub struct {
-	resolved domain.SourceRef
+	providerName string
+	resolved     domain.SourceRef
+	err          error
+	calls        int
 }
 
-func (p *providerStub) Name() string { return "local" }
+func (p *providerStub) Name() string { return p.providerName }
 func (p *providerStub) Search(context.Context, domain.SearchQuery) ([]domain.TrackSource, error) {
 	return nil, nil
 }
 func (p *providerStub) Resolve(_ context.Context, ref domain.SourceRef) (ports.ResolvedSource, error) {
+	p.calls++
 	p.resolved = ref
+	if p.err != nil {
+		return ports.ResolvedSource{}, p.err
+	}
 	return ports.ResolvedSource{Content: seekCloser{Reader: strings.NewReader("audio")}}, nil
 }
 
@@ -49,9 +62,9 @@ func (seekCloser) Close() error { return nil }
 func TestStreamingServiceResolvesThroughTrackProvider(t *testing.T) {
 	t.Parallel()
 
-	provider := &providerStub{}
+	provider := &providerStub{providerName: "local"}
 	ref := domain.SourceRef{Provider: "local", Key: "album/song.mp3"}
-	service := NewStreamingService(catalogStub{track: domain.Track{ID: "track-1", Source: ref}}, provider)
+	service := NewStreamingService(catalogStub{sources: []domain.SourceRef{ref}}, provider)
 
 	stream, err := service.Open(context.Background(), "track-1")
 	if err != nil {
@@ -70,9 +83,32 @@ func TestStreamingServiceResolvesThroughTrackProvider(t *testing.T) {
 func TestStreamingServiceRejectsUnknownProvider(t *testing.T) {
 	t.Parallel()
 
-	service := NewStreamingService(catalogStub{track: domain.Track{Source: domain.SourceRef{Provider: "remote"}}})
+	service := NewStreamingService(catalogStub{sources: []domain.SourceRef{{Provider: "remote", Key: "song"}}})
 	_, err := service.Open(context.Background(), "track-1")
 	if err == nil || errors.Is(err, ports.ErrNotFound) {
 		t.Fatalf("Open() error = %v, want provider error", err)
+	}
+}
+
+func TestStreamingServiceFallsBackInProviderOrder(t *testing.T) {
+	t.Parallel()
+
+	local := &providerStub{providerName: "local", err: errors.New("file disappeared")}
+	remote := &providerStub{providerName: "remote"}
+	service := NewStreamingService(catalogStub{sources: []domain.SourceRef{
+		{Provider: "remote", Key: "remote-song"},
+		{Provider: "local", Key: "local-song"},
+	}}, local, remote)
+
+	stream, err := service.Open(context.Background(), "track-1")
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	defer stream.Content.Close()
+	if local.calls != 1 || remote.calls != 1 {
+		t.Fatalf("resolve calls = local %d, remote %d; want 1 each", local.calls, remote.calls)
+	}
+	if remote.resolved.Key != "remote-song" {
+		t.Fatalf("remote resolved = %#v", remote.resolved)
 	}
 }

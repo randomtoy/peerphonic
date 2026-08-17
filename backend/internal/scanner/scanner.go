@@ -89,7 +89,7 @@ func (s *Scanner) Scan(ctx context.Context) (Report, error) {
 		return Report{}, fmt.Errorf("music path %q is not a directory", root)
 	}
 
-	var tracks []domain.Track
+	var tracks []domain.TrackSource
 	var warnings []Warning
 	artworkIDs := make(map[[sha256.Size]byte]string)
 	explicitAlbumArtists := make(map[string]bool)
@@ -126,18 +126,18 @@ func (s *Scanner) Scan(ctx context.Context) (Report, error) {
 			return nil
 		}
 		track := makeTrack(filepath.ToSlash(key), metadata)
-		explicitAlbumArtists[track.ID] = metadata.AlbumArtistExplicit
+		explicitAlbumArtists[track.Track.ID] = metadata.AlbumArtistExplicit
 		if metadata.Artwork != nil && s.artwork != nil {
 			digest := sha256.Sum256(metadata.Artwork.Data)
 			if coverArtID, ok := artworkIDs[digest]; ok {
-				track.CoverArtID = coverArtID
+				track.Track.CoverArtID = coverArtID
 			} else {
 				coverArtID, err := s.artwork.Put(ctx, metadata.Artwork.Data)
 				if err != nil {
 					warnings = append(warnings, Warning{Path: path, Err: fmt.Errorf("store artwork: %w", err)})
 				} else {
 					artworkIDs[digest] = coverArtID
-					track.CoverArtID = coverArtID
+					track.Track.CoverArtID = coverArtID
 				}
 			}
 		}
@@ -154,7 +154,7 @@ func (s *Scanner) Scan(ctx context.Context) (Report, error) {
 	return Report{Tracks: len(tracks), Warnings: warnings}, nil
 }
 
-func makeTrack(key string, metadata Metadata) domain.Track {
+func makeTrack(key string, metadata Metadata) domain.TrackSource {
 	albumArtistName := strings.TrimSpace(metadata.AlbumArtist)
 	if albumArtistName == "" {
 		albumArtistName = strings.TrimSpace(metadata.Artist)
@@ -177,31 +177,33 @@ func makeTrack(key string, metadata Metadata) domain.Track {
 	trackArtistID := domain.StableID("artist", strings.ToLower(trackArtist))
 	albumArtistID := domain.StableID("artist", strings.ToLower(albumArtistName))
 	albumID := domain.StableID("album", albumArtistID, strings.ToLower(albumName))
-	return domain.Track{
-		ID:            domain.StableID("track", LocalProvider, key),
-		Title:         title,
-		Artist:        trackArtist,
-		ArtistID:      trackArtistID,
-		Album:         albumName,
-		AlbumID:       albumID,
-		AlbumArtist:   albumArtistName,
-		AlbumArtistID: albumArtistID,
-		Source:        domain.SourceRef{Provider: LocalProvider, Key: key},
-		TrackNumber:   metadata.TrackNumber,
-		DiscNumber:    metadata.DiscNumber,
-		Year:          metadata.Year,
-		Duration:      metadata.Duration,
-		Size:          metadata.Size,
-		BitRate:       metadata.BitRate,
-		Suffix:        metadata.Suffix,
-		ContentType:   metadata.ContentType,
+	return domain.TrackSource{
+		Track: domain.Track{
+			ID:            domain.StableID("track", LocalProvider, key),
+			Title:         title,
+			Artist:        trackArtist,
+			ArtistID:      trackArtistID,
+			Album:         albumName,
+			AlbumID:       albumID,
+			AlbumArtist:   albumArtistName,
+			AlbumArtistID: albumArtistID,
+			TrackNumber:   metadata.TrackNumber,
+			DiscNumber:    metadata.DiscNumber,
+			Year:          metadata.Year,
+			Duration:      metadata.Duration,
+			Size:          metadata.Size,
+			BitRate:       metadata.BitRate,
+			Suffix:        metadata.Suffix,
+			ContentType:   metadata.ContentType,
+		},
+		Ref: domain.SourceRef{Provider: LocalProvider, Key: key},
 	}
 }
 
-func normalizeCompilationAlbums(tracks []domain.Track, explicitAlbumArtists map[string]bool) {
+func normalizeCompilationAlbums(tracks []domain.TrackSource, explicitAlbumArtists map[string]bool) {
 	groups := make(map[string][]int)
-	for index, track := range tracks {
-		directory := path.Dir(track.Source.Key)
+	for index, source := range tracks {
+		directory := path.Dir(source.Ref.Key)
 		if directory != "." && directory != "/" {
 			groups[directory] = append(groups[directory], index)
 		}
@@ -214,7 +216,7 @@ func normalizeCompilationAlbums(tracks []domain.Track, explicitAlbumArtists map[
 		albumArtists := make(map[string]struct{})
 		hasExplicitAlbumArtist := false
 		for _, index := range indexes {
-			track := tracks[index]
+			track := tracks[index].Track
 			artists[strings.ToLower(strings.TrimSpace(track.Artist))] = struct{}{}
 			albumArtists[strings.ToLower(strings.TrimSpace(track.AlbumArtist))] = struct{}{}
 			if explicitAlbumArtists[track.ID] {
@@ -240,10 +242,10 @@ func normalizeCompilationAlbums(tracks []domain.Track, explicitAlbumArtists map[
 		albumArtistID := domain.StableID("artist", strings.ToLower(albumArtist))
 		albumID := domain.StableID("album", albumArtistID, strings.ToLower(albumName))
 		for _, index := range indexes {
-			tracks[index].Album = albumName
-			tracks[index].AlbumArtist = albumArtist
-			tracks[index].AlbumArtistID = albumArtistID
-			tracks[index].AlbumID = albumID
+			tracks[index].Track.Album = albumName
+			tracks[index].Track.AlbumArtist = albumArtist
+			tracks[index].Track.AlbumArtistID = albumArtistID
+			tracks[index].Track.AlbumID = albumID
 		}
 	}
 }

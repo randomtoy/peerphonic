@@ -9,11 +9,13 @@ import (
 
 var ErrNotFound = errors.New("not found")
 
-// Catalog stores searchable music metadata. Implementations must make
-// ReplaceProviderTracks atomic so a failed scan cannot leave a partial catalog.
+// Catalog stores searchable music metadata and its source references.
+// Implementations must make ReplaceProviderTracks atomic so a failed scan
+// cannot leave a partial catalog.
 type Catalog interface {
-	ReplaceProviderTracks(ctx context.Context, provider string, tracks []domain.Track) error
+	ReplaceProviderTracks(ctx context.Context, provider string, tracks []domain.TrackSource) error
 	Track(ctx context.Context, id string) (domain.Track, error)
+	Sources(ctx context.Context, trackID string) ([]domain.SourceRef, error)
 	Artist(ctx context.Context, id string) (domain.Artist, error)
 	Artists(ctx context.Context) ([]domain.Artist, error)
 	Albums(ctx context.Context, offset, limit int) ([]domain.Album, error)
