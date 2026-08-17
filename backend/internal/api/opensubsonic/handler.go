@@ -274,16 +274,76 @@ func (h *Handler) getAlbumList2(writer http.ResponseWriter, request *http.Reques
 		h.writeError(writer, request, http.StatusBadRequest, 10, err.Error())
 		return
 	}
-	albums, err := h.catalog.Albums(request.Context(), offset, limit)
+	query, empty, err := albumListQuery(request, offset, limit)
+	if err != nil {
+		h.writeError(writer, request, http.StatusBadRequest, 10, err.Error())
+		return
+	}
+	payload := &albumList2{Albums: []albumID3{}}
+	if empty || (request.Form.Has("musicFolderId") && request.Form.Get("musicFolderId") != musicFolderID) {
+		h.write(writer, request, http.StatusOK, response{AlbumList2: payload})
+		return
+	}
+	albums, err := h.catalog.Albums(request.Context(), query)
 	if err != nil {
 		h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to read the music catalog")
 		return
 	}
-	payload := &albumList2{Albums: make([]albumID3, 0, len(albums))}
+	payload.Albums = make([]albumID3, 0, len(albums))
 	for _, album := range albums {
 		payload.Albums = append(payload.Albums, makeAlbumID3(album))
 	}
 	h.write(writer, request, http.StatusOK, response{AlbumList2: payload})
+}
+
+func albumListQuery(request *http.Request, offset, limit int) (ports.AlbumListQuery, bool, error) {
+	query := ports.AlbumListQuery{Offset: offset, Limit: limit}
+	switch listType := request.Form.Get("type"); listType {
+	case "alphabeticalByName":
+		query.Order = ports.AlbumOrderName
+	case "alphabeticalByArtist":
+		query.Order = ports.AlbumOrderArtist
+	case "newest":
+		query.Order = ports.AlbumOrderNewest
+	case "random":
+		query.Order = ports.AlbumOrderRandom
+	case "byYear":
+		fromYear, err := requiredYear(request, "fromYear")
+		if err != nil {
+			return ports.AlbumListQuery{}, false, err
+		}
+		toYear, err := requiredYear(request, "toYear")
+		if err != nil {
+			return ports.AlbumListQuery{}, false, err
+		}
+		query.FromYear, query.ToYear = fromYear, toYear
+		if fromYear > toYear {
+			query.Order = ports.AlbumOrderYearDesc
+		} else {
+			query.Order = ports.AlbumOrderYearAsc
+		}
+	case "highest", "frequent", "recent", "starred":
+		return query, true, nil
+	case "byGenre":
+		if strings.TrimSpace(request.Form.Get("genre")) == "" {
+			return ports.AlbumListQuery{}, false, errors.New("required parameter genre is missing")
+		}
+		return query, true, nil
+	case "":
+		return ports.AlbumListQuery{}, false, errors.New("required parameter type is missing")
+	default:
+		return ports.AlbumListQuery{}, false, fmt.Errorf("unsupported album list type %q", listType)
+	}
+	return query, false, nil
+}
+
+func requiredYear(request *http.Request, name string) (int, error) {
+	value := request.Form.Get(name)
+	year, err := strconv.Atoi(value)
+	if err != nil || year < 0 {
+		return 0, fmt.Errorf("parameter %s must be a non-negative integer", name)
+	}
+	return year, nil
 }
 
 func (h *Handler) getAlbum(writer http.ResponseWriter, request *http.Request) {

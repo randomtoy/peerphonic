@@ -53,7 +53,7 @@ func newTestHandler(t *testing.T, scans ...scanController) (http.Handler, domain
 	track := domain.Track{
 		ID: "track_test", Title: "Song", Artist: "Artist", ArtistID: "artist_test",
 		Album: "Album", AlbumID: "album_test", AlbumArtist: "Artist",
-		TrackNumber: 1, Size: 10, Suffix: "mp3", ContentType: "audio/mpeg", CoverArtID: coverArtID,
+		TrackNumber: 1, Year: 2026, Size: 10, Suffix: "mp3", ContentType: "audio/mpeg", CoverArtID: coverArtID,
 	}
 	source := domain.TrackSource{
 		Track: track, Ref: domain.SourceRef{Provider: local.Name, Key: "Artist/Album/song.mp3"},
@@ -264,6 +264,38 @@ func TestID3BrowsingEndpointsUsedByAmperfy(t *testing.T) {
 				if !strings.Contains(response.Body.String(), expected) {
 					t.Errorf("body does not contain %q: %s", expected, response.Body.String())
 				}
+			}
+		})
+	}
+}
+
+func TestAlbumList2ValidatesAndSupportsListTypes(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newTestHandler(t)
+	auth := "?u=alice&p=secret&f=json"
+	tests := []struct {
+		name       string
+		parameters string
+		status     int
+		contains   string
+	}{
+		{name: "missing type", status: http.StatusBadRequest, contains: "required parameter type"},
+		{name: "unknown type", parameters: "&type=unknown", status: http.StatusBadRequest, contains: "unsupported album list type"},
+		{name: "missing year range", parameters: "&type=byYear", status: http.StatusBadRequest, contains: "fromYear"},
+		{name: "missing genre", parameters: "&type=byGenre", status: http.StatusBadRequest, contains: "genre"},
+		{name: "activity list without history", parameters: "&type=recent", status: http.StatusOK, contains: `"album":[]`},
+		{name: "year range", parameters: "&type=byYear&fromYear=2026&toYear=2020", status: http.StatusOK, contains: `"album_test"`},
+		{name: "alphabetical artist", parameters: "&type=alphabeticalByArtist", status: http.StatusOK, contains: `"album_test"`},
+		{name: "newest", parameters: "&type=newest", status: http.StatusOK, contains: `"album_test"`},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+				"/rest/getAlbumList2"+auth+test.parameters, nil))
+			if response.Code != test.status || !strings.Contains(response.Body.String(), test.contains) {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 			}
 		})
 	}

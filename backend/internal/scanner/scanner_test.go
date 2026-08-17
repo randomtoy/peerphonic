@@ -8,6 +8,7 @@ import (
 
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/storage/sqlite"
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
+	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
 )
 
 type extractorStub struct{}
@@ -123,7 +124,7 @@ func TestScanGroupsInferredMultiArtistFolderAsCompilation(t *testing.T) {
 	if _, err := New(root, catalog, compilationExtractor{}).Scan(ctx); err != nil {
 		t.Fatal(err)
 	}
-	albums, err := catalog.Albums(ctx, 0, 10)
+	albums, err := catalog.Albums(ctx, ports.AlbumListQuery{Limit: 10})
 	if err != nil || len(albums) != 1 {
 		t.Fatalf("Albums() = %#v, %v", albums, err)
 	}

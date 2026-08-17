@@ -196,8 +196,8 @@ func (c *Catalog) ReplaceProviderTracks(
 	}
 	defer trackStatement.Close()
 	sourceStatement, err := tx.PrepareContext(ctx, `INSERT INTO track_sources (
-		track_id, provider, source_key
-	) VALUES (?, ?, ?)`)
+		track_id, provider, source_key, discovered_at
+	) VALUES (?, ?, ?, ?)`)
 	if err != nil {
 		return fmt.Errorf("prepare source insert: %w", err)
 	}
@@ -228,7 +228,13 @@ func (c *Catalog) ReplaceProviderTracks(
 		); err != nil {
 			return fmt.Errorf("insert track %q: %w", track.ID, err)
 		}
-		if _, err := sourceStatement.ExecContext(ctx, track.ID, source.Ref.Provider, source.Ref.Key); err != nil {
+		discoveredAt := ""
+		if !source.DiscoveredAt.IsZero() {
+			discoveredAt = source.DiscoveredAt.UTC().Format(time.RFC3339Nano)
+		}
+		if _, err := sourceStatement.ExecContext(ctx,
+			track.ID, source.Ref.Provider, source.Ref.Key, discoveredAt,
+		); err != nil {
 			return fmt.Errorf("insert source for track %q: %w", track.ID, err)
 		}
 		if previousAlbumID := previousAlbums[track.ID]; previousAlbumID != "" && previousAlbumID != track.AlbumID {
@@ -384,11 +390,45 @@ func (c *Catalog) UpdateTrack(ctx context.Context, track domain.Track) error {
 	return nil
 }
 
-func (c *Catalog) Albums(ctx context.Context, offset, limit int) ([]domain.Album, error) {
-	rows, err := c.db.QueryContext(ctx, `SELECT album_id, album, album_artist, album_artist_id,
-		MIN(NULLIF(year, 0)), COUNT(*), SUM(duration_ms), MIN(NULLIF(cover_art_id, ''))
-		FROM tracks GROUP BY album_id, album, album_artist, album_artist_id
-		ORDER BY album COLLATE NOCASE, album_artist COLLATE NOCASE LIMIT ? OFFSET ?`, limit, offset)
+func (c *Catalog) Albums(ctx context.Context, query ports.AlbumListQuery) ([]domain.Album, error) {
+	order := "album COLLATE NOCASE, album_artist COLLATE NOCASE"
+	switch query.Order {
+	case "", ports.AlbumOrderName:
+	case ports.AlbumOrderArtist:
+		order = "album_artist COLLATE NOCASE, album COLLATE NOCASE"
+	case ports.AlbumOrderNewest:
+		order = "discovered_at DESC, album COLLATE NOCASE"
+	case ports.AlbumOrderRandom:
+		order = "RANDOM()"
+	case ports.AlbumOrderYearAsc:
+		order = "album_year ASC, album COLLATE NOCASE"
+	case ports.AlbumOrderYearDesc:
+		order = "album_year DESC, album COLLATE NOCASE"
+	default:
+		return nil, fmt.Errorf("unsupported album order %q", query.Order)
+	}
+	where := ""
+	arguments := []any{}
+	if query.FromYear != 0 || query.ToYear != 0 {
+		lower, upper := min(query.FromYear, query.ToYear), max(query.FromYear, query.ToYear)
+		where = "WHERE album_year BETWEEN ? AND ?"
+		arguments = append(arguments, lower, upper)
+	}
+	arguments = append(arguments, query.Limit, query.Offset)
+	rows, err := c.db.QueryContext(ctx, `WITH source_dates AS (
+		SELECT track_id, MAX(discovered_at) AS discovered_at
+		FROM track_sources GROUP BY track_id
+	), albums AS (
+		SELECT album_id, album, album_artist, album_artist_id,
+			MIN(NULLIF(year, 0)) AS album_year, COUNT(*) AS song_count,
+			SUM(duration_ms) AS duration_ms, MIN(NULLIF(cover_art_id, '')) AS cover_art_id,
+			MAX(source_dates.discovered_at) AS discovered_at
+		FROM tracks LEFT JOIN source_dates ON source_dates.track_id = tracks.id
+		GROUP BY album_id, album, album_artist, album_artist_id
+	)
+	SELECT album_id, album, album_artist, album_artist_id, album_year,
+		song_count, duration_ms, cover_art_id FROM albums `+where+`
+	ORDER BY `+order+` LIMIT ? OFFSET ?`, arguments...)
 	if err != nil {
 		return nil, fmt.Errorf("query all albums: %w", err)
 	}
@@ -484,7 +524,7 @@ func (c *Catalog) Search(ctx context.Context, query ports.CatalogSearch) (ports.
 		return ports.CatalogSearchResult{}, err
 	}
 	allResults := int(^uint(0) >> 1)
-	albums, err := c.Albums(ctx, 0, allResults)
+	albums, err := c.Albums(ctx, ports.AlbumListQuery{Limit: allResults})
 	if err != nil {
 		return ports.CatalogSearchResult{}, err
 	}

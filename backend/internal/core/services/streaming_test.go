@@ -28,8 +28,10 @@ func (c catalogStub) Sources(context.Context, string) ([]domain.SourceRef, error
 func (c catalogStub) Artist(context.Context, string) (domain.Artist, error) {
 	return domain.Artist{}, nil
 }
-func (c catalogStub) Artists(context.Context) ([]domain.Artist, error)               { return nil, nil }
-func (c catalogStub) Albums(context.Context, int, int) ([]domain.Album, error)       { return nil, nil }
+func (c catalogStub) Artists(context.Context) ([]domain.Artist, error) { return nil, nil }
+func (c catalogStub) Albums(context.Context, ports.AlbumListQuery) ([]domain.Album, error) {
+	return nil, nil
+}
 func (c catalogStub) AlbumsByArtist(context.Context, string) ([]domain.Album, error) { return nil, nil }
 func (c catalogStub) TracksByAlbum(context.Context, string) ([]domain.Track, error)  { return nil, nil }
 func (c catalogStub) Search(context.Context, ports.CatalogSearch) (ports.CatalogSearchResult, error) {

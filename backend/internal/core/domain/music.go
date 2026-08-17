@@ -56,8 +56,9 @@ type SearchQuery struct {
 }
 
 type TrackSource struct {
-	Track Track
-	Ref   SourceRef
+	Track        Track
+	Ref          SourceRef
+	DiscoveredAt time.Time
 }
 
 // StableID creates an opaque, deterministic identifier for a domain entity.

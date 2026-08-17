@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -51,7 +52,7 @@ func TestCatalogRoundTripAndReplacement(t *testing.T) {
 	if artists[0].AlbumCount != 1 {
 		t.Fatalf("artist album count = %d, want 1", artists[0].AlbumCount)
 	}
-	allAlbums, err := catalog.Albums(ctx, 0, 10)
+	allAlbums, err := catalog.Albums(ctx, ports.AlbumListQuery{Limit: 10})
 	if err != nil || len(allAlbums) != 1 || allAlbums[0].ID != "album-1" {
 		t.Fatalf("Albums() = %#v, %v", allAlbums, err)
 	}
@@ -73,6 +74,81 @@ func TestCatalogRoundTripAndReplacement(t *testing.T) {
 	_, err = catalog.Track(ctx, track.ID)
 	if !errors.Is(err, ports.ErrNotFound) {
 		t.Fatalf("Track() after replacement error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestCatalogAlbumListOrderingAndYearRanges(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	catalog, err := Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close()
+	items := []domain.TrackSource{
+		{Track: domain.Track{
+			ID: "track-b", Title: "Song B", Artist: "Zulu", ArtistID: "artist-z",
+			Album: "Beta", AlbumID: "album-b", AlbumArtist: "Zulu", Year: 2000,
+		}, Ref: domain.SourceRef{Provider: "local", Key: "b.mp3"}, DiscoveredAt: time.Unix(1, 0)},
+		{Track: domain.Track{
+			ID: "track-a", Title: "Song A", Artist: "Yankee", ArtistID: "artist-y",
+			Album: "Alpha", AlbumID: "album-a", AlbumArtist: "Yankee", Year: 2020,
+		}, Ref: domain.SourceRef{Provider: "local", Key: "a.mp3"}, DiscoveredAt: time.Unix(2, 0)},
+		{Track: domain.Track{
+			ID: "track-c", Title: "Song C", Artist: "Able", ArtistID: "artist-a",
+			Album: "Charlie", AlbumID: "album-c", AlbumArtist: "Able", Year: 2010,
+		}, Ref: domain.SourceRef{Provider: "local", Key: "c.mp3"}, DiscoveredAt: time.Unix(3, 0)},
+	}
+	if err := catalog.ReplaceProviderTracks(ctx, "local", items, nil); err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name  string
+		query ports.AlbumListQuery
+		want  []string
+	}{
+		{name: "album name page", query: ports.AlbumListQuery{
+			Offset: 1, Limit: 1, Order: ports.AlbumOrderName,
+		}, want: []string{"Beta"}},
+		{name: "album artist", query: ports.AlbumListQuery{
+			Limit: 3, Order: ports.AlbumOrderArtist,
+		}, want: []string{"Charlie", "Alpha", "Beta"}},
+		{name: "newest", query: ports.AlbumListQuery{
+			Limit: 3, Order: ports.AlbumOrderNewest,
+		}, want: []string{"Charlie", "Alpha", "Beta"}},
+		{name: "year ascending", query: ports.AlbumListQuery{
+			Limit: 3, Order: ports.AlbumOrderYearAsc, FromYear: 2005, ToYear: 2025,
+		}, want: []string{"Charlie", "Alpha"}},
+		{name: "year descending", query: ports.AlbumListQuery{
+			Limit: 3, Order: ports.AlbumOrderYearDesc, FromYear: 2025, ToYear: 2005,
+		}, want: []string{"Alpha", "Charlie"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			albums, err := catalog.Albums(ctx, test.query)
+			if err != nil {
+				t.Fatal(err)
+			}
+			got := make([]string, 0, len(albums))
+			for _, album := range albums {
+				got = append(got, album.Name)
+			}
+			if strings.Join(got, ",") != strings.Join(test.want, ",") {
+				t.Fatalf("Albums() = %v, want %v", got, test.want)
+			}
+		})
+	}
+	items[0], items[2] = items[2], items[0]
+	if err := catalog.ReplaceProviderTracks(ctx, "local", items, nil); err != nil {
+		t.Fatal(err)
+	}
+	albums, err := catalog.Albums(ctx, ports.AlbumListQuery{Limit: 3, Order: ports.AlbumOrderNewest})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if albums[0].Name != "Charlie" || albums[1].Name != "Alpha" || albums[2].Name != "Beta" {
+		t.Fatalf("newest albums after rescan = %#v", albums)
 	}
 }
 

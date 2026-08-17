@@ -48,7 +48,7 @@ func TestScanImportsTorrentAudioMetadataAndReplacesRemovedFiles(t *testing.T) {
 	if report.Tracks != 2 || len(report.Warnings) != 1 {
 		t.Fatalf("report = %#v", report)
 	}
-	albums, err := catalog.Albums(ctx, 0, 10)
+	albums, err := catalog.Albums(ctx, ports.AlbumListQuery{Limit: 10})
 	if err != nil || len(albums) != 1 || albums[0].Name != "Remote Album" ||
 		albums[0].SongCount != 2 || albums[0].CoverArtID == "" {
 		t.Fatalf("Albums() = %#v, %v", albums, err)
@@ -108,7 +108,7 @@ func TestScanReusesEnrichedMetadataFromCompletedTorrentCache(t *testing.T) {
 	if _, err := scanner.Scan(ctx); err != nil {
 		t.Fatal(err)
 	}
-	albums, err := catalog.Albums(ctx, 0, 10)
+	albums, err := catalog.Albums(ctx, ports.AlbumListQuery{Limit: 10})
 	if err != nil || len(albums) != 1 || albums[0].Name != "Remote Album" ||
 		albums[0].Duration != 2*time.Minute {
 		t.Fatalf("Albums() = %#v, %v", albums, err)

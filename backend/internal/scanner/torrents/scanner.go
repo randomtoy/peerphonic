@@ -73,6 +73,10 @@ func (s *Scanner) Scan(ctx context.Context) (scanner.Report, error) {
 		if closeErr != nil {
 			warnings = append(warnings, scanner.Warning{Path: path, Err: closeErr})
 		}
+		info, infoErr := entry.Info()
+		if infoErr != nil {
+			warnings = append(warnings, scanner.Warning{Path: path, Err: infoErr})
+		}
 		for _, track := range metadata.Tracks {
 			if _, exists := seen[track.Ref.Key]; exists {
 				continue
@@ -84,6 +88,9 @@ func (s *Scanner) Scan(ctx context.Context) (scanner.Report, error) {
 						warnings = append(warnings, scanner.Warning{Path: cachedPath, Err: err})
 					}
 				}
+			}
+			if infoErr == nil {
+				track.DiscoveredAt = info.ModTime().UTC()
 			}
 			tracks = append(tracks, track)
 		}

@@ -127,6 +127,7 @@ func (s *Scanner) Scan(ctx context.Context) (Report, error) {
 			return nil
 		}
 		track := makeTrack(filepath.ToSlash(key), metadata)
+		track.DiscoveredAt = info.ModTime().UTC()
 		explicitAlbumArtists[track.Track.ID] = metadata.AlbumArtistExplicit
 		originalAlbumIDs[track.Track.ID] = track.Track.AlbumID
 		if metadata.Artwork != nil && s.artwork != nil {

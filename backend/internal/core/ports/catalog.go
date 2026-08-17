@@ -19,10 +19,29 @@ type Catalog interface {
 	Sources(ctx context.Context, trackID string) ([]domain.SourceRef, error)
 	Artist(ctx context.Context, id string) (domain.Artist, error)
 	Artists(ctx context.Context) ([]domain.Artist, error)
-	Albums(ctx context.Context, offset, limit int) ([]domain.Album, error)
+	Albums(ctx context.Context, query AlbumListQuery) ([]domain.Album, error)
 	AlbumsByArtist(ctx context.Context, artistID string) ([]domain.Album, error)
 	TracksByAlbum(ctx context.Context, albumID string) ([]domain.Track, error)
 	Search(ctx context.Context, query CatalogSearch) (CatalogSearchResult, error)
+}
+
+type AlbumOrder string
+
+const (
+	AlbumOrderName     AlbumOrder = "name"
+	AlbumOrderArtist   AlbumOrder = "artist"
+	AlbumOrderNewest   AlbumOrder = "newest"
+	AlbumOrderRandom   AlbumOrder = "random"
+	AlbumOrderYearAsc  AlbumOrder = "year-asc"
+	AlbumOrderYearDesc AlbumOrder = "year-desc"
+)
+
+type AlbumListQuery struct {
+	Offset   int
+	Limit    int
+	Order    AlbumOrder
+	FromYear int
+	ToYear   int
 }
 
 type AlbumAlias struct {
