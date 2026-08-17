@@ -25,6 +25,7 @@ type Track struct {
 	TrackNumber   int
 	DiscNumber    int
 	Year          int
+	Genre         string
 	Duration      time.Duration
 	Size          int64
 	BitRate       int
@@ -45,6 +46,7 @@ type Album struct {
 	Artist     string
 	ArtistID   string
 	Year       int
+	Genre      string
 	SongCount  int
 	Duration   time.Duration
 	CoverArtID string
@@ -53,6 +55,12 @@ type Album struct {
 type SearchQuery struct {
 	Text  string
 	Limit int
+}
+
+type Genre struct {
+	Name       string
+	SongCount  int
+	AlbumCount int
 }
 
 type TrackSource struct {

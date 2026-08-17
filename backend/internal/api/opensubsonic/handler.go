@@ -82,7 +82,7 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	case "getMusicDirectory":
 		h.getMusicDirectory(writer, request)
 	case "getGenres":
-		h.write(writer, request, http.StatusOK, response{Genres: &genresResponse{Genres: []genre{}}})
+		h.getGenres(writer, request)
 	case "getArtists":
 		h.getArtists(writer, request)
 	case "getArtist":
@@ -241,6 +241,21 @@ func (h *Handler) getArtists(writer http.ResponseWriter, request *http.Request) 
 	h.write(writer, request, http.StatusOK, response{Artists: payload})
 }
 
+func (h *Handler) getGenres(writer http.ResponseWriter, request *http.Request) {
+	items, err := h.catalog.Genres(request.Context())
+	if err != nil {
+		h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to read the music catalog")
+		return
+	}
+	payload := &genresResponse{Genres: make([]genre, 0, len(items))}
+	for _, item := range items {
+		payload.Genres = append(payload.Genres, genre{
+			Value: item.Name, SongCount: item.SongCount, AlbumCount: item.AlbumCount,
+		})
+	}
+	h.write(writer, request, http.StatusOK, response{Genres: payload})
+}
+
 func (h *Handler) getArtist(writer http.ResponseWriter, request *http.Request) {
 	id := request.Form.Get("id")
 	if id == "" {
@@ -325,10 +340,10 @@ func albumListQuery(request *http.Request, offset, limit int) (ports.AlbumListQu
 	case "highest", "frequent", "recent", "starred":
 		return query, true, nil
 	case "byGenre":
-		if strings.TrimSpace(request.Form.Get("genre")) == "" {
+		query.Genre = strings.TrimSpace(request.Form.Get("genre"))
+		if query.Genre == "" {
 			return ports.AlbumListQuery{}, false, errors.New("required parameter genre is missing")
 		}
-		return query, true, nil
 	case "":
 		return ports.AlbumListQuery{}, false, errors.New("required parameter type is missing")
 	default:
@@ -560,7 +575,7 @@ func albumChild(item domain.Album) child {
 	return child{
 		ID: item.ID, Parent: item.ArtistID, Title: item.Name, Album: item.Name,
 		Artist: item.Artist, IsDir: true, Year: item.Year, SongCount: item.SongCount,
-		Duration: int(item.Duration.Seconds()), CoverArt: item.CoverArtID,
+		Duration: int(item.Duration.Seconds()), CoverArt: item.CoverArtID, Genre: item.Genre,
 	}
 }
 
@@ -571,7 +586,7 @@ func trackChild(item domain.Track) child {
 		Duration: int(item.Duration.Seconds()), Size: item.Size, BitRate: item.BitRate,
 		Suffix: item.Suffix, ContentType: item.ContentType, Type: "music",
 		AlbumID: item.AlbumID, ArtistID: item.ArtistID, DiscNumber: item.DiscNumber,
-		CoverArt: item.CoverArtID,
+		CoverArt: item.CoverArtID, Genre: item.Genre,
 	}
 }
 
@@ -587,7 +602,7 @@ func makeAlbumID3(item domain.Album) albumID3 {
 		ID: item.ID, Parent: item.ArtistID, Name: item.Name, Title: item.Name,
 		Album: item.Name, Artist: item.Artist, ArtistID: item.ArtistID, IsDir: true,
 		SongCount: item.SongCount, Duration: int(item.Duration.Seconds()), Year: item.Year,
-		CoverArt: item.CoverArtID,
+		CoverArt: item.CoverArtID, Genre: item.Genre,
 	}
 }
 
@@ -596,12 +611,15 @@ func albumFromTracks(tracks []domain.Track) domain.Album {
 	album := domain.Album{
 		ID: first.AlbumID, Name: first.Album, Artist: first.AlbumArtist,
 		ArtistID: first.AlbumArtistID, Year: first.Year, SongCount: len(tracks),
-		CoverArtID: first.CoverArtID,
+		CoverArtID: first.CoverArtID, Genre: first.Genre,
 	}
 	for _, track := range tracks {
 		album.Duration += track.Duration
 		if album.Year == 0 && track.Year != 0 {
 			album.Year = track.Year
+		}
+		if album.Genre == "" && track.Genre != "" {
+			album.Genre = track.Genre
 		}
 	}
 	return album

@@ -74,6 +74,7 @@ type child struct {
 	IsDir       bool   `xml:"isDir,attr" json:"isDir"`
 	Track       int    `xml:"track,attr,omitempty" json:"track,omitempty"`
 	Year        int    `xml:"year,attr,omitempty" json:"year,omitempty"`
+	Genre       string `xml:"genre,attr,omitempty" json:"genre,omitempty"`
 	Duration    int    `xml:"duration,attr,omitempty" json:"duration,omitempty"`
 	Size        int64  `xml:"size,attr,omitempty" json:"size,omitempty"`
 	BitRate     int    `xml:"bitRate,attr,omitempty" json:"bitRate,omitempty"`
@@ -127,6 +128,7 @@ type albumID3 struct {
 	SongCount int     `xml:"songCount,attr" json:"songCount"`
 	Duration  int     `xml:"duration,attr" json:"duration"`
 	Year      int     `xml:"year,attr,omitempty" json:"year,omitempty"`
+	Genre     string  `xml:"genre,attr,omitempty" json:"genre,omitempty"`
 	CoverArt  string  `xml:"coverArt,attr,omitempty" json:"coverArt,omitempty"`
 	Songs     []child `xml:"song" json:"song,omitempty"`
 }

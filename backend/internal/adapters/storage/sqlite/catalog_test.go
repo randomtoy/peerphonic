@@ -25,7 +25,7 @@ func TestCatalogRoundTripAndReplacement(t *testing.T) {
 	track := domain.Track{
 		ID: "track-1", Title: "One", Artist: "Artist", ArtistID: "artist-1",
 		Album: "Album", AlbumID: "album-1", AlbumArtist: "Artist",
-		TrackNumber: 1, Year: 2026, Duration: 3*time.Minute + 5*time.Second,
+		TrackNumber: 1, Year: 2026, Genre: "Rock", Duration: 3*time.Minute + 5*time.Second,
 		Size: 42, BitRate: 900, Suffix: "flac", ContentType: "audio/flac", CoverArtID: "art-1",
 	}
 	source := domain.SourceRef{Provider: "local", Key: "Artist/Album/One.flac"}
@@ -38,7 +38,7 @@ func TestCatalogRoundTripAndReplacement(t *testing.T) {
 		t.Fatalf("Track() error = %v", err)
 	}
 	if got.Title != track.Title || got.Duration != track.Duration ||
-		got.CoverArtID != track.CoverArtID {
+		got.CoverArtID != track.CoverArtID || got.Genre != track.Genre {
 		t.Fatalf("Track() = %#v, want %#v", got, track)
 	}
 	sources, err := catalog.Sources(ctx, track.ID)
@@ -58,6 +58,13 @@ func TestCatalogRoundTripAndReplacement(t *testing.T) {
 	}
 	if allAlbums[0].CoverArtID != "art-1" {
 		t.Fatalf("album cover art ID = %q", allAlbums[0].CoverArtID)
+	}
+	if allAlbums[0].Genre != "Rock" {
+		t.Fatalf("album genre = %q, want Rock", allAlbums[0].Genre)
+	}
+	genres, err := catalog.Genres(ctx)
+	if err != nil || len(genres) != 1 || genres[0] != (domain.Genre{Name: "Rock", SongCount: 1, AlbumCount: 1}) {
+		t.Fatalf("Genres() = %#v, %v", genres, err)
 	}
 	albums, err := catalog.AlbumsByArtist(ctx, "artist-1")
 	if err != nil || len(albums) != 1 || albums[0].SongCount != 1 {
@@ -89,16 +96,20 @@ func TestCatalogAlbumListOrderingAndYearRanges(t *testing.T) {
 	items := []domain.TrackSource{
 		{Track: domain.Track{
 			ID: "track-b", Title: "Song B", Artist: "Zulu", ArtistID: "artist-z",
-			Album: "Beta", AlbumID: "album-b", AlbumArtist: "Zulu", Year: 2000,
+			Album: "Beta", AlbumID: "album-b", AlbumArtist: "Zulu", Year: 2000, Genre: "Rock",
 		}, Ref: domain.SourceRef{Provider: "local", Key: "b.mp3"}, DiscoveredAt: time.Unix(1, 0)},
 		{Track: domain.Track{
 			ID: "track-a", Title: "Song A", Artist: "Yankee", ArtistID: "artist-y",
-			Album: "Alpha", AlbumID: "album-a", AlbumArtist: "Yankee", Year: 2020,
+			Album: "Alpha", AlbumID: "album-a", AlbumArtist: "Yankee", Year: 2020, Genre: "Pop",
 		}, Ref: domain.SourceRef{Provider: "local", Key: "a.mp3"}, DiscoveredAt: time.Unix(2, 0)},
 		{Track: domain.Track{
 			ID: "track-c", Title: "Song C", Artist: "Able", ArtistID: "artist-a",
-			Album: "Charlie", AlbumID: "album-c", AlbumArtist: "Able", Year: 2010,
+			Album: "Charlie", AlbumID: "album-c", AlbumArtist: "Able", Year: 2010, Genre: "Rock",
 		}, Ref: domain.SourceRef{Provider: "local", Key: "c.mp3"}, DiscoveredAt: time.Unix(3, 0)},
+		{Track: domain.Track{
+			ID: "track-a2", Title: "Song A2", Artist: "Yankee", ArtistID: "artist-y",
+			Album: "Alpha", AlbumID: "album-a", AlbumArtist: "Yankee", Year: 2020, Genre: "Rock",
+		}, Ref: domain.SourceRef{Provider: "local", Key: "a2.mp3"}, DiscoveredAt: time.Unix(2, 0)},
 	}
 	if err := catalog.ReplaceProviderTracks(ctx, "local", items, nil); err != nil {
 		t.Fatal(err)
@@ -123,6 +134,9 @@ func TestCatalogAlbumListOrderingAndYearRanges(t *testing.T) {
 		{name: "year descending", query: ports.AlbumListQuery{
 			Limit: 3, Order: ports.AlbumOrderYearDesc, FromYear: 2025, ToYear: 2005,
 		}, want: []string{"Alpha", "Charlie"}},
+		{name: "genre", query: ports.AlbumListQuery{
+			Limit: 3, Order: ports.AlbumOrderName, Genre: "rock",
+		}, want: []string{"Alpha", "Beta", "Charlie"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -249,13 +263,14 @@ func TestCatalogUpdatesTrackMetadataWithoutReplacingSources(t *testing.T) {
 	track.AlbumArtistID = "artist-new"
 	track.Duration = 3 * time.Minute
 	track.BitRate = 320
+	track.Genre = "Electronic"
 	if err := catalog.UpdateTrack(ctx, track); err != nil {
 		t.Fatal(err)
 	}
 
 	updated, err := catalog.Track(ctx, track.ID)
 	if err != nil || updated.Title != "Tagged Song" || updated.Duration != 3*time.Minute ||
-		updated.BitRate != 320 {
+		updated.BitRate != 320 || updated.Genre != "Electronic" {
 		t.Fatalf("Track() = %#v, %v", updated, err)
 	}
 	sources, err := catalog.Sources(ctx, track.ID)

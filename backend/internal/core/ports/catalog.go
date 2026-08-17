@@ -19,6 +19,7 @@ type Catalog interface {
 	Sources(ctx context.Context, trackID string) ([]domain.SourceRef, error)
 	Artist(ctx context.Context, id string) (domain.Artist, error)
 	Artists(ctx context.Context) ([]domain.Artist, error)
+	Genres(ctx context.Context) ([]domain.Genre, error)
 	Albums(ctx context.Context, query AlbumListQuery) ([]domain.Album, error)
 	AlbumsByArtist(ctx context.Context, artistID string) ([]domain.Album, error)
 	TracksByAlbum(ctx context.Context, albumID string) ([]domain.Track, error)
@@ -42,6 +43,7 @@ type AlbumListQuery struct {
 	Order    AlbumOrder
 	FromYear int
 	ToYear   int
+	Genre    string
 }
 
 type AlbumAlias struct {

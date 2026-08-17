@@ -31,6 +31,7 @@ type Metadata struct {
 	TrackNumber         int
 	DiscNumber          int
 	Year                int
+	Genre               string
 	Duration            time.Duration
 	Size                int64
 	BitRate             int
@@ -220,6 +221,7 @@ func ApplyMetadata(track *domain.Track, metadata Metadata) {
 	track.TrackNumber = metadata.TrackNumber
 	track.DiscNumber = metadata.DiscNumber
 	track.Year = metadata.Year
+	track.Genre = strings.TrimSpace(metadata.Genre)
 	track.Duration = metadata.Duration
 	track.Size = metadata.Size
 	track.BitRate = metadata.BitRate

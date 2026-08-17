@@ -90,7 +90,7 @@ func TestTagExtractorDecodesCP1251ID3v1(t *testing.T) {
 	t.Parallel()
 
 	path := filepath.Join(t.TempDir(), "track.mp3")
-	audio := append(bytes.Repeat(mp3.SilentBytes, 10), id3v1Tag(t, "Песня", "Черная Метка", "Альбом")...)
+	audio := append(bytes.Repeat(mp3.SilentBytes, 10), id3v1Tag(t, "Песня", "Черная Метка", "Альбом", 17)...)
 	if err := os.WriteFile(path, audio, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -102,7 +102,8 @@ func TestTagExtractorDecodesCP1251ID3v1(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Extract() error = %v", err)
 	}
-	if got.Title != "Песня" || got.Artist != "Черная Метка" || got.Album != "Альбом" || got.AlbumArtist != "Черная Метка" {
+	if got.Title != "Песня" || got.Artist != "Черная Метка" || got.Album != "Альбом" ||
+		got.AlbumArtist != "Черная Метка" || got.Genre != "Rock" {
 		t.Fatalf("Extract() = %#v", got)
 	}
 }
@@ -201,7 +202,7 @@ func id3v23PictureTag(picture []byte) []byte {
 	return append(header, frame...)
 }
 
-func id3v1Tag(t *testing.T, title, artist, album string) []byte {
+func id3v1Tag(t *testing.T, title, artist, album string, genre ...byte) []byte {
 	t.Helper()
 	tag := make([]byte, 128)
 	copy(tag, "TAG")
@@ -217,5 +218,8 @@ func id3v1Tag(t *testing.T, title, artist, album string) []byte {
 	copyCP1251(63, album)
 	copy(tag[93:97], "2000")
 	tag[127] = 255
+	if len(genre) > 0 {
+		tag[127] = genre[0]
+	}
 	return tag
 }

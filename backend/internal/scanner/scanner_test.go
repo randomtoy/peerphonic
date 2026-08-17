@@ -16,7 +16,7 @@ type extractorStub struct{}
 func (extractorStub) Extract(path string, info os.FileInfo) (Metadata, error) {
 	return Metadata{
 		Title: filepath.Base(path), Artist: "Track Artist", Album: "Album",
-		AlbumArtist: "Album Artist", Size: info.Size(), Suffix: "mp3", ContentType: "audio/mpeg",
+		AlbumArtist: "Album Artist", Genre: "Rock", Size: info.Size(), Suffix: "mp3", ContentType: "audio/mpeg",
 		Artwork: &Artwork{Data: []byte("image")},
 	}, nil
 }
@@ -72,7 +72,7 @@ func TestScanBuildsAndReplacesLocalCatalog(t *testing.T) {
 	if err != nil || len(tracks) != 2 {
 		t.Fatalf("TracksByAlbum() = %#v, %v", tracks, err)
 	}
-	if tracks[0].CoverArtID != "art_test" || artwork.writes != 1 {
+	if tracks[0].CoverArtID != "art_test" || tracks[0].Genre != "Rock" || artwork.writes != 1 {
 		t.Fatalf("cover art ID = %q, writes = %d", tracks[0].CoverArtID, artwork.writes)
 	}
 

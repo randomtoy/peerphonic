@@ -29,6 +29,7 @@ func (c catalogStub) Artist(context.Context, string) (domain.Artist, error) {
 	return domain.Artist{}, nil
 }
 func (c catalogStub) Artists(context.Context) ([]domain.Artist, error) { return nil, nil }
+func (c catalogStub) Genres(context.Context) ([]domain.Genre, error)   { return nil, nil }
 func (c catalogStub) Albums(context.Context, ports.AlbumListQuery) ([]domain.Album, error) {
 	return nil, nil
 }

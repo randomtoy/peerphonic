@@ -53,7 +53,7 @@ func newTestHandler(t *testing.T, scans ...scanController) (http.Handler, domain
 	track := domain.Track{
 		ID: "track_test", Title: "Song", Artist: "Artist", ArtistID: "artist_test",
 		Album: "Album", AlbumID: "album_test", AlbumArtist: "Artist",
-		TrackNumber: 1, Year: 2026, Size: 10, Suffix: "mp3", ContentType: "audio/mpeg", CoverArtID: coverArtID,
+		TrackNumber: 1, Year: 2026, Genre: "Rock", Size: 10, Suffix: "mp3", ContentType: "audio/mpeg", CoverArtID: coverArtID,
 	}
 	source := domain.TrackSource{
 		Track: track, Ref: domain.SourceRef{Provider: local.Name, Key: "Artist/Album/song.mp3"},
@@ -223,7 +223,9 @@ func TestID3BrowsingEndpointsUsedByAmperfy(t *testing.T) {
 		path     string
 		contains []string
 	}{
-		{path: "/rest/getGenres.view" + auth, contains: []string{"<genres></genres>"}},
+		{path: "/rest/getGenres.view" + auth, contains: []string{
+			`<genre songCount="1" albumCount="1">Rock</genre>`,
+		}},
 		{path: "/rest/getArtists.view" + auth, contains: []string{
 			"<artists", `id="artist_test"`, `albumCount="1"`,
 		}},
@@ -284,6 +286,7 @@ func TestAlbumList2ValidatesAndSupportsListTypes(t *testing.T) {
 		{name: "unknown type", parameters: "&type=unknown", status: http.StatusBadRequest, contains: "unsupported album list type"},
 		{name: "missing year range", parameters: "&type=byYear", status: http.StatusBadRequest, contains: "fromYear"},
 		{name: "missing genre", parameters: "&type=byGenre", status: http.StatusBadRequest, contains: "genre"},
+		{name: "genre", parameters: "&type=byGenre&genre=rock", status: http.StatusOK, contains: `"album_test"`},
 		{name: "activity list without history", parameters: "&type=recent", status: http.StatusOK, contains: `"album":[]`},
 		{name: "year range", parameters: "&type=byYear&fromYear=2026&toYear=2020", status: http.StatusOK, contains: `"album_test"`},
 		{name: "alphabetical artist", parameters: "&type=alphabeticalByArtist", status: http.StatusOK, contains: `"album_test"`},

@@ -13,6 +13,7 @@ changing the client-facing streaming flow.
 - XML and JSON OpenSubsonic responses;
 - password, hex-encoded password, and token/salt authentication;
 - artist/album/track browsing and HTTP range streaming;
+- genre browsing and album filtering from embedded tags;
 - paged album lists ordered by name, artist, import time, year, or randomly;
 - embedded and folder cover artwork stored through the blob storage boundary;
 - cached OpenSubsonic artwork resizing for mobile clients;
