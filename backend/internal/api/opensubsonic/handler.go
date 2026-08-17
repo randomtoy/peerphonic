@@ -93,6 +93,8 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.getAlbum(writer, request)
 	case "getSongsByGenre":
 		h.getSongsByGenre(writer, request)
+	case "getRandomSongs":
+		h.getRandomSongs(writer, request)
 	case "getSong":
 		h.getSong(writer, request)
 	case "getCoverArt":
@@ -399,7 +401,7 @@ func (h *Handler) getSongsByGenre(writer http.ResponseWriter, request *http.Requ
 		h.writeError(writer, request, http.StatusBadRequest, 10, err.Error())
 		return
 	}
-	payload := &songsByGenre{Songs: []child{}}
+	payload := &songs{Songs: []child{}}
 	if request.Form.Has("musicFolderId") && request.Form.Get("musicFolderId") != musicFolderID {
 		h.write(writer, request, http.StatusOK, response{SongsByGenre: payload})
 		return
@@ -414,6 +416,29 @@ func (h *Handler) getSongsByGenre(writer http.ResponseWriter, request *http.Requ
 		payload.Songs = append(payload.Songs, trackChild(track))
 	}
 	h.write(writer, request, http.StatusOK, response{SongsByGenre: payload})
+}
+
+func (h *Handler) getRandomSongs(writer http.ResponseWriter, request *http.Request) {
+	query, err := randomTracksQuery(request)
+	if err != nil {
+		h.writeError(writer, request, http.StatusBadRequest, 10, err.Error())
+		return
+	}
+	payload := &songs{Songs: []child{}}
+	if request.Form.Has("musicFolderId") && request.Form.Get("musicFolderId") != musicFolderID {
+		h.write(writer, request, http.StatusOK, response{RandomSongs: payload})
+		return
+	}
+	tracks, err := h.catalog.RandomTracks(request.Context(), query)
+	if err != nil {
+		h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to read the music catalog")
+		return
+	}
+	payload.Songs = make([]child, 0, len(tracks))
+	for _, track := range tracks {
+		payload.Songs = append(payload.Songs, trackChild(track))
+	}
+	h.write(writer, request, http.StatusOK, response{RandomSongs: payload})
 }
 
 func (h *Handler) getSong(writer http.ResponseWriter, request *http.Request) {
@@ -715,4 +740,37 @@ func songListPageParameters(request *http.Request) (offset, count int, err error
 		}
 	}
 	return offset, count, nil
+}
+
+func randomTracksQuery(request *http.Request) (ports.RandomTracksQuery, error) {
+	query := ports.RandomTracksQuery{Limit: 10, Genre: strings.TrimSpace(request.Form.Get("genre"))}
+	if value := request.Form.Get("size"); value != "" {
+		limit, err := strconv.Atoi(value)
+		if err != nil || limit < 0 {
+			return ports.RandomTracksQuery{}, errors.New("parameter size must be a non-negative integer")
+		}
+		query.Limit = min(limit, 500)
+	}
+	var err error
+	query.FromYear, err = optionalYear(request, "fromYear")
+	if err != nil {
+		return ports.RandomTracksQuery{}, err
+	}
+	query.ToYear, err = optionalYear(request, "toYear")
+	if err != nil {
+		return ports.RandomTracksQuery{}, err
+	}
+	return query, nil
+}
+
+func optionalYear(request *http.Request, name string) (int, error) {
+	value := request.Form.Get(name)
+	if value == "" {
+		return 0, nil
+	}
+	year, err := strconv.Atoi(value)
+	if err != nil || year < 0 {
+		return 0, fmt.Errorf("parameter %s must be a non-negative integer", name)
+	}
+	return year, nil
 }

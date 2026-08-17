@@ -245,6 +245,9 @@ func TestID3BrowsingEndpointsUsedByAmperfy(t *testing.T) {
 		{path: "/rest/getSongsByGenre.view" + auth + "&genre=Rock&count=1&offset=0", contains: []string{
 			"<songsByGenre>", `<song id="` + track.ID + `"`, `genre="Rock"`,
 		}},
+		{path: "/rest/getRandomSongs.view" + auth + "&size=1&genre=Rock&fromYear=2020&toYear=2030", contains: []string{
+			"<randomSongs>", `<song id="` + track.ID + `"`, `genre="Rock"`,
+		}},
 		{path: "/rest/getSong.view" + auth + "&id=" + track.ID, contains: []string{
 			`<song id="` + track.ID + `"`,
 		}},
@@ -298,6 +301,41 @@ func TestSongsByGenreValidatesAndPages(t *testing.T) {
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
 				"/rest/getSongsByGenre"+auth+test.parameters, nil))
+			if response.Code != test.status || !strings.Contains(response.Body.String(), test.contains) {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
+func TestRandomSongsValidatesAndFilters(t *testing.T) {
+	t.Parallel()
+
+	handler, track := newTestHandler(t)
+	auth := "?u=alice&p=secret&f=json"
+	tests := []struct {
+		name       string
+		parameters string
+		status     int
+		contains   string
+	}{
+		{name: "default", status: http.StatusOK, contains: `"id":"` + track.ID + `"`},
+		{name: "invalid size", parameters: "&size=-1", status: http.StatusBadRequest, contains: "size"},
+		{name: "invalid from year", parameters: "&fromYear=no", status: http.StatusBadRequest, contains: "fromYear"},
+		{name: "invalid to year", parameters: "&toYear=-1", status: http.StatusBadRequest, contains: "toYear"},
+		{name: "genre", parameters: "&genre=rock", status: http.StatusOK, contains: `"id":"` + track.ID + `"`},
+		{name: "different genre", parameters: "&genre=Pop", status: http.StatusOK, contains: `"song":[]`},
+		{name: "year range", parameters: "&fromYear=2020&toYear=2030", status: http.StatusOK, contains: `"id":"` + track.ID + `"`},
+		{name: "outside year", parameters: "&toYear=2020", status: http.StatusOK, contains: `"song":[]`},
+		{name: "zero size", parameters: "&size=0", status: http.StatusOK, contains: `"song":[]`},
+		{name: "unknown folder", parameters: "&musicFolderId=other", status: http.StatusOK, contains: `"song":[]`},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+				"/rest/getRandomSongs"+auth+test.parameters, nil))
 			if response.Code != test.status || !strings.Contains(response.Body.String(), test.contains) {
 				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 			}

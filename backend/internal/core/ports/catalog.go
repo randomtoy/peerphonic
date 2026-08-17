@@ -24,6 +24,7 @@ type Catalog interface {
 	AlbumsByArtist(ctx context.Context, artistID string) ([]domain.Album, error)
 	TracksByAlbum(ctx context.Context, albumID string) ([]domain.Track, error)
 	TracksByGenre(ctx context.Context, genre string, offset, limit int) ([]domain.Track, error)
+	RandomTracks(ctx context.Context, query RandomTracksQuery) ([]domain.Track, error)
 	Search(ctx context.Context, query CatalogSearch) (CatalogSearchResult, error)
 }
 
@@ -50,6 +51,13 @@ type AlbumListQuery struct {
 type AlbumAlias struct {
 	AliasID string
 	TrackID string
+}
+
+type RandomTracksQuery struct {
+	Limit    int
+	Genre    string
+	FromYear int
+	ToYear   int
 }
 
 type CatalogSearch struct {

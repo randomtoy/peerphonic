@@ -38,6 +38,9 @@ func (c catalogStub) TracksByAlbum(context.Context, string) ([]domain.Track, err
 func (c catalogStub) TracksByGenre(context.Context, string, int, int) ([]domain.Track, error) {
 	return nil, nil
 }
+func (c catalogStub) RandomTracks(context.Context, ports.RandomTracksQuery) ([]domain.Track, error) {
+	return nil, nil
+}
 func (c catalogStub) Search(context.Context, ports.CatalogSearch) (ports.CatalogSearchResult, error) {
 	return ports.CatalogSearchResult{}, nil
 }

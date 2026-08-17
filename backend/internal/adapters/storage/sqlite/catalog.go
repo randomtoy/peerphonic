@@ -557,6 +557,35 @@ func (c *Catalog) TracksByGenre(
 	return scanTracks(rows, "genre")
 }
 
+func (c *Catalog) RandomTracks(ctx context.Context, query ports.RandomTracksQuery) ([]domain.Track, error) {
+	conditions := []string{}
+	arguments := []any{}
+	if query.Genre != "" {
+		conditions = append(conditions, "genre = ? COLLATE NOCASE")
+		arguments = append(arguments, query.Genre)
+	}
+	if query.FromYear != 0 {
+		conditions = append(conditions, "year >= ?")
+		arguments = append(arguments, query.FromYear)
+	}
+	if query.ToYear != 0 {
+		conditions = append(conditions, "year <= ?")
+		arguments = append(arguments, query.ToYear)
+	}
+	where := ""
+	if len(conditions) > 0 {
+		where = " WHERE " + strings.Join(conditions, " AND ")
+	}
+	arguments = append(arguments, query.Limit)
+	rows, err := c.db.QueryContext(ctx, "SELECT "+trackColumns+" FROM tracks"+where+
+		" ORDER BY RANDOM() LIMIT ?", arguments...)
+	if err != nil {
+		return nil, fmt.Errorf("query random tracks: %w", err)
+	}
+	defer rows.Close()
+	return scanTracks(rows, "random")
+}
+
 func scanTracks(rows *sql.Rows, kind string) ([]domain.Track, error) {
 	var tracks []domain.Track
 	for rows.Next() {
