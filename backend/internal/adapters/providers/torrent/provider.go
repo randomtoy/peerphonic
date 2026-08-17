@@ -144,6 +144,46 @@ func (p *Provider) CachedPath(ref domain.SourceRef, expectedSize int64) (string,
 	return mediaPath, true
 }
 
+// CacheUsage reports physical disk allocation rather than logical file sizes,
+// because incomplete torrent files can be sparse.
+func (p *Provider) CacheUsage(ctx context.Context) (domain.CacheUsage, error) {
+	usage := domain.CacheUsage{Name: Name}
+	err := filepath.WalkDir(p.dataRoot, func(filePath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if os.IsNotExist(walkErr) && filePath == p.dataRoot {
+				return filepath.SkipDir
+			}
+			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		usage.Size += allocatedFileSize(info)
+		if strings.HasPrefix(entry.Name(), ".torrent.db") {
+			return nil
+		}
+		usage.Entries++
+		if strings.HasSuffix(entry.Name(), ".part") {
+			usage.PartialEntries++
+		}
+		return nil
+	})
+	if err != nil {
+		return domain.CacheUsage{}, fmt.Errorf("inspect torrent cache: %w", err)
+	}
+	return usage, nil
+}
+
 func (p *Provider) Close() error {
 	p.completionMu.Lock()
 	p.closing = true

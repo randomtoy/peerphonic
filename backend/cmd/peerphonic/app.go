@@ -71,6 +71,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	if err := mediaCache.Prune(ctx); err != nil {
 		return fail(fmt.Errorf("prune media cache: %w", err))
 	}
+	cacheStatus := services.NewCacheStatus(mediaCache, torrentProvider)
 	localScanner := scanner.New(cfg.MusicDir, catalog, metadata.TagExtractor{}, artwork)
 	torrentScanner := torrentscanner.NewWithEnrichment(
 		cfg.TorrentDir, catalog, torrentProvider, metadata.TagExtractor{}, artwork,
@@ -91,7 +92,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	streaming := services.NewStreamingService(catalog, provider, torrentProvider)
 	mux := http.NewServeMux()
 	mux.Handle("/rest/", opensubsonic.NewHandler(catalog, streaming, artwork, cfg.Username, cfg.Password, scanManager))
-	mux.Handle("/", peerphonic.NewHandler(mediaCache, torrentImporter, cfg.Username, cfg.Password))
+	mux.Handle("/", peerphonic.NewHandler(cacheStatus, torrentImporter, cfg.Username, cfg.Password))
 	return &application{handler: mux, catalog: catalog, torrentProvider: torrentProvider}, nil
 }
 

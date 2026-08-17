@@ -136,6 +136,9 @@ func (c *MediaCache) Stats(ctx context.Context) (domain.CacheStats, error) {
 			stats.PinnedSize += entry.Size
 		}
 	}
+	stats.Components = append(stats.Components, domain.CacheUsage{
+		Name: "media", Entries: stats.Entries, Size: stats.Size,
+	})
 	return stats, nil
 }
 

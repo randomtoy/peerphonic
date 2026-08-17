@@ -16,4 +16,14 @@ type CacheStats struct {
 	Size          int64
 	PinnedEntries int
 	PinnedSize    int64
+	Components    []CacheUsage
+}
+
+// CacheUsage describes the storage occupied by one cache implementation.
+// PartialEntries are entries whose bytes are not yet fully available.
+type CacheUsage struct {
+	Name           string
+	Entries        int
+	PartialEntries int
+	Size           int64
 }

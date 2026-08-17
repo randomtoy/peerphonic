@@ -16,6 +16,22 @@ type cacheStatus interface {
 	Stats(ctx context.Context) (domain.CacheStats, error)
 }
 
+type cacheComponentResponse struct {
+	Name           string `json:"name"`
+	SizeBytes      int64  `json:"sizeBytes"`
+	Entries        int    `json:"entries"`
+	PartialEntries int    `json:"partialEntries"`
+}
+
+type cacheStatusResponse struct {
+	CapacityBytes   int64                    `json:"capacityBytes"`
+	SizeBytes       int64                    `json:"sizeBytes"`
+	Entries         int                      `json:"entries"`
+	PinnedSizeBytes int64                    `json:"pinnedSizeBytes"`
+	PinnedEntries   int                      `json:"pinnedEntries"`
+	Components      []cacheComponentResponse `json:"components"`
+}
+
 func NewHandler(cache cacheStatus, torrentImporter ports.SourceImporter, username, password string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(writer http.ResponseWriter, _ *http.Request) {
@@ -40,16 +56,18 @@ func NewHandler(cache cacheStatus, torrentImporter ports.SourceImporter, usernam
 				return
 			}
 			writer.Header().Set("Content-Type", "application/json; charset=utf-8")
-			_ = json.NewEncoder(writer).Encode(struct {
-				CapacityBytes   int64 `json:"capacityBytes"`
-				SizeBytes       int64 `json:"sizeBytes"`
-				Entries         int   `json:"entries"`
-				PinnedSizeBytes int64 `json:"pinnedSizeBytes"`
-				PinnedEntries   int   `json:"pinnedEntries"`
-			}{
+			response := cacheStatusResponse{
 				CapacityBytes: stats.Capacity, SizeBytes: stats.Size, Entries: stats.Entries,
 				PinnedSizeBytes: stats.PinnedSize, PinnedEntries: stats.PinnedEntries,
-			})
+				Components: make([]cacheComponentResponse, 0, len(stats.Components)),
+			}
+			for _, component := range stats.Components {
+				response.Components = append(response.Components, cacheComponentResponse{
+					Name: component.Name, SizeBytes: component.Size, Entries: component.Entries,
+					PartialEntries: component.PartialEntries,
+				})
+			}
+			_ = json.NewEncoder(writer).Encode(response)
 		})
 	}
 	if torrentImporter != nil {

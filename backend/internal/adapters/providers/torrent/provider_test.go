@@ -87,6 +87,53 @@ func TestResolveReportsMetadataOnlySourceAsUnavailable(t *testing.T) {
 	}
 }
 
+func TestCacheUsageIncludesCompletePartialAndStateFiles(t *testing.T) {
+	t.Parallel()
+
+	dataRoot := t.TempDir()
+	provider, err := NewStreaming(t.TempDir(), dataRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := map[string][]byte{
+		"Album/track.mp3":     bytes.Repeat([]byte("a"), 4096),
+		"Album/next.mp3.part": bytes.Repeat([]byte("b"), 8192),
+		".torrent.db":         bytes.Repeat([]byte("d"), 4096),
+	}
+	for name, contents := range files {
+		filePath := filepath.Join(dataRoot, name)
+		if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filePath, contents, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	usage, err := provider.CacheUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Name != Name || usage.Entries != 2 || usage.PartialEntries != 1 || usage.Size < 12*1024 {
+		t.Fatalf("CacheUsage() = %#v", usage)
+	}
+}
+
+func TestCacheUsageAllowsMissingDataDirectory(t *testing.T) {
+	t.Parallel()
+
+	provider, err := NewStreaming(t.TempDir(), filepath.Join(t.TempDir(), "missing"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage, err := provider.CacheUsage(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Name != Name || usage.Size != 0 || usage.Entries != 0 {
+		t.Fatalf("CacheUsage() = %#v", usage)
+	}
+}
+
 func TestStreamingProviderReadsPersistedTorrentFileAndArtwork(t *testing.T) {
 	t.Parallel()
 

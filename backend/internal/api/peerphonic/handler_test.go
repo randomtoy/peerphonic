@@ -30,6 +30,7 @@ func (s *sourceImporterStub) Import(_ context.Context, source io.Reader) (ports.
 func (cacheStatusStub) Stats(context.Context) (domain.CacheStats, error) {
 	return domain.CacheStats{
 		Capacity: 100, Entries: 2, Size: 75, PinnedEntries: 1, PinnedSize: 50,
+		Components: []domain.CacheUsage{{Name: "torrent", Entries: 2, PartialEntries: 1, Size: 75}},
 	}, nil
 }
 
@@ -71,7 +72,8 @@ func TestCacheStatus(t *testing.T) {
 		httptest.NewRequest(http.MethodGet, "/api/v1/cache/status", nil))
 	if response.Code != http.StatusOK ||
 		!strings.Contains(response.Body.String(), `"capacityBytes":100`) ||
-		!strings.Contains(response.Body.String(), `"pinnedEntries":1`) {
+		!strings.Contains(response.Body.String(), `"pinnedEntries":1`) ||
+		!strings.Contains(response.Body.String(), `"partialEntries":1`) {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
