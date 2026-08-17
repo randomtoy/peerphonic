@@ -62,6 +62,43 @@ func TestArtworkServiceRejectsNonImagesAndInvalidIDs(t *testing.T) {
 	}
 }
 
+func TestArtworkServiceFallsBackToProviderArtwork(t *testing.T) {
+	t.Parallel()
+
+	store, err := filesystem.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	external := testPNG(t)
+	service := NewArtworkService(store, artworkSourceStub{data: external})
+	resolved, err := service.Open(context.Background(), "torrentart_example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resolved.Content.Close()
+	contents, err := io.ReadAll(resolved.Content)
+	if err != nil || !bytes.Equal(contents, external) {
+		t.Fatalf("fallback artwork bytes = %d, err = %v", len(contents), err)
+	}
+}
+
+type artworkSourceStub struct {
+	data []byte
+}
+
+func (s artworkSourceStub) OpenArtwork(_ context.Context, _ string) (ports.ResolvedSource, error) {
+	return ports.ResolvedSource{
+		Content: &readSeekCloser{Reader: bytes.NewReader(s.data)}, ContentType: "image/png",
+		Size: int64(len(s.data)),
+	}, nil
+}
+
+type readSeekCloser struct {
+	*bytes.Reader
+}
+
+func (*readSeekCloser) Close() error { return nil }
+
 func testPNG(t *testing.T) []byte {
 	t.Helper()
 	var data bytes.Buffer

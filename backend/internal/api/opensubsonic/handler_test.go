@@ -136,7 +136,9 @@ func TestMetadataOnlyTorrentTrackIsTemporarilyUnavailable(t *testing.T) {
 		Album: "Album", AlbumID: "album", AlbumArtist: "Artist",
 	}
 	source := domain.TrackSource{
-		Track: track, Ref: domain.SourceRef{Provider: torrentprovider.Name, Key: "hash/Remote.mp3"},
+		Track: track, Ref: domain.SourceRef{
+			Provider: torrentprovider.Name, Key: strings.Repeat("0", 40) + "/Remote.mp3",
+		},
 	}
 	if err := catalog.ReplaceProviderTracks(ctx, torrentprovider.Name, []domain.TrackSource{source}, nil); err != nil {
 		t.Fatal(err)

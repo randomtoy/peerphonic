@@ -15,7 +15,8 @@ changing the client-facing streaming flow.
 - artist/album/track browsing and HTTP range streaming;
 - embedded and folder cover artwork stored through the blob storage boundary;
 - shared media cache with a size limit, LRU eviction, and pinned entries;
-- metadata-only catalog import from `.torrent` files without downloading media;
+- `.torrent` catalog import with on-demand, seekable track streaming;
+- on-demand album artwork from image files included in torrents;
 - a small Peerphonic health endpoint at `/api/v1/health`.
 
 The implemented OpenSubsonic endpoints are:
@@ -115,8 +116,12 @@ separate from artwork, and unpinned entries are evicted by least recent access
 when the configured size limit is exceeded.
 
 Place `.torrent` files in the configured torrent directory and start a library
-scan. Audio entries appear in the same catalog without downloading their media.
-Playback remains unavailable until torrent transport is added in a later milestone.
+scan. Audio entries and references to included cover images appear in the catalog
+without joining the swarm. Peerphonic starts its BitTorrent client on the first
+track or cover request. The reader prioritizes only the requested byte range and
+a small readahead window, so OpenSubsonic clients can begin playback while the
+selected track is downloading. Downloaded pieces are reused from
+`cache_dir/torrents` on later requests.
 
 Torrent metadata can also be uploaded with the Peerphonic API using the same
 credentials as OpenSubsonic:

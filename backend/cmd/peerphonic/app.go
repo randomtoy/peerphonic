@@ -2,9 +2,11 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"path/filepath"
 
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/blob/filesystem"
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/metadata"
@@ -20,8 +22,9 @@ import (
 )
 
 type application struct {
-	handler http.Handler
-	catalog *sqlite.Catalog
+	handler         http.Handler
+	catalog         *sqlite.Catalog
+	torrentProvider *torrentprovider.Provider
 }
 
 func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logger) (*application, error) {
@@ -29,7 +32,11 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	if err != nil {
 		return nil, err
 	}
+	var torrentProvider *torrentprovider.Provider
 	fail := func(err error) (*application, error) {
+		if torrentProvider != nil {
+			_ = torrentProvider.Close()
+		}
 		catalog.Close()
 		return nil, err
 	}
@@ -38,12 +45,17 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	if err != nil {
 		return fail(err)
 	}
-	torrentProvider := torrentprovider.New()
+	torrentProvider, err = torrentprovider.NewStreaming(
+		cfg.TorrentDir, filepath.Join(cfg.CacheDir, "torrents"), logger,
+	)
+	if err != nil {
+		return fail(err)
+	}
 	blobs, err := filesystem.New(cfg.CacheDir)
 	if err != nil {
 		return fail(err)
 	}
-	artwork := services.NewArtworkService(blobs)
+	artwork := services.NewArtworkService(blobs, torrentProvider)
 	mediaCache, err := services.NewMediaCache(blobs, catalog, cfg.CacheSizeBytes)
 	if err != nil {
 		return fail(err)
@@ -70,12 +82,18 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	mux := http.NewServeMux()
 	mux.Handle("/rest/", opensubsonic.NewHandler(catalog, streaming, artwork, cfg.Username, cfg.Password, scanManager))
 	mux.Handle("/", peerphonic.NewHandler(mediaCache, torrentImporter, cfg.Username, cfg.Password))
-	return &application{handler: mux, catalog: catalog}, nil
+	return &application{handler: mux, catalog: catalog, torrentProvider: torrentProvider}, nil
 }
 
 func (a *application) Close() error {
-	if err := a.catalog.Close(); err != nil {
-		return fmt.Errorf("close catalog: %w", err)
+	var closeErrors []error
+	if a.torrentProvider != nil {
+		if err := a.torrentProvider.Close(); err != nil {
+			closeErrors = append(closeErrors, fmt.Errorf("close torrent provider: %w", err))
+		}
 	}
-	return nil
+	if err := a.catalog.Close(); err != nil {
+		closeErrors = append(closeErrors, fmt.Errorf("close catalog: %w", err))
+	}
+	return errors.Join(closeErrors...)
 }

@@ -14,11 +14,16 @@ import (
 )
 
 type ArtworkService struct {
-	blobs ports.BlobStore
+	blobs     ports.BlobStore
+	fallbacks []ArtworkSource
 }
 
-func NewArtworkService(blobs ports.BlobStore) *ArtworkService {
-	return &ArtworkService{blobs: blobs}
+type ArtworkSource interface {
+	OpenArtwork(ctx context.Context, id string) (ports.ResolvedSource, error)
+}
+
+func NewArtworkService(blobs ports.BlobStore, fallbacks ...ArtworkSource) *ArtworkService {
+	return &ArtworkService{blobs: blobs, fallbacks: fallbacks}
 }
 
 func (s *ArtworkService) Put(ctx context.Context, data []byte) (string, error) {
@@ -37,9 +42,22 @@ func (s *ArtworkService) Put(ctx context.Context, data []byte) (string, error) {
 }
 
 func (s *ArtworkService) Open(ctx context.Context, id string) (ports.ResolvedSource, error) {
-	if !validArtworkID(id) {
-		return ports.ResolvedSource{}, ports.ErrNotFound
+	if validArtworkID(id) {
+		resolved, err := s.openStored(ctx, id)
+		if err == nil || !errors.Is(err, ports.ErrNotFound) {
+			return resolved, err
+		}
 	}
+	for _, fallback := range s.fallbacks {
+		resolved, err := fallback.OpenArtwork(ctx, id)
+		if err == nil || !errors.Is(err, ports.ErrNotFound) {
+			return resolved, err
+		}
+	}
+	return ports.ResolvedSource{}, ports.ErrNotFound
+}
+
+func (s *ArtworkService) openStored(ctx context.Context, id string) (ports.ResolvedSource, error) {
 	content, err := s.blobs.Open(ctx, artworkKey(id))
 	if err != nil {
 		if errors.Is(err, ports.ErrNotFound) {

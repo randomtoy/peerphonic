@@ -26,6 +26,7 @@ func TestScanImportsTorrentAudioMetadataAndReplacesRemovedFiles(t *testing.T) {
 		Files: []metainfo.FileInfo{
 			{Length: 100, Path: []string{"01 First.flac"}},
 			{Length: 200, Path: []string{"02 Second.mp3"}},
+			{Length: 50, Path: []string{"front.jpg"}},
 		},
 	})
 	if err := os.WriteFile(filepath.Join(root, "broken.torrent"), []byte("invalid"), 0o600); err != nil {
@@ -46,7 +47,8 @@ func TestScanImportsTorrentAudioMetadataAndReplacesRemovedFiles(t *testing.T) {
 		t.Fatalf("report = %#v", report)
 	}
 	albums, err := catalog.Albums(ctx, 0, 10)
-	if err != nil || len(albums) != 1 || albums[0].Name != "Remote Album" || albums[0].SongCount != 2 {
+	if err != nil || len(albums) != 1 || albums[0].Name != "Remote Album" ||
+		albums[0].SongCount != 2 || albums[0].CoverArtID == "" {
 		t.Fatalf("Albums() = %#v, %v", albums, err)
 	}
 	tracks, err := catalog.TracksByAlbum(ctx, albums[0].ID)
