@@ -36,7 +36,8 @@ func TestLocalFileToOpenSubsonicStream(t *testing.T) {
 	}
 	cfg := config.Config{
 		MusicDir: root, Database: filepath.Join(t.TempDir(), "peerphonic.db"),
-		CacheDir: t.TempDir(), Username: "admin", Password: "secret", Scan: true,
+		CacheDir: t.TempDir(), CacheSizeBytes: 1024,
+		Username: "admin", Password: "secret", Scan: true,
 	}
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	app, err := buildApplication(context.Background(), cfg, logger)
@@ -48,6 +49,11 @@ func TestLocalFileToOpenSubsonicStream(t *testing.T) {
 	app.handler.ServeHTTP(rootResponse, httptest.NewRequest(http.MethodGet, "/", nil))
 	if rootResponse.Code != http.StatusOK {
 		t.Fatalf("root status = %d, body = %s", rootResponse.Code, rootResponse.Body.String())
+	}
+	cacheResponse := httptest.NewRecorder()
+	app.handler.ServeHTTP(cacheResponse, httptest.NewRequest(http.MethodGet, "/api/v1/cache/status", nil))
+	if cacheResponse.Code != http.StatusOK || !strings.Contains(cacheResponse.Body.String(), `"capacityBytes":1024`) {
+		t.Fatalf("cache status = %d, body = %s", cacheResponse.Code, cacheResponse.Body.String())
 	}
 
 	indexes := httptest.NewRecorder()

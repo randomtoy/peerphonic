@@ -120,11 +120,14 @@ func (c *MediaCache) Prune(ctx context.Context) error {
 }
 
 func (c *MediaCache) Stats(ctx context.Context) (domain.CacheStats, error) {
+	c.operation.Lock()
+	defer c.operation.Unlock()
+
 	entries, err := c.metadata.CacheEntries(ctx)
 	if err != nil {
 		return domain.CacheStats{}, err
 	}
-	var stats domain.CacheStats
+	stats := domain.CacheStats{Capacity: c.maxBytes}
 	stats.Entries = len(entries)
 	for _, entry := range entries {
 		stats.Size += entry.Size

@@ -15,12 +15,13 @@ func TestLoadPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := map[string]string{
-		"PEERPHONIC_ADDRESS":  ":2000",
-		"PEERPHONIC_USERNAME": "env",
+		"PEERPHONIC_ADDRESS":          ":2000",
+		"PEERPHONIC_USERNAME":         "env",
+		"PEERPHONIC_CACHE_SIZE_BYTES": "2048",
 	}
 	lookup := func(key string) (string, bool) { value, ok := env[key]; return value, ok }
 
-	cfg, err := Load([]string{"--config", configPath, "--address", ":3000"}, lookup)
+	cfg, err := Load([]string{"--config", configPath, "--address", ":3000", "--cache-size", "4096"}, lookup)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
@@ -32,6 +33,23 @@ func TestLoadPrecedence(t *testing.T) {
 	}
 	if filepath.Base(cfg.MusicDir) != "from-file" {
 		t.Errorf("MusicDir = %q, want path ending in from-file", cfg.MusicDir)
+	}
+	if cfg.CacheSizeBytes != 4096 {
+		t.Errorf("CacheSizeBytes = %d, want 4096", cfg.CacheSizeBytes)
+	}
+}
+
+func TestLoadRejectsInvalidCacheSize(t *testing.T) {
+	t.Parallel()
+
+	_, err := Load([]string{"--music", t.TempDir()}, func(key string) (string, bool) {
+		if key == "PEERPHONIC_CACHE_SIZE_BYTES" {
+			return "many", true
+		}
+		return "", false
+	})
+	if err == nil {
+		t.Fatal("Load() error = nil, want invalid cache size error")
 	}
 }
 

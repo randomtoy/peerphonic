@@ -11,6 +11,7 @@ type CacheEntry struct {
 }
 
 type CacheStats struct {
+	Capacity      int64
 	Entries       int
 	Size          int64
 	PinnedEntries int

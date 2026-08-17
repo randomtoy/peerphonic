@@ -14,6 +14,7 @@ changing the client-facing streaming flow.
 - password, hex-encoded password, and token/salt authentication;
 - artist/album/track browsing and HTTP range streaming;
 - embedded and folder cover artwork stored through the blob storage boundary;
+- shared media cache with a size limit, LRU eviction, and pinned entries;
 - a small Peerphonic health endpoint at `/api/v1/health`.
 
 The implemented OpenSubsonic endpoints are:
@@ -78,6 +79,7 @@ then CLI flags.
 | `music_dir` | `PEERPHONIC_MUSIC_DIR` | `--music` | required |
 | `database` | `PEERPHONIC_DATABASE` | `--database` | `peerphonic.db` |
 | `cache_dir` | `PEERPHONIC_CACHE_DIR` | `--cache` | `cache` |
+| `cache_size_bytes` | `PEERPHONIC_CACHE_SIZE_BYTES` | `--cache-size` | `10737418240` (10 GiB) |
 | `username` | `PEERPHONIC_USERNAME` | `--username` | `admin` |
 | `password` | `PEERPHONIC_PASSWORD` | `--password` | `admin` |
 | `scan_on_start` | `PEERPHONIC_SCAN_ON_START` | `--scan` | `true` |
@@ -105,6 +107,10 @@ SQLite catalog    source providers
 Metadata and media/blob storage are separate boundaries. The OpenSubsonic stream
 handler resolves a domain source through `StreamingService`; it does not know
 whether bytes are local, cached, or remote.
+
+Cache usage is available from `GET /api/v1/cache/status`. Cached audio is kept
+separate from artwork, and unpinned entries are evicted by least recent access
+when the configured size limit is exceeded.
 
 ## Development
 

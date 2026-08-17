@@ -3,6 +3,7 @@
   "music_dir": "/srv/music",
   "database": "/srv/peerphonic/peerphonic.db",
   "cache_dir": "/srv/peerphonic/cache",
+  "cache_size_bytes": 10737418240,
   "username": "music",
   "password": "change-me",
   "scan_on_start": true

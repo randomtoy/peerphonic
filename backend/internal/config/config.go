@@ -13,23 +13,25 @@ import (
 )
 
 type Config struct {
-	Address  string `json:"address"`
-	MusicDir string `json:"music_dir"`
-	Database string `json:"database"`
-	CacheDir string `json:"cache_dir"`
-	Username string `json:"username"`
-	Password string `json:"password"`
-	Scan     bool   `json:"scan_on_start"`
+	Address        string `json:"address"`
+	MusicDir       string `json:"music_dir"`
+	Database       string `json:"database"`
+	CacheDir       string `json:"cache_dir"`
+	CacheSizeBytes int64  `json:"cache_size_bytes"`
+	Username       string `json:"username"`
+	Password       string `json:"password"`
+	Scan           bool   `json:"scan_on_start"`
 }
 
 func Defaults() Config {
 	return Config{
-		Address:  ":8080",
-		Database: "peerphonic.db",
-		CacheDir: "cache",
-		Username: "admin",
-		Password: "admin",
-		Scan:     true,
+		Address:        ":8080",
+		Database:       "peerphonic.db",
+		CacheDir:       "cache",
+		CacheSizeBytes: 10 << 30,
+		Username:       "admin",
+		Password:       "admin",
+		Scan:           true,
 	}
 }
 
@@ -59,6 +61,7 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	flags.StringVar(&cfg.MusicDir, "music", cfg.MusicDir, "music library directory")
 	flags.StringVar(&cfg.Database, "database", cfg.Database, "SQLite database path")
 	flags.StringVar(&cfg.CacheDir, "cache", cfg.CacheDir, "media cache directory")
+	flags.Int64Var(&cfg.CacheSizeBytes, "cache-size", cfg.CacheSizeBytes, "maximum media cache size in bytes")
 	flags.StringVar(&cfg.Username, "username", cfg.Username, "OpenSubsonic username")
 	flags.StringVar(&cfg.Password, "password", cfg.Password, "OpenSubsonic password")
 	flags.BoolVar(&cfg.Scan, "scan", cfg.Scan, "scan music directory on startup")
@@ -70,6 +73,9 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	}
 	if cfg.MusicDir == "" {
 		return Config{}, errors.New("music directory is required (use --music or PEERPHONIC_MUSIC_DIR)")
+	}
+	if cfg.CacheSizeBytes <= 0 {
+		return Config{}, errors.New("media cache size must be positive")
 	}
 
 	var err error
@@ -133,6 +139,13 @@ func applyEnv(cfg *Config, lookup func(string) (string, bool)) error {
 			return fmt.Errorf("parse PEERPHONIC_SCAN_ON_START: %w", err)
 		}
 		cfg.Scan = parsed
+	}
+	if value, ok := lookup("PEERPHONIC_CACHE_SIZE_BYTES"); ok {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return fmt.Errorf("parse PEERPHONIC_CACHE_SIZE_BYTES: %w", err)
+		}
+		cfg.CacheSizeBytes = parsed
 	}
 	return nil
 }
