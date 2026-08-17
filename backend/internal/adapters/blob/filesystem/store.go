@@ -77,6 +77,9 @@ func (s *Store) Delete(_ context.Context, key string) error {
 		return err
 	}
 	if err := os.Remove(path); err != nil {
+		if os.IsNotExist(err) {
+			return ports.ErrNotFound
+		}
 		return fmt.Errorf("delete blob: %w", err)
 	}
 	return nil

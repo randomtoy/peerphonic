@@ -35,3 +35,11 @@ type BlobStore interface {
 	Put(ctx context.Context, key string, src io.Reader) error
 	Delete(ctx context.Context, key string) error
 }
+
+// CacheMetadataStore persists cache state independently from media bytes.
+type CacheMetadataStore interface {
+	CacheEntry(ctx context.Context, key string) (domain.CacheEntry, error)
+	CacheEntries(ctx context.Context) ([]domain.CacheEntry, error)
+	SaveCacheEntry(ctx context.Context, entry domain.CacheEntry) error
+	DeleteCacheEntry(ctx context.Context, key string) error
+}

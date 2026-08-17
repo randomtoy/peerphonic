@@ -2,6 +2,7 @@ package filesystem
 
 import (
 	"context"
+	"errors"
 	"io"
 	"strings"
 	"testing"
@@ -41,5 +42,34 @@ func TestStoreRejectsTraversal(t *testing.T) {
 	}
 	if err := store.Put(context.Background(), "../outside", strings.NewReader("no")); err == nil {
 		t.Fatal("Put() error = nil, want traversal error")
+	}
+}
+
+func TestStoreKeepsPreviousBlobWhenReplacementIsCancelled(t *testing.T) {
+	t.Parallel()
+
+	store, err := New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := store.Put(context.Background(), "tracks/example", strings.NewReader("original")); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := store.Put(ctx, "tracks/example", strings.NewReader("replacement")); !errors.Is(err, context.Canceled) {
+		t.Fatalf("Put() error = %v, want context.Canceled", err)
+	}
+	stream, err := store.Open(context.Background(), "tracks/example")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	got, err := io.ReadAll(stream)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != "original" {
+		t.Fatalf("content = %q, want original", got)
 	}
 }
