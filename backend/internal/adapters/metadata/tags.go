@@ -86,7 +86,11 @@ func fallbackMetadata(path string) scanner.Metadata {
 	if artist == "." || artist == string(filepath.Separator) || artist == "" {
 		artist = "Unknown Artist"
 	}
-	return scanner.Metadata{Title: title, Artist: artist, Album: album}
+	return scanner.Metadata{
+		Title:  normalizeLegacyText(title),
+		Artist: normalizeLegacyText(artist),
+		Album:  normalizeLegacyText(album),
+	}
 }
 
 func artistAndTitleFromFilename(filename string) (string, string, bool) {

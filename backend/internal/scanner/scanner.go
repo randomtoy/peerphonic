@@ -266,7 +266,7 @@ func normalizeCompilationAlbums(tracks []domain.TrackSource, explicitAlbumArtist
 		if !isCompilation {
 			continue
 		}
-		albumName := path.Base(directory)
+		albumName := compilationAlbumName(tracks, indexes, directory)
 		albumArtist := "Various Artists"
 		albumArtistID := domain.StableID("artist", strings.ToLower(albumArtist))
 		albumID := domain.StableID("album", albumArtistID, strings.ToLower(albumName))
@@ -276,6 +276,33 @@ func normalizeCompilationAlbums(tracks []domain.TrackSource, explicitAlbumArtist
 			tracks[index].Track.AlbumArtistID = albumArtistID
 			tracks[index].Track.AlbumID = albumID
 		}
+	}
+}
+
+func compilationAlbumName(tracks []domain.TrackSource, indexes []int, directory string) string {
+	names := make(map[string]string)
+	for _, index := range indexes {
+		name := strings.TrimSpace(tracks[index].Track.Album)
+		if name != "" {
+			names[strings.ToLower(name)] = name
+		}
+	}
+	if len(names) == 1 {
+		for folded, name := range names {
+			if !isGenericCompilationAlbumName(folded) {
+				return name
+			}
+		}
+	}
+	return path.Base(directory)
+}
+
+func isGenericCompilationAlbumName(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "various artists", "various", "va", "v/a", "unknown album":
+		return true
+	default:
+		return false
 	}
 }
 

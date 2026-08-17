@@ -53,6 +53,18 @@ func TestFallbackMetadataUsesArtistAndTitleFromCompilationFilename(t *testing.T)
 	}
 }
 
+func TestFallbackMetadataRepairsArchiveFilenameEncoding(t *testing.T) {
+	t.Parallel()
+
+	got := fallbackMetadata(filepath.Join("Music",
+		"Hard covers of fucking pops part20 (б†ђЃѓ†Ђ)",
+		"13 - Amatory - Я СЃиЂ† С Уђ†.mp3"))
+	if got.Title != "Я Сошла С Ума" || got.Artist != "Amatory" ||
+		got.Album != "Hard covers of fucking pops part20 (самопал)" {
+		t.Fatalf("fallbackMetadata() = %#v", got)
+	}
+}
+
 func TestFallbackMetadataReplacesLostFilenameArtist(t *testing.T) {
 	t.Parallel()
 
@@ -70,10 +82,16 @@ func TestNormalizeLegacyText(t *testing.T) {
 		"Îäíà Íà Äâîèõ": "Одна На Двоих",
 		"Êîìàòîzz":      "Коматоzz",
 		"Í.Ý.Ï.":        "Н.Э.П.",
-		"Кукрыниксы":    "Кукрыниксы",
-		"Koßn":          "Koßn",
-		"A'party'ÿ":     "A'party'ÿ",
-		"Therapy?":      "Therapy?",
+		"Hard Covers Of Fucking Pops (from Ëèöåìåð)":     "Hard Covers Of Fucking Pops (from Лицемер)",
+		"Hard covers of fucking pops part20 (б†ђЃѓ†Ђ)": "Hard covers of fucking pops part20 (самопал)",
+		"Я СЃиЂ† С Уђ†":                                 "Я Сошла С Ума",
+		"Овѓгб™†о (М†™S®ђ cover Live)":                  "Отпускаю (МакSим cover Live)",
+		"Кукрыниксы":                                     "Кукрыниксы",
+		"Ѓорѓи":                                          "Ѓорѓи",
+		"Koßn":                                           "Koßn",
+		"Beyoncé déjà vu":                                "Beyoncé déjà vu",
+		"A'party'ÿ":                                      "A'party'ÿ",
+		"Therapy?":                                       "Therapy?",
 	}
 	for input, want := range tests {
 		input, want := input, want

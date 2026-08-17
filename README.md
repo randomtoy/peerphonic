@@ -8,7 +8,7 @@ changing the client-facing streaming flow.
 ## Current capabilities
 
 - recursive scanning of MP3, FLAC, Ogg/Opus, M4A, AAC, and WAV files;
-- tag extraction with directory/filename fallbacks;
+- tag extraction with directory/filename fallbacks and conservative repair of legacy Cyrillic encodings;
 - a migrated SQLite metadata catalog;
 - XML and JSON OpenSubsonic responses;
 - password, hex-encoded password, and token/salt authentication;

@@ -145,3 +145,24 @@ func TestScanGroupsInferredMultiArtistFolderAsCompilation(t *testing.T) {
 		t.Fatalf("TracksByAlbum(legacy) = %#v, %v", legacyTracks, err)
 	}
 }
+
+func TestNormalizeCompilationKeepsCommonNormalizedAlbumName(t *testing.T) {
+	t.Parallel()
+
+	tracks := []domain.TrackSource{
+		{Track: domain.Track{
+			ID: "one", Artist: "First", AlbumArtist: "First",
+			Album: "Hard covers of fucking pops part20 (самопал)",
+		}, Ref: domain.SourceRef{Key: "Hard covers part20 (б†ђЃѓ†Ђ)/one.mp3"}},
+		{Track: domain.Track{
+			ID: "two", Artist: "Second", AlbumArtist: "Second",
+			Album: "Hard covers of fucking pops part20 (самопал)",
+		}, Ref: domain.SourceRef{Key: "Hard covers part20 (б†ђЃѓ†Ђ)/two.mp3"}},
+	}
+	normalizeCompilationAlbums(tracks, map[string]bool{})
+	for _, source := range tracks {
+		if source.Track.Album != "Hard covers of fucking pops part20 (самопал)" {
+			t.Fatalf("album = %q", source.Track.Album)
+		}
+	}
+}
