@@ -118,10 +118,12 @@ func (h *Handler) getCoverArt(writer http.ResponseWriter, request *http.Request)
 		h.writeError(writer, request, http.StatusBadRequest, 10, "Required parameter id is missing")
 		return
 	}
+	size := 0
 	if value := request.Form.Get("size"); value != "" {
-		size, err := strconv.Atoi(value)
-		if err != nil || size <= 0 {
-			h.writeError(writer, request, http.StatusBadRequest, 10, "Parameter size must be a positive integer")
+		var err error
+		size, err = strconv.Atoi(value)
+		if err != nil || size <= 0 || size > 2048 {
+			h.writeError(writer, request, http.StatusBadRequest, 10, "Parameter size must be between 1 and 2048")
 			return
 		}
 	}
@@ -129,7 +131,7 @@ func (h *Handler) getCoverArt(writer http.ResponseWriter, request *http.Request)
 		h.writeError(writer, request, http.StatusInternalServerError, 0, "Artwork storage is not configured")
 		return
 	}
-	resolved, err := h.artwork.Open(request.Context(), id)
+	resolved, err := h.artwork.OpenSized(request.Context(), id, size)
 	if errors.Is(err, ports.ErrNotFound) {
 		h.writeError(writer, request, http.StatusNotFound, 70, "Cover art not found")
 		return

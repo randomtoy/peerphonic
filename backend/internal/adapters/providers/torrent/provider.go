@@ -576,9 +576,6 @@ func bestArtwork(audioParts []string, candidates []catalogFile) (catalogFile, bo
 			continue
 		}
 		priority := torrentArtworkPriority(candidate.parts[len(candidate.parts)-1])
-		if priority >= 100 {
-			continue
-		}
 		score := depth*10 + priority
 		logicalPath := strings.Join(candidate.parts, "/")
 		if !found || score < bestScore ||
@@ -600,7 +597,20 @@ func torrentArtworkPriority(name string) int {
 			return 1
 		}
 	}
-	return 100
+	for _, prefix := range []string{"scan", "img", "image", "artwork", "booklet"} {
+		if strings.HasPrefix(stem, prefix) {
+			return 30
+		}
+	}
+	for _, prefix := range []string{"cd", "disc", "disk"} {
+		if strings.HasPrefix(stem, prefix) {
+			return 40
+		}
+	}
+	if strings.HasPrefix(stem, "back") || strings.HasPrefix(stem, "rear") {
+		return 80
+	}
+	return 50
 }
 
 // boundedReader prevents a piece shared with the next torrent file from being

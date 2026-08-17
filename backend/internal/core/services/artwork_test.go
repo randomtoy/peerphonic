@@ -70,7 +70,7 @@ func TestArtworkServiceFallsBackToProviderArtwork(t *testing.T) {
 		t.Fatal(err)
 	}
 	external := testPNG(t)
-	service := NewArtworkService(store, artworkSourceStub{data: external})
+	service := NewArtworkService(store, &artworkSourceStub{data: external})
 	resolved, err := service.Open(context.Background(), "torrentart_example")
 	if err != nil {
 		t.Fatal(err)
@@ -82,11 +82,42 @@ func TestArtworkServiceFallsBackToProviderArtwork(t *testing.T) {
 	}
 }
 
-type artworkSourceStub struct {
-	data []byte
+func TestArtworkServiceResizesAndCachesProviderArtwork(t *testing.T) {
+	t.Parallel()
+
+	store, err := filesystem.New(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	external := sizedPNG(t, 120, 60)
+	source := &artworkSourceStub{data: external}
+	service := NewArtworkService(store, source)
+	for attempt := 0; attempt < 2; attempt++ {
+		resolved, err := service.OpenSized(context.Background(), "torrentart_large", 30)
+		if err != nil {
+			t.Fatal(err)
+		}
+		config, _, err := image.DecodeConfig(resolved.Content)
+		resolved.Content.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if config.Width != 30 || config.Height != 15 || resolved.ContentType != "image/png" {
+			t.Fatalf("resized artwork = %dx%d, %q", config.Width, config.Height, resolved.ContentType)
+		}
+	}
+	if source.calls != 1 {
+		t.Fatalf("OpenArtwork() calls = %d, want 1", source.calls)
+	}
 }
 
-func (s artworkSourceStub) OpenArtwork(_ context.Context, _ string) (ports.ResolvedSource, error) {
+type artworkSourceStub struct {
+	data  []byte
+	calls int
+}
+
+func (s *artworkSourceStub) OpenArtwork(_ context.Context, _ string) (ports.ResolvedSource, error) {
+	s.calls++
 	return ports.ResolvedSource{
 		Content: &readSeekCloser{Reader: bytes.NewReader(s.data)}, ContentType: "image/png",
 		Size: int64(len(s.data)),
@@ -100,9 +131,13 @@ type readSeekCloser struct {
 func (*readSeekCloser) Close() error { return nil }
 
 func testPNG(t *testing.T) []byte {
+	return sizedPNG(t, 2, 2)
+}
+
+func sizedPNG(t *testing.T, width, height int) []byte {
 	t.Helper()
 	var data bytes.Buffer
-	picture := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	picture := image.NewRGBA(image.Rect(0, 0, width, height))
 	picture.Set(0, 0, color.RGBA{R: 255, A: 255})
 	if err := png.Encode(&data, picture); err != nil {
 		t.Fatal(err)

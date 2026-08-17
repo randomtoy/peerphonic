@@ -47,6 +47,57 @@ func TestReadCatalogBuildsProvisionalAudioMetadata(t *testing.T) {
 	}
 }
 
+func TestReadCatalogUsesScanAsArtworkFallback(t *testing.T) {
+	t.Parallel()
+
+	data := torrentBytes(t, metainfo.Info{
+		Name: "Artist", PieceLength: 16 * 1024, Pieces: make([]byte, 20),
+		Files: []metainfo.FileInfo{
+			{Length: 123, Path: []string{"Album", "01 Song.mp3"}},
+			{Length: 50, Path: []string{"Album", "Scans", "img002.jpg"}},
+			{Length: 50, Path: []string{"Album", "Scans", "img001.jpg"}},
+		},
+	})
+	provider := New()
+	catalog, err := provider.ReadCatalog(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Tracks) != 1 || catalog.Tracks[0].Track.CoverArtID == "" {
+		t.Fatalf("tracks = %#v", catalog.Tracks)
+	}
+	provider.artworkMu.RLock()
+	artwork := provider.artworks[catalog.Tracks[0].Track.CoverArtID]
+	provider.artworkMu.RUnlock()
+	if !strings.HasSuffix(artwork.Key, "/Artist/Album/Scans/img001.jpg") {
+		t.Fatalf("artwork = %#v", artwork)
+	}
+}
+
+func TestReadCatalogPrefersFrontArtworkOverFallback(t *testing.T) {
+	t.Parallel()
+
+	data := torrentBytes(t, metainfo.Info{
+		Name: "Artist", PieceLength: 16 * 1024, Pieces: make([]byte, 20),
+		Files: []metainfo.FileInfo{
+			{Length: 123, Path: []string{"Album", "01 Song.mp3"}},
+			{Length: 50, Path: []string{"Album", "random.jpg"}},
+			{Length: 50, Path: []string{"Album", "Scans", "front.jpg"}},
+		},
+	})
+	provider := New()
+	catalog, err := provider.ReadCatalog(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider.artworkMu.RLock()
+	artwork := provider.artworks[catalog.Tracks[0].Track.CoverArtID]
+	provider.artworkMu.RUnlock()
+	if !strings.HasSuffix(artwork.Key, "/Artist/Album/Scans/front.jpg") {
+		t.Fatalf("artwork = %#v", artwork)
+	}
+}
+
 func TestReadCatalogRejectsUnsafePaths(t *testing.T) {
 	t.Parallel()
 

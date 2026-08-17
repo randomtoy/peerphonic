@@ -14,6 +14,7 @@ changing the client-facing streaming flow.
 - password, hex-encoded password, and token/salt authentication;
 - artist/album/track browsing and HTTP range streaming;
 - embedded and folder cover artwork stored through the blob storage boundary;
+- cached OpenSubsonic artwork resizing for mobile clients;
 - shared media cache with a size limit, LRU eviction, and pinned entries;
 - `.torrent` catalog import with on-demand, seekable track streaming;
 - on-demand album artwork from image files included in torrents;
@@ -131,6 +132,10 @@ Torrent cache cleanup never removes data from an actively streamed torrent.
 Before removing inactive torrent files, Peerphonic detaches that torrent from
 the client so its piece state is safely re-evaluated the next time the track is
 played.
+
+When a client supplies the OpenSubsonic `getCoverArt` `size` parameter,
+Peerphonic preserves the aspect ratio and caches the generated variant. This is
+especially useful when torrent artwork is a high-resolution booklet scan.
 
 After a track has been read completely from start to finish, Peerphonic inspects
 the materialized cache file in the background and updates its title, track/disc

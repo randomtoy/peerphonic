@@ -1,9 +1,13 @@
 package opensubsonic
 
 import (
+	"bytes"
 	"context"
 	"crypto/md5"
 	"fmt"
+	"image"
+	"image/color"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -66,7 +70,15 @@ func newTestHandler(t *testing.T, scans ...scanController) (http.Handler, domain
 	return NewHandler(catalog, streams, artwork, "alice", "secret", scans...), track
 }
 
-var testCoverPNG = []byte("\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR")
+var testCoverPNG = func() []byte {
+	var data bytes.Buffer
+	picture := image.NewRGBA(image.Rect(0, 0, 2, 2))
+	picture.SetRGBA(0, 0, color.RGBA{R: 255, A: 255})
+	if err := png.Encode(&data, picture); err != nil {
+		panic(err)
+	}
+	return data.Bytes()
+}()
 
 type scanControllerStub struct {
 	started bool
@@ -168,6 +180,26 @@ func TestGetCoverArtReturnsStoredImage(t *testing.T) {
 	}
 	if response.Body.String() != string(testCoverPNG) {
 		t.Fatalf("body = %q", response.Body.String())
+	}
+}
+
+func TestGetCoverArtResizesToRequestedMaximum(t *testing.T) {
+	t.Parallel()
+
+	handler, track := newTestHandler(t)
+	request := httptest.NewRequest(http.MethodGet,
+		"/rest/getCoverArt?u=alice&p=secret&id="+track.CoverArtID+"&size=1", nil)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	config, _, err := image.DecodeConfig(bytes.NewReader(response.Body.Bytes()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.Width != 1 || config.Height != 1 {
+		t.Fatalf("cover dimensions = %dx%d", config.Width, config.Height)
 	}
 }
 
