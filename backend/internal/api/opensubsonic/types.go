@@ -28,6 +28,7 @@ type response struct {
 	Playlist      *playlist        `xml:"playlist,omitempty" json:"playlist,omitempty"`
 	Starred       *starred         `xml:"starred,omitempty" json:"starred,omitempty"`
 	Starred2      *starredLibrary  `xml:"starred2,omitempty" json:"starred2,omitempty"`
+	PlayQueue     *playQueue       `xml:"playQueue,omitempty" json:"playQueue,omitempty"`
 	Extensions    *extensions      `xml:"openSubsonicExtensions,omitempty" json:"openSubsonicExtensions,omitempty"`
 	ScanStatus    *scanStatus      `xml:"scanStatus,omitempty" json:"scanStatus,omitempty"`
 }
@@ -193,6 +194,15 @@ type starred struct {
 	Artists []artist `xml:"artist" json:"artist"`
 	Albums  []child  `xml:"album" json:"album"`
 	Songs   []child  `xml:"song" json:"song"`
+}
+
+type playQueue struct {
+	Current   string  `xml:"current,attr,omitempty" json:"current,omitempty"`
+	Position  int64   `xml:"position,attr,omitempty" json:"position,omitempty"`
+	Username  string  `xml:"username,attr" json:"username"`
+	Changed   string  `xml:"changed,attr" json:"changed"`
+	ChangedBy string  `xml:"changedBy,attr" json:"changedBy"`
+	Entries   []child `xml:"entry" json:"entry"`
 }
 
 type extensions struct {

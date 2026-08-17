@@ -33,6 +33,7 @@ type Handler struct {
 	artwork     *services.ArtworkService
 	playlists   *services.PlaylistService
 	annotations *services.AnnotationService
+	playQueue   *services.PlayQueueService
 	username    string
 	password    string
 	scans       scanController
@@ -56,6 +57,9 @@ func NewHandler(
 	}
 	if store, ok := catalog.(ports.MediaAnnotationStore); ok {
 		handler.annotations = services.NewAnnotationService(catalog, store)
+	}
+	if store, ok := catalog.(ports.PlayQueueStore); ok {
+		handler.playQueue = services.NewPlayQueueService(catalog, store)
 	}
 	if len(scans) > 0 {
 		handler.scans = scans[0]
@@ -127,6 +131,10 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.scrobble(writer, request)
 	case "getStarred", "getStarred2":
 		h.getStarred(writer, request, endpoint)
+	case "getPlayQueue":
+		h.getPlayQueue(writer, request)
+	case "savePlayQueue":
+		h.savePlayQueue(writer, request)
 	case "getOpenSubsonicExtensions":
 		h.write(writer, request, http.StatusOK, response{Extensions: &extensions{Items: []extension{}}})
 	case "getScanStatus":

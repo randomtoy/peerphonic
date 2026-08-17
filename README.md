@@ -23,6 +23,7 @@ changing the client-facing streaming flow.
 - on-demand album artwork from image files included in torrents;
 - background tag enrichment after a torrent track has been streamed completely;
 - persistent favorites, ratings, and playback history per OpenSubsonic user;
+- persistent cross-client OpenSubsonic play queues;
 - a small Peerphonic health endpoint at `/api/v1/health`.
 
 The implemented OpenSubsonic endpoints are:
@@ -54,6 +55,8 @@ The implemented OpenSubsonic endpoints are:
 /rest/scrobble[.view]
 /rest/getStarred[.view]
 /rest/getStarred2[.view]
+/rest/getPlayQueue[.view]
+/rest/savePlayQueue[.view]
 /rest/getOpenSubsonicExtensions[.view]
 /rest/getScanStatus[.view]
 /rest/startScan[.view]

@@ -228,6 +228,11 @@ func (h *Handler) decorateAnnotations(ctx context.Context, payload *response) {
 			applyChildAnnotation(&payload.Playlist.Entries[index], annotations)
 		}
 	}
+	if payload.PlayQueue != nil {
+		for index := range payload.PlayQueue.Entries {
+			applyChildAnnotation(&payload.PlayQueue.Entries[index], annotations)
+		}
+	}
 	decorateStarred(payload.Starred, annotations)
 	decorateStarred2(payload.Starred2, annotations)
 }
@@ -237,7 +242,7 @@ func payloadContainsMedia(payload *response) bool {
 		payload.ArtistDetail != nil || payload.Album != nil || payload.AlbumList2 != nil ||
 		payload.SongsByGenre != nil || payload.RandomSongs != nil || payload.Song != nil ||
 		payload.SearchResult3 != nil || payload.Playlist != nil ||
-		payload.Starred != nil || payload.Starred2 != nil
+		payload.Starred != nil || payload.Starred2 != nil || payload.PlayQueue != nil
 }
 
 func decorateSongs(items *songs, annotations map[domain.MediaRef]domain.MediaAnnotation) {

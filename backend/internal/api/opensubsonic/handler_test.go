@@ -209,6 +209,74 @@ func TestMediaAnnotationValidation(t *testing.T) {
 	}
 }
 
+func TestPlayQueueLifecycle(t *testing.T) {
+	t.Parallel()
+
+	handler, track := newTestHandler(t)
+	auth := "?u=alice&p=secret&f=json&c=test-client"
+	request := func(path string) *httptest.ResponseRecorder {
+		t.Helper()
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		return response
+	}
+
+	empty := request("/rest/getPlayQueue.view" + auth)
+	if empty.Code != http.StatusOK || !strings.Contains(empty.Body.String(), `"username":"alice"`) ||
+		!strings.Contains(empty.Body.String(), `"entry":[]`) {
+		t.Fatalf("empty getPlayQueue status = %d, body = %s", empty.Code, empty.Body.String())
+	}
+	saved := request("/rest/savePlayQueue.view" + auth + "&id=" + track.ID +
+		"&id=" + track.ID + "&current=" + track.ID + "&position=42000")
+	if saved.Code != http.StatusOK {
+		t.Fatalf("savePlayQueue status = %d, body = %s", saved.Code, saved.Body.String())
+	}
+
+	loaded := request("/rest/getPlayQueue.view" + auth)
+	var envelope struct {
+		Response struct {
+			Queue playQueue `json:"playQueue"`
+		} `json:"subsonic-response"`
+	}
+	if err := json.Unmarshal(loaded.Body.Bytes(), &envelope); err != nil {
+		t.Fatal(err)
+	}
+	queue := envelope.Response.Queue
+	if queue.Current != track.ID || queue.Position != 42000 || queue.Username != "alice" ||
+		queue.ChangedBy != "test-client" || queue.Changed == "" || len(queue.Entries) != 2 {
+		t.Fatalf("getPlayQueue = %#v", queue)
+	}
+
+	cleared := request("/rest/savePlayQueue.view" + auth)
+	if cleared.Code != http.StatusOK {
+		t.Fatalf("clear savePlayQueue status = %d, body = %s", cleared.Code, cleared.Body.String())
+	}
+	empty = request("/rest/getPlayQueue.view" + auth)
+	if !strings.Contains(empty.Body.String(), `"entry":[]`) ||
+		strings.Contains(empty.Body.String(), `"current"`) {
+		t.Fatalf("cleared getPlayQueue body = %s", empty.Body.String())
+	}
+}
+
+func TestPlayQueueValidation(t *testing.T) {
+	t.Parallel()
+
+	handler, track := newTestHandler(t)
+	tests := []string{
+		"/rest/savePlayQueue.view?u=alice&p=secret&f=json&id=" + track.ID,
+		"/rest/savePlayQueue.view?u=alice&p=secret&f=json&id=" + track.ID + "&current=missing",
+		"/rest/savePlayQueue.view?u=alice&p=secret&f=json&position=-1",
+		"/rest/savePlayQueue.view?u=alice&p=secret&f=json&id=missing&current=missing",
+	}
+	for _, path := range tests {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
+		if response.Code != http.StatusBadRequest && response.Code != http.StatusNotFound {
+			t.Fatalf("request %s status = %d, body = %s", path, response.Code, response.Body.String())
+		}
+	}
+}
+
 func TestBrowseAndStreamRange(t *testing.T) {
 	t.Parallel()
 

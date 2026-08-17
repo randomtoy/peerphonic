@@ -105,6 +105,15 @@ type StarredLibrary struct {
 	Annotations map[MediaRef]MediaAnnotation
 }
 
+type PlayQueue struct {
+	Owner      string
+	CurrentID  string
+	PositionMS int64
+	Changed    time.Time
+	ChangedBy  string
+	Tracks     []Track
+}
+
 type TrackSource struct {
 	Track        Track
 	Ref          SourceRef
