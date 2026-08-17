@@ -13,15 +13,18 @@ import (
 )
 
 type Config struct {
-	Address        string `json:"address"`
-	MusicDir       string `json:"music_dir"`
-	Database       string `json:"database"`
-	CacheDir       string `json:"cache_dir"`
-	CacheSizeBytes int64  `json:"cache_size_bytes"`
-	TorrentDir     string `json:"torrent_dir"`
-	Username       string `json:"username"`
-	Password       string `json:"password"`
-	Scan           bool   `json:"scan_on_start"`
+	Address               string `json:"address"`
+	MusicDir              string `json:"music_dir"`
+	Database              string `json:"database"`
+	CacheDir              string `json:"cache_dir"`
+	CacheSizeBytes        int64  `json:"cache_size_bytes"`
+	TorrentDir            string `json:"torrent_dir"`
+	TorrentSeed           bool   `json:"torrent_seed"`
+	TorrentPort           int    `json:"torrent_port"`
+	TorrentPortForwarding bool   `json:"torrent_port_forwarding"`
+	Username              string `json:"username"`
+	Password              string `json:"password"`
+	Scan                  bool   `json:"scan_on_start"`
 }
 
 func Defaults() Config {
@@ -31,6 +34,8 @@ func Defaults() Config {
 		CacheDir:       "cache",
 		CacheSizeBytes: 10 << 30,
 		TorrentDir:     "torrents",
+		TorrentSeed:    true,
+		TorrentPort:    42069,
 		Username:       "admin",
 		Password:       "admin",
 		Scan:           true,
@@ -65,6 +70,9 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	flags.StringVar(&cfg.CacheDir, "cache", cfg.CacheDir, "media cache directory")
 	flags.Int64Var(&cfg.CacheSizeBytes, "cache-size", cfg.CacheSizeBytes, "maximum media cache size in bytes")
 	flags.StringVar(&cfg.TorrentDir, "torrents", cfg.TorrentDir, "directory containing torrent metadata")
+	flags.BoolVar(&cfg.TorrentSeed, "torrent-seed", cfg.TorrentSeed, "upload verified torrent pieces")
+	flags.IntVar(&cfg.TorrentPort, "torrent-port", cfg.TorrentPort, "BitTorrent listen port (0 chooses a random port)")
+	flags.BoolVar(&cfg.TorrentPortForwarding, "torrent-port-forwarding", cfg.TorrentPortForwarding, "enable UPnP/NAT-PMP torrent port forwarding")
 	flags.StringVar(&cfg.Username, "username", cfg.Username, "OpenSubsonic username")
 	flags.StringVar(&cfg.Password, "password", cfg.Password, "OpenSubsonic password")
 	flags.BoolVar(&cfg.Scan, "scan", cfg.Scan, "scan music directory on startup")
@@ -79,6 +87,9 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	}
 	if cfg.CacheSizeBytes <= 0 {
 		return Config{}, errors.New("media cache size must be positive")
+	}
+	if cfg.TorrentPort < 0 || cfg.TorrentPort > 65535 {
+		return Config{}, errors.New("torrent port must be between 0 and 65535")
 	}
 
 	var err error
@@ -148,12 +159,33 @@ func applyEnv(cfg *Config, lookup func(string) (string, bool)) error {
 		}
 		cfg.Scan = parsed
 	}
+	if value, ok := lookup("PEERPHONIC_TORRENT_SEED"); ok {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("parse PEERPHONIC_TORRENT_SEED: %w", err)
+		}
+		cfg.TorrentSeed = parsed
+	}
+	if value, ok := lookup("PEERPHONIC_TORRENT_PORT_FORWARDING"); ok {
+		parsed, err := strconv.ParseBool(value)
+		if err != nil {
+			return fmt.Errorf("parse PEERPHONIC_TORRENT_PORT_FORWARDING: %w", err)
+		}
+		cfg.TorrentPortForwarding = parsed
+	}
 	if value, ok := lookup("PEERPHONIC_CACHE_SIZE_BYTES"); ok {
 		parsed, err := strconv.ParseInt(value, 10, 64)
 		if err != nil {
 			return fmt.Errorf("parse PEERPHONIC_CACHE_SIZE_BYTES: %w", err)
 		}
 		cfg.CacheSizeBytes = parsed
+	}
+	if value, ok := lookup("PEERPHONIC_TORRENT_PORT"); ok {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("parse PEERPHONIC_TORRENT_PORT: %w", err)
+		}
+		cfg.TorrentPort = parsed
 	}
 	return nil
 }

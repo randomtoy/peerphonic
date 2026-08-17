@@ -247,6 +247,208 @@ func TestCacheUsageAllowsMissingDataDirectory(t *testing.T) {
 	}
 }
 
+func TestReadCatalogIsolatesLegacyCacheByInfoHash(t *testing.T) {
+	t.Parallel()
+
+	dataRoot := t.TempDir()
+	provider, err := NewStreaming(t.TempDir(), dataRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	legacyPath := filepath.Join(dataRoot, "Same Name.mp3")
+	if err := os.WriteFile(legacyPath, []byte("first"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	first, err := provider.ReadCatalog(bytes.NewReader(torrentBytes(t, metainfo.Info{
+		Name: "Same Name.mp3", Length: 5, PieceLength: 16 * 1024, Pieces: bytes.Repeat([]byte{1}, 20),
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := provider.ReadCatalog(bytes.NewReader(torrentBytes(t, metainfo.Info{
+		Name: "Same Name.mp3", Length: 6, PieceLength: 16 * 1024, Pieces: bytes.Repeat([]byte{2}, 20),
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if first.InfoHash == second.InfoHash {
+		t.Fatal("different torrents have the same info hash")
+	}
+	if _, err := os.Stat(provider.cachePath(first.InfoHash, "Same Name.mp3")); err != nil {
+		t.Fatalf("first isolated cache stat error = %v", err)
+	}
+	if _, err := os.Stat(provider.cachePath(second.InfoHash, "Same Name.mp3")); !os.IsNotExist(err) {
+		t.Fatalf("second isolated cache stat error = %v, want not exist", err)
+	}
+	if _, err := os.Stat(provider.cachePath(second.InfoHash, "Same Name.mp3") + ".part"); !os.IsNotExist(err) {
+		t.Fatalf("second isolated partial cache stat error = %v, want not exist", err)
+	}
+	if _, err := os.Stat(legacyPath); !os.IsNotExist(err) {
+		t.Fatalf("legacy cache stat error = %v, want not exist", err)
+	}
+}
+
+func TestResolveRejectsCorruptLegacyCachePieces(t *testing.T) {
+	t.Parallel()
+
+	sourcePath := filepath.Join(t.TempDir(), "Track.mp3")
+	wanted := bytes.Repeat([]byte("wanted-audio"), 4096)
+	if err := os.WriteFile(sourcePath, wanted, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info := metainfo.Info{PieceLength: 16 * 1024}
+	if err := info.BuildFromFilePath(sourcePath); err != nil {
+		t.Fatal(err)
+	}
+	data := torrentBytes(t, info)
+	metadataRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	provider, err := NewStreaming(metadataRoot, dataRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	if err := os.WriteFile(filepath.Join(dataRoot, info.Name), bytes.Repeat([]byte("x"), len(wanted)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := provider.ReadCatalog(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(metadataRoot, catalog.InfoHash+".torrent"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := provider.Resolve(context.Background(), catalog.Tracks[0].Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved.Content.Close()
+	hash := metainfo.NewHashFromHex(catalog.InfoHash)
+	torrent, ok := provider.client.Torrent(hash)
+	if !ok {
+		t.Fatal("torrent was not attached")
+	}
+	if completed := torrent.BytesCompleted(); completed != 0 {
+		t.Fatalf("corrupt legacy cache completed bytes = %d, want 0", completed)
+	}
+	if _, err := os.Stat(provider.cachePath(catalog.InfoHash, info.Name) + ".part"); err != nil {
+		t.Fatalf("corrupt cache partial stat error = %v", err)
+	}
+}
+
+func TestStreamingProviderReusesVerifiedCacheAfterRestart(t *testing.T) {
+	t.Parallel()
+
+	sourcePath := filepath.Join(t.TempDir(), "Cached Track.mp3")
+	media := bytes.Repeat([]byte("cached-audio"), 4096)
+	if err := os.WriteFile(sourcePath, media, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info := metainfo.Info{PieceLength: 16 * 1024}
+	if err := info.BuildFromFilePath(sourcePath); err != nil {
+		t.Fatal(err)
+	}
+	data := torrentBytes(t, info)
+	metadataRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	provider, err := NewStreaming(metadataRoot, dataRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := provider.ReadCatalog(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(metadataRoot, catalog.InfoHash+".torrent"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dataRoot, info.Name), media, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	resolved, err := provider.Resolve(ctx, catalog.Tracks[0].Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstRead, err := io.ReadAll(resolved.Content)
+	resolved.Content.Close()
+	if err != nil || !bytes.Equal(firstRead, media) {
+		t.Fatalf("first read bytes = %d, error = %v", len(firstRead), err)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := NewStreaming(metadataRoot, dataRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	resolved, err = reopened.Resolve(ctx, catalog.Tracks[0].Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondRead, err := io.ReadAll(resolved.Content)
+	resolved.Content.Close()
+	if err != nil || !bytes.Equal(secondRead, media) {
+		t.Fatalf("reopened read bytes = %d, error = %v", len(secondRead), err)
+	}
+}
+
+func TestResolvePrefersWorkingPartialCacheOverStaleCompleteFile(t *testing.T) {
+	t.Parallel()
+
+	sourcePath := filepath.Join(t.TempDir(), "Complete Track.mp3")
+	media := bytes.Repeat([]byte("complete-audio"), 4096)
+	if err := os.WriteFile(sourcePath, media, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info := metainfo.Info{PieceLength: 16 * 1024}
+	if err := info.BuildFromFilePath(sourcePath); err != nil {
+		t.Fatal(err)
+	}
+	data := torrentBytes(t, info)
+	metadataRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	provider, err := NewStreaming(metadataRoot, dataRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	catalog, err := provider.ReadCatalog(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(metadataRoot, catalog.InfoHash+".torrent"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	completePath := provider.cachePath(catalog.InfoHash, info.Name)
+	if err := os.MkdirAll(filepath.Dir(completePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(completePath, bytes.Repeat([]byte("x"), len(media)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(completePath+".part", media, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := provider.Resolve(context.Background(), catalog.Tracks[0].Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streamed, err := io.ReadAll(resolved.Content)
+	resolved.Content.Close()
+	if err != nil || !bytes.Equal(streamed, media) {
+		t.Fatalf("streamed %d bytes, error = %v", len(streamed), err)
+	}
+	if _, err := os.Stat(completePath + ".part"); err == nil {
+		if _, err := os.Stat(completePath); !os.IsNotExist(err) {
+			t.Fatalf("stale complete cache stat error = %v, want not exist", err)
+		}
+	}
+}
+
 func TestEvictRemovesOldestInactiveCachedTorrentFile(t *testing.T) {
 	t.Parallel()
 
@@ -266,7 +468,7 @@ func TestEvictRemovesOldestInactiveCachedTorrentFile(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	root := filepath.Join(dataRoot, catalog.Name)
+	root := filepath.Join(dataRoot, catalog.InfoHash, catalog.Name)
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -310,7 +512,10 @@ func TestEvictSkipsActiveTorrent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	filePath := filepath.Join(dataRoot, catalog.Name)
+	filePath := filepath.Join(dataRoot, catalog.InfoHash, catalog.Name)
+	if err := os.MkdirAll(filepath.Dir(filePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(filePath, bytes.Repeat([]byte("x"), 4096), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -370,8 +575,8 @@ func TestStreamingProviderReadsPersistedTorrentFileAndArtwork(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(metadataRoot, catalog.InfoHash+".torrent"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	targetRoot := filepath.Join(dataRoot, filepath.Base(sourceRoot))
-	if err := os.MkdirAll(targetRoot, 0o755); err != nil {
+	legacyRoot := filepath.Join(dataRoot, filepath.Base(sourceRoot))
+	if err := os.MkdirAll(legacyRoot, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"01 Song.mp3", "front.jpg"} {
@@ -379,10 +584,11 @@ func TestStreamingProviderReadsPersistedTorrentFileAndArtwork(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if err := os.WriteFile(filepath.Join(targetRoot, name), contents, 0o600); err != nil {
+		if err := os.WriteFile(filepath.Join(legacyRoot, name), contents, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
+	targetRoot := filepath.Join(dataRoot, catalog.InfoHash, filepath.Base(sourceRoot))
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -394,6 +600,9 @@ func TestStreamingProviderReadsPersistedTorrentFileAndArtwork(t *testing.T) {
 	resolved.Content.Close()
 	if err != nil || !bytes.Equal(streamed, media) {
 		t.Fatalf("streamed %d bytes, err = %v", len(streamed), err)
+	}
+	if _, err := os.Stat(filepath.Join(legacyRoot, "01 Song.mp3")); !os.IsNotExist(err) {
+		t.Fatalf("legacy track stat error = %v, want not exist after migration", err)
 	}
 	select {
 	case completed := <-completedFiles:

@@ -20,6 +20,7 @@ import (
 
 	torrentclient "github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
+	"github.com/anacrolix/torrent/storage"
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
 )
@@ -39,13 +40,17 @@ var imageContentTypes = map[string]string{
 
 const streamReadahead = 8 << 20
 
+const legacyVerificationMarker = ".peerphonic-legacy-unverified"
+
 type Provider struct {
 	metadataRoot string
 	dataRoot     string
+	options      StreamingOptions
 
 	clientMu  sync.Mutex
 	client    *torrentclient.Client
 	operation sync.RWMutex
+	legacyMu  sync.Mutex
 
 	cacheMu        sync.Mutex
 	cacheFiles     map[string]cacheFile
@@ -61,6 +66,12 @@ type Provider struct {
 	trackIDs     map[string]string
 	onCompleted  func(CompletedFile)
 	closing      bool
+}
+
+type StreamingOptions struct {
+	Seed           bool
+	ListenPort     int
+	PortForwarding bool
 }
 
 type CompletedFile struct {
@@ -105,8 +116,10 @@ func New() *Provider {
 }
 
 // NewStreaming configures a provider that joins a swarm only when media or
-// artwork is opened. Downloaded pieces are persisted under dataRoot.
-func NewStreaming(metadataRoot, dataRoot string) (*Provider, error) {
+// artwork is opened. Downloaded pieces are persisted under dataRoot and
+// partitioned by info hash so torrents with matching internal paths cannot
+// corrupt each other's cache.
+func NewStreaming(metadataRoot, dataRoot string, options ...StreamingOptions) (*Provider, error) {
 	metadataRoot, err := filepath.Abs(metadataRoot)
 	if err != nil {
 		return nil, fmt.Errorf("resolve torrent metadata directory: %w", err)
@@ -118,6 +131,9 @@ func NewStreaming(metadataRoot, dataRoot string) (*Provider, error) {
 	provider := New()
 	provider.metadataRoot = metadataRoot
 	provider.dataRoot = dataRoot
+	if len(options) != 0 {
+		provider.options = options[0]
+	}
 	return provider, nil
 }
 
@@ -162,11 +178,14 @@ func (p *Provider) CachedPath(ref domain.SourceRef, expectedSize int64) (string,
 	if ref.Provider != Name {
 		return "", false
 	}
-	_, logicalPath, err := parseSourceKey(ref.Key)
+	infoHash, logicalPath, err := parseSourceKey(ref.Key)
 	if err != nil {
 		return "", false
 	}
-	mediaPath := filepath.Join(p.dataRoot, filepath.FromSlash(logicalPath))
+	if err := p.migrateLegacyFile(infoHash, logicalPath); err != nil {
+		return "", false
+	}
+	mediaPath := p.cachePath(infoHash, logicalPath)
 	info, err := os.Stat(mediaPath)
 	if err != nil || !info.Mode().IsRegular() || (expectedSize > 0 && info.Size() != expectedSize) {
 		return "", false
@@ -300,6 +319,9 @@ func (p *Provider) ReadCatalog(reader io.Reader) (Catalog, error) {
 		return Catalog{}, fmt.Errorf("torrent name is empty")
 	}
 	infoHash := meta.HashInfoBytes().HexString()
+	if err := p.migrateLegacyData(infoHash, info); err != nil {
+		return Catalog{}, fmt.Errorf("migrate legacy torrent cache: %w", err)
+	}
 	result := Catalog{InfoHash: infoHash, Name: name}
 	var audioFiles []catalogFile
 	var artworkFiles []catalogFile
@@ -354,11 +376,35 @@ func (p *Provider) open(ctx context.Context, ref domain.SourceRef) (ports.Resolv
 		return ports.ResolvedSource{}, err
 	}
 	metadataPath := filepath.Join(p.metadataRoot, infoHash+".torrent")
-	torrent, err := client.AddTorrentFromFile(metadataPath)
+	meta, err := metainfo.LoadFromFile(metadataPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return ports.ResolvedSource{}, fmt.Errorf("%w: torrent metadata is missing", ports.ErrSourceUnavailable)
 		}
+		return ports.ResolvedSource{}, fmt.Errorf("load torrent %s: %w", infoHash, err)
+	}
+	if meta.HashInfoBytes().HexString() != infoHash {
+		return ports.ResolvedSource{}, fmt.Errorf("%w: torrent metadata hash does not match source", ports.ErrSourceUnavailable)
+	}
+	info, err := meta.UnmarshalInfo()
+	if err != nil {
+		return ports.ResolvedSource{}, fmt.Errorf("decode torrent %s: %w", infoHash, err)
+	}
+	if err := p.migrateLegacyData(infoHash, info); err != nil {
+		return ports.ResolvedSource{}, fmt.Errorf("migrate torrent %s cache: %w", infoHash, err)
+	}
+	if err := p.prepareLegacyData(infoHash, info); err != nil {
+		return ports.ResolvedSource{}, fmt.Errorf("prepare torrent %s cache verification: %w", infoHash, err)
+	}
+	if err := p.reconcileCacheData(infoHash, info); err != nil {
+		return ports.ResolvedSource{}, fmt.Errorf("reconcile torrent %s cache: %w", infoHash, err)
+	}
+	spec, err := torrentclient.TorrentSpecFromMetaInfoErr(meta)
+	if err != nil {
+		return ports.ResolvedSource{}, fmt.Errorf("create torrent %s spec: %w", infoHash, err)
+	}
+	torrent, _, err := client.AddTorrentSpec(spec)
+	if err != nil {
 		return ports.ResolvedSource{}, fmt.Errorf("add torrent %s: %w", infoHash, err)
 	}
 	select {
@@ -369,6 +415,13 @@ func (p *Provider) open(ctx context.Context, ref domain.SourceRef) (ports.Resolv
 	for _, file := range torrent.Files() {
 		if file.Path() != logicalPath {
 			continue
+		}
+		if fileExists(p.cachePath(infoHash, logicalPath) + ".part") {
+			for pieceIndex := file.BeginPieceIndex(); pieceIndex < file.EndPieceIndex(); pieceIndex++ {
+				if err := torrent.Piece(pieceIndex).VerifyDataContext(ctx); err != nil {
+					return ports.ResolvedSource{}, fmt.Errorf("verify cached torrent file %q: %w", logicalPath, err)
+				}
+			}
 		}
 		reader := file.NewReader()
 		reader.SetContext(ctx)
@@ -408,7 +461,7 @@ func (p *Provider) evictionCandidates(ctx context.Context) ([]evictionCandidate,
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		filePath := filepath.Join(p.dataRoot, filepath.FromSlash(file.logicalPath))
+		filePath := p.cachePath(file.infoHash, file.logicalPath)
 		info, err := os.Stat(filePath)
 		if os.IsNotExist(err) {
 			filePath += ".part"
@@ -462,8 +515,10 @@ func (p *Provider) ensureClient() (*torrentclient.Client, error) {
 	}
 	config := torrentclient.NewDefaultClientConfig()
 	config.DataDir = p.dataRoot
-	config.ListenPort = 0
-	config.NoDefaultPortForwarding = true
+	config.DefaultStorage = storage.NewFileByInfoHash(p.dataRoot)
+	config.ListenPort = p.options.ListenPort
+	config.NoDefaultPortForwarding = !p.options.PortForwarding
+	config.Seed = p.options.Seed
 	config.Slogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	client, err := torrentclient.NewClient(config)
 	if err != nil {
@@ -551,13 +606,140 @@ func (p *Provider) notifyCompleted(ref domain.SourceRef, logicalPath string) {
 	p.retain(infoHash, ref.Key)
 	file := CompletedFile{
 		TrackID: trackID,
-		Path:    filepath.Join(p.dataRoot, filepath.FromSlash(logicalPath)),
+		Path:    p.cachePath(infoHash, logicalPath),
 	}
 	go func() {
 		defer p.completionWG.Done()
 		defer p.release(infoHash)
 		handler(file)
 	}()
+}
+
+func (p *Provider) cachePath(infoHash, logicalPath string) string {
+	return filepath.Join(p.dataRoot, infoHash, filepath.FromSlash(logicalPath))
+}
+
+func (p *Provider) migrateLegacyData(infoHash string, info metainfo.Info) error {
+	if p.dataRoot == "" {
+		return nil
+	}
+	p.legacyMu.Lock()
+	defer p.legacyMu.Unlock()
+	name := strings.TrimSpace(info.BestName())
+	for _, file := range info.UpvertedFiles() {
+		parts, err := safePath(name, file.BestPath())
+		if err != nil {
+			return err
+		}
+		if err := p.migrateLegacyFileLocked(infoHash, strings.Join(parts, "/")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *Provider) migrateLegacyFile(infoHash, logicalPath string) error {
+	if p.dataRoot == "" {
+		return nil
+	}
+	p.legacyMu.Lock()
+	defer p.legacyMu.Unlock()
+	return p.migrateLegacyFileLocked(infoHash, logicalPath)
+}
+
+func (p *Provider) migrateLegacyFileLocked(infoHash, logicalPath string) error {
+	legacyPath := filepath.Join(p.dataRoot, filepath.FromSlash(logicalPath))
+	targetPath := p.cachePath(infoHash, logicalPath)
+	if legacyPath == targetPath {
+		return nil
+	}
+	if fileExists(targetPath) || fileExists(targetPath+".part") {
+		return nil
+	}
+	sourcePath, destinationPath := legacyPath, targetPath
+	movedComplete := true
+	if !fileExists(sourcePath) {
+		sourcePath, destinationPath = legacyPath+".part", targetPath+".part"
+		movedComplete = false
+		if !fileExists(sourcePath) {
+			return nil
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(destinationPath), 0o755); err != nil {
+		return fmt.Errorf("create isolated torrent cache directory: %w", err)
+	}
+	if movedComplete {
+		markerPath := filepath.Join(p.dataRoot, infoHash, legacyVerificationMarker)
+		if err := os.WriteFile(markerPath, nil, 0o600); err != nil {
+			return fmt.Errorf("mark migrated torrent cache for verification: %w", err)
+		}
+	}
+	if err := os.Rename(sourcePath, destinationPath); err != nil {
+		return fmt.Errorf("move legacy torrent cache file %q: %w", sourcePath, err)
+	}
+	return nil
+}
+
+func (p *Provider) prepareLegacyData(infoHash string, info metainfo.Info) error {
+	if p.dataRoot == "" {
+		return nil
+	}
+	p.legacyMu.Lock()
+	defer p.legacyMu.Unlock()
+	markerPath := filepath.Join(p.dataRoot, infoHash, legacyVerificationMarker)
+	if !fileExists(markerPath) {
+		return nil
+	}
+	name := strings.TrimSpace(info.BestName())
+	for _, file := range info.UpvertedFiles() {
+		parts, err := safePath(name, file.BestPath())
+		if err != nil {
+			return err
+		}
+		completePath := p.cachePath(infoHash, strings.Join(parts, "/"))
+		if !fileExists(completePath) {
+			continue
+		}
+		if fileExists(completePath + ".part") {
+			return fmt.Errorf("both complete and partial cache files exist for %q", completePath)
+		}
+		if err := os.Rename(completePath, completePath+".part"); err != nil {
+			return fmt.Errorf("prepare migrated cache file %q: %w", completePath, err)
+		}
+	}
+	if err := os.Remove(markerPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove migrated cache verification marker: %w", err)
+	}
+	return nil
+}
+
+func (p *Provider) reconcileCacheData(infoHash string, info metainfo.Info) error {
+	if p.dataRoot == "" {
+		return nil
+	}
+	p.legacyMu.Lock()
+	defer p.legacyMu.Unlock()
+	name := strings.TrimSpace(info.BestName())
+	for _, file := range info.UpvertedFiles() {
+		parts, err := safePath(name, file.BestPath())
+		if err != nil {
+			return err
+		}
+		completePath := p.cachePath(infoHash, strings.Join(parts, "/"))
+		partialPath := completePath + ".part"
+		if !fileExists(completePath) || !fileExists(partialPath) {
+			continue
+		}
+		if err := os.Remove(completePath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove stale complete cache file %q: %w", completePath, err)
+		}
+	}
+	return nil
+}
+
+func fileExists(filePath string) bool {
+	info, err := os.Stat(filePath)
+	return err == nil && info.Mode().IsRegular()
 }
 
 func bestArtwork(audioParts []string, candidates []catalogFile) (catalogFile, bool) {

@@ -104,6 +104,9 @@ then CLI flags.
 | `cache_dir` | `PEERPHONIC_CACHE_DIR` | `--cache` | `cache` |
 | `cache_size_bytes` | `PEERPHONIC_CACHE_SIZE_BYTES` | `--cache-size` | `10737418240` (10 GiB) |
 | `torrent_dir` | `PEERPHONIC_TORRENT_DIR` | `--torrents` | `torrents` |
+| `torrent_seed` | `PEERPHONIC_TORRENT_SEED` | `--torrent-seed` | `true` |
+| `torrent_port` | `PEERPHONIC_TORRENT_PORT` | `--torrent-port` | `42069` |
+| `torrent_port_forwarding` | `PEERPHONIC_TORRENT_PORT_FORWARDING` | `--torrent-port-forwarding` | `false` |
 | `username` | `PEERPHONIC_USERNAME` | `--username` | `admin` |
 | `password` | `PEERPHONIC_PASSWORD` | `--password` | `admin` |
 | `scan_on_start` | `PEERPHONIC_SCAN_ON_START` | `--scan` | `true` |
@@ -145,7 +148,14 @@ without joining the swarm. Peerphonic starts its BitTorrent client on the first
 track or cover request. The reader prioritizes only the requested byte range and
 a small readahead window, so OpenSubsonic clients can begin playback while the
 selected track is downloading. Downloaded pieces are reused from
-`cache_dir/torrents` on later requests.
+`cache_dir/torrents/<info-hash>` on later requests. Legacy cache files are moved
+into the matching info-hash directory as their torrent metadata is scanned, so
+different torrents with identical internal paths cannot overwrite each other.
+
+Verified downloaded pieces are uploaded to other peers by default while the
+torrent remains attached. Set `torrent_seed` to `false` to disable seeding. A
+stable listen port makes manual router forwarding possible; alternatively,
+enable `torrent_port_forwarding` to let Peerphonic request UPnP/NAT-PMP mapping.
 
 Torrent cache cleanup never removes data from an actively streamed torrent.
 Before removing inactive torrent files, Peerphonic detaches that torrent from

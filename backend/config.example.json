@@ -5,6 +5,9 @@
   "cache_dir": "/srv/peerphonic/cache",
   "cache_size_bytes": 10737418240,
   "torrent_dir": "/srv/peerphonic/torrents",
+  "torrent_seed": true,
+  "torrent_port": 42069,
+  "torrent_port_forwarding": false,
   "username": "music",
   "password": "change-me",
   "scan_on_start": true

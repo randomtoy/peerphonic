@@ -47,6 +47,11 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	}
 	torrentProvider, err = torrentprovider.NewStreaming(
 		cfg.TorrentDir, filepath.Join(cfg.CacheDir, "torrents"),
+		torrentprovider.StreamingOptions{
+			Seed:           cfg.TorrentSeed,
+			ListenPort:     cfg.TorrentPort,
+			PortForwarding: cfg.TorrentPortForwarding,
+		},
 	)
 	if err != nil {
 		return fail(err)
