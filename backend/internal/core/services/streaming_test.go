@@ -35,6 +35,9 @@ func (c catalogStub) Albums(context.Context, ports.AlbumListQuery) ([]domain.Alb
 }
 func (c catalogStub) AlbumsByArtist(context.Context, string) ([]domain.Album, error) { return nil, nil }
 func (c catalogStub) TracksByAlbum(context.Context, string) ([]domain.Track, error)  { return nil, nil }
+func (c catalogStub) TracksByGenre(context.Context, string, int, int) ([]domain.Track, error) {
+	return nil, nil
+}
 func (c catalogStub) Search(context.Context, ports.CatalogSearch) (ports.CatalogSearchResult, error) {
 	return ports.CatalogSearchResult{}, nil
 }

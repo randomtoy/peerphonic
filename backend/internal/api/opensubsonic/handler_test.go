@@ -242,6 +242,9 @@ func TestID3BrowsingEndpointsUsedByAmperfy(t *testing.T) {
 		{path: "/rest/getAlbum.view" + auth + "&id=album_legacy", contains: []string{
 			`<album id="album_legacy"`, `<song id="` + track.ID + `"`, `albumId="album_legacy"`,
 		}},
+		{path: "/rest/getSongsByGenre.view" + auth + "&genre=Rock&count=1&offset=0", contains: []string{
+			"<songsByGenre>", `<song id="` + track.ID + `"`, `genre="Rock"`,
+		}},
 		{path: "/rest/getSong.view" + auth + "&id=" + track.ID, contains: []string{
 			`<song id="` + track.ID + `"`,
 		}},
@@ -266,6 +269,37 @@ func TestID3BrowsingEndpointsUsedByAmperfy(t *testing.T) {
 				if !strings.Contains(response.Body.String(), expected) {
 					t.Errorf("body does not contain %q: %s", expected, response.Body.String())
 				}
+			}
+		})
+	}
+}
+
+func TestSongsByGenreValidatesAndPages(t *testing.T) {
+	t.Parallel()
+
+	handler, track := newTestHandler(t)
+	auth := "?u=alice&p=secret&f=json"
+	tests := []struct {
+		name       string
+		parameters string
+		status     int
+		contains   string
+	}{
+		{name: "missing genre", status: http.StatusBadRequest, contains: "genre"},
+		{name: "invalid count", parameters: "&genre=Rock&count=-1", status: http.StatusBadRequest, contains: "count"},
+		{name: "invalid offset", parameters: "&genre=Rock&offset=no", status: http.StatusBadRequest, contains: "offset"},
+		{name: "song", parameters: "&genre=rock&count=1", status: http.StatusOK, contains: `"id":"` + track.ID + `"`},
+		{name: "empty page", parameters: "&genre=Rock&offset=1", status: http.StatusOK, contains: `"song":[]`},
+		{name: "unknown folder", parameters: "&genre=Rock&musicFolderId=other", status: http.StatusOK, contains: `"song":[]`},
+	}
+	for _, test := range tests {
+		test := test
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+				"/rest/getSongsByGenre"+auth+test.parameters, nil))
+			if response.Code != test.status || !strings.Contains(response.Body.String(), test.contains) {
+				t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 			}
 		})
 	}

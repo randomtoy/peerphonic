@@ -36,6 +36,7 @@ The implemented OpenSubsonic endpoints are:
 /rest/getArtist[.view]
 /rest/getAlbumList2[.view]
 /rest/getAlbum[.view]
+/rest/getSongsByGenre[.view]
 /rest/getSong[.view]
 /rest/getCoverArt[.view]
 /rest/search3[.view]

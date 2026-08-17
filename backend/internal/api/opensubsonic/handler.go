@@ -91,6 +91,8 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.getAlbumList2(writer, request)
 	case "getAlbum":
 		h.getAlbum(writer, request)
+	case "getSongsByGenre":
+		h.getSongsByGenre(writer, request)
 	case "getSong":
 		h.getSong(writer, request)
 	case "getCoverArt":
@@ -386,6 +388,34 @@ func (h *Handler) getAlbum(writer http.ResponseWriter, request *http.Request) {
 	h.write(writer, request, http.StatusOK, response{Album: &payload})
 }
 
+func (h *Handler) getSongsByGenre(writer http.ResponseWriter, request *http.Request) {
+	genreName := strings.TrimSpace(request.Form.Get("genre"))
+	if genreName == "" {
+		h.writeError(writer, request, http.StatusBadRequest, 10, "Required parameter genre is missing")
+		return
+	}
+	offset, count, err := songListPageParameters(request)
+	if err != nil {
+		h.writeError(writer, request, http.StatusBadRequest, 10, err.Error())
+		return
+	}
+	payload := &songsByGenre{Songs: []child{}}
+	if request.Form.Has("musicFolderId") && request.Form.Get("musicFolderId") != musicFolderID {
+		h.write(writer, request, http.StatusOK, response{SongsByGenre: payload})
+		return
+	}
+	tracks, err := h.catalog.TracksByGenre(request.Context(), genreName, offset, count)
+	if err != nil {
+		h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to read the music catalog")
+		return
+	}
+	payload.Songs = make([]child, 0, len(tracks))
+	for _, track := range tracks {
+		payload.Songs = append(payload.Songs, trackChild(track))
+	}
+	h.write(writer, request, http.StatusOK, response{SongsByGenre: payload})
+}
+
 func (h *Handler) getSong(writer http.ResponseWriter, request *http.Request) {
 	id := request.Form.Get("id")
 	if id == "" {
@@ -662,6 +692,26 @@ func searchPageParameters(request *http.Request, kind string) (offset, count int
 		offset, err = strconv.Atoi(value)
 		if err != nil || offset < 0 {
 			return 0, 0, fmt.Errorf("parameter %s must be a non-negative integer", offsetName)
+		}
+	}
+	return offset, count, nil
+}
+
+func songListPageParameters(request *http.Request) (offset, count int, err error) {
+	count = 10
+	if value := request.Form.Get("count"); value != "" {
+		count, err = strconv.Atoi(value)
+		if err != nil || count < 0 {
+			return 0, 0, errors.New("parameter count must be a non-negative integer")
+		}
+	}
+	if count > 500 {
+		count = 500
+	}
+	if value := request.Form.Get("offset"); value != "" {
+		offset, err = strconv.Atoi(value)
+		if err != nil || offset < 0 {
+			return 0, 0, errors.New("parameter offset must be a non-negative integer")
 		}
 	}
 	return offset, count, nil

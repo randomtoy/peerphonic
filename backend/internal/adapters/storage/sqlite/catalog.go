@@ -541,6 +541,22 @@ func (c *Catalog) tracksByCanonicalAlbum(ctx context.Context, albumID string) ([
 	return scanTracks(rows, "album")
 }
 
+func (c *Catalog) TracksByGenre(
+	ctx context.Context,
+	genre string,
+	offset, limit int,
+) ([]domain.Track, error) {
+	rows, err := c.db.QueryContext(ctx, "SELECT "+trackColumns+` FROM tracks
+		WHERE genre = ? COLLATE NOCASE
+		ORDER BY album COLLATE NOCASE, disc_number, track_number, title COLLATE NOCASE
+		LIMIT ? OFFSET ?`, genre, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("query genre tracks: %w", err)
+	}
+	defer rows.Close()
+	return scanTracks(rows, "genre")
+}
+
 func scanTracks(rows *sql.Rows, kind string) ([]domain.Track, error) {
 	var tracks []domain.Track
 	for rows.Next() {

@@ -74,6 +74,14 @@ func TestCatalogRoundTripAndReplacement(t *testing.T) {
 	if err != nil || len(tracks) != 1 || tracks[0].ID != track.ID {
 		t.Fatalf("TracksByAlbum() = %#v, %v", tracks, err)
 	}
+	genreTracks, err := catalog.TracksByGenre(ctx, "rock", 0, 10)
+	if err != nil || len(genreTracks) != 1 || genreTracks[0].ID != track.ID {
+		t.Fatalf("TracksByGenre() = %#v, %v", genreTracks, err)
+	}
+	genreTracks, err = catalog.TracksByGenre(ctx, "Rock", 1, 10)
+	if err != nil || len(genreTracks) != 0 {
+		t.Fatalf("paged TracksByGenre() = %#v, %v", genreTracks, err)
+	}
 
 	if err := catalog.ReplaceProviderTracks(ctx, "local", nil, nil); err != nil {
 		t.Fatalf("empty ReplaceProviderTracks() error = %v", err)

@@ -23,6 +23,7 @@ type Catalog interface {
 	Albums(ctx context.Context, query AlbumListQuery) ([]domain.Album, error)
 	AlbumsByArtist(ctx context.Context, artistID string) ([]domain.Album, error)
 	TracksByAlbum(ctx context.Context, albumID string) ([]domain.Track, error)
+	TracksByGenre(ctx context.Context, genre string, offset, limit int) ([]domain.Track, error)
 	Search(ctx context.Context, query CatalogSearch) (CatalogSearchResult, error)
 }
 

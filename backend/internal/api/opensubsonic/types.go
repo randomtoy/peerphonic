@@ -20,6 +20,7 @@ type response struct {
 	ArtistDetail  *artistID3       `xml:"artist,omitempty" json:"artist,omitempty"`
 	Album         *albumID3        `xml:"album,omitempty" json:"album,omitempty"`
 	AlbumList2    *albumList2      `xml:"albumList2,omitempty" json:"albumList2,omitempty"`
+	SongsByGenre  *songsByGenre    `xml:"songsByGenre,omitempty" json:"songsByGenre,omitempty"`
 	Song          *child           `xml:"song,omitempty" json:"song,omitempty"`
 	SearchResult3 *searchResult3   `xml:"searchResult3,omitempty" json:"searchResult3,omitempty"`
 	Playlists     *playlists       `xml:"playlists,omitempty" json:"playlists,omitempty"`
@@ -135,6 +136,10 @@ type albumID3 struct {
 
 type albumList2 struct {
 	Albums []albumID3 `xml:"album" json:"album"`
+}
+
+type songsByGenre struct {
+	Songs []child `xml:"song" json:"song"`
 }
 
 type searchResult3 struct {
