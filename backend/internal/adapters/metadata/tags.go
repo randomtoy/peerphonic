@@ -48,6 +48,7 @@ func (TagExtractor) Extract(path string, info os.FileInfo) (scanner.Metadata, er
 		}
 		if value, ok := usableMetadataText(values.AlbumArtist()); ok {
 			result.AlbumArtist = value
+			result.AlbumArtistExplicit = true
 		} else {
 			result.AlbumArtist = result.Artist
 		}

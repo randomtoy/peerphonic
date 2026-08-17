@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"time"
@@ -22,19 +23,20 @@ var supportedExtensions = map[string]struct{}{
 }
 
 type Metadata struct {
-	Title       string
-	Artist      string
-	Album       string
-	AlbumArtist string
-	TrackNumber int
-	DiscNumber  int
-	Year        int
-	Duration    time.Duration
-	Size        int64
-	BitRate     int
-	Suffix      string
-	ContentType string
-	Artwork     *Artwork
+	Title               string
+	Artist              string
+	Album               string
+	AlbumArtist         string
+	AlbumArtistExplicit bool
+	TrackNumber         int
+	DiscNumber          int
+	Year                int
+	Duration            time.Duration
+	Size                int64
+	BitRate             int
+	Suffix              string
+	ContentType         string
+	Artwork             *Artwork
 }
 
 type Artwork struct {
@@ -90,6 +92,7 @@ func (s *Scanner) Scan(ctx context.Context) (Report, error) {
 	var tracks []domain.Track
 	var warnings []Warning
 	artworkIDs := make(map[[sha256.Size]byte]string)
+	explicitAlbumArtists := make(map[string]bool)
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -123,6 +126,7 @@ func (s *Scanner) Scan(ctx context.Context) (Report, error) {
 			return nil
 		}
 		track := makeTrack(filepath.ToSlash(key), metadata)
+		explicitAlbumArtists[track.ID] = metadata.AlbumArtistExplicit
 		if metadata.Artwork != nil && s.artwork != nil {
 			digest := sha256.Sum256(metadata.Artwork.Data)
 			if coverArtID, ok := artworkIDs[digest]; ok {
@@ -143,6 +147,7 @@ func (s *Scanner) Scan(ctx context.Context) (Report, error) {
 	if err != nil {
 		return Report{}, fmt.Errorf("walk music directory: %w", err)
 	}
+	normalizeCompilationAlbums(tracks, explicitAlbumArtists)
 	if err := s.catalog.ReplaceProviderTracks(ctx, LocalProvider, tracks); err != nil {
 		return Report{}, fmt.Errorf("replace local catalog: %w", err)
 	}
@@ -150,16 +155,16 @@ func (s *Scanner) Scan(ctx context.Context) (Report, error) {
 }
 
 func makeTrack(key string, metadata Metadata) domain.Track {
-	artistName := strings.TrimSpace(metadata.AlbumArtist)
-	if artistName == "" {
-		artistName = strings.TrimSpace(metadata.Artist)
+	albumArtistName := strings.TrimSpace(metadata.AlbumArtist)
+	if albumArtistName == "" {
+		albumArtistName = strings.TrimSpace(metadata.Artist)
 	}
-	if artistName == "" {
-		artistName = "Unknown Artist"
+	if albumArtistName == "" {
+		albumArtistName = "Unknown Artist"
 	}
 	trackArtist := strings.TrimSpace(metadata.Artist)
 	if trackArtist == "" {
-		trackArtist = artistName
+		trackArtist = albumArtistName
 	}
 	albumName := strings.TrimSpace(metadata.Album)
 	if albumName == "" {
@@ -169,25 +174,86 @@ func makeTrack(key string, metadata Metadata) domain.Track {
 	if title == "" {
 		title = strings.TrimSuffix(filepath.Base(key), filepath.Ext(key))
 	}
-	artistID := domain.StableID("artist", strings.ToLower(artistName))
-	albumID := domain.StableID("album", artistID, strings.ToLower(albumName))
+	trackArtistID := domain.StableID("artist", strings.ToLower(trackArtist))
+	albumArtistID := domain.StableID("artist", strings.ToLower(albumArtistName))
+	albumID := domain.StableID("album", albumArtistID, strings.ToLower(albumName))
 	return domain.Track{
-		ID:          domain.StableID("track", LocalProvider, key),
-		Title:       title,
-		Artist:      trackArtist,
-		ArtistID:    artistID,
-		Album:       albumName,
-		AlbumID:     albumID,
-		AlbumArtist: artistName,
-		Source:      domain.SourceRef{Provider: LocalProvider, Key: key},
-		TrackNumber: metadata.TrackNumber,
-		DiscNumber:  metadata.DiscNumber,
-		Year:        metadata.Year,
-		Duration:    metadata.Duration,
-		Size:        metadata.Size,
-		BitRate:     metadata.BitRate,
-		Suffix:      metadata.Suffix,
-		ContentType: metadata.ContentType,
+		ID:            domain.StableID("track", LocalProvider, key),
+		Title:         title,
+		Artist:        trackArtist,
+		ArtistID:      trackArtistID,
+		Album:         albumName,
+		AlbumID:       albumID,
+		AlbumArtist:   albumArtistName,
+		AlbumArtistID: albumArtistID,
+		Source:        domain.SourceRef{Provider: LocalProvider, Key: key},
+		TrackNumber:   metadata.TrackNumber,
+		DiscNumber:    metadata.DiscNumber,
+		Year:          metadata.Year,
+		Duration:      metadata.Duration,
+		Size:          metadata.Size,
+		BitRate:       metadata.BitRate,
+		Suffix:        metadata.Suffix,
+		ContentType:   metadata.ContentType,
+	}
+}
+
+func normalizeCompilationAlbums(tracks []domain.Track, explicitAlbumArtists map[string]bool) {
+	groups := make(map[string][]int)
+	for index, track := range tracks {
+		directory := path.Dir(track.Source.Key)
+		if directory != "." && directory != "/" {
+			groups[directory] = append(groups[directory], index)
+		}
+	}
+	for directory, indexes := range groups {
+		if len(indexes) < 2 {
+			continue
+		}
+		artists := make(map[string]struct{})
+		albumArtists := make(map[string]struct{})
+		hasExplicitAlbumArtist := false
+		for _, index := range indexes {
+			track := tracks[index]
+			artists[strings.ToLower(strings.TrimSpace(track.Artist))] = struct{}{}
+			albumArtists[strings.ToLower(strings.TrimSpace(track.AlbumArtist))] = struct{}{}
+			if explicitAlbumArtists[track.ID] {
+				hasExplicitAlbumArtist = true
+			}
+		}
+		if len(artists) < 2 {
+			continue
+		}
+		oneAlbumArtistIsVarious := false
+		if len(albumArtists) == 1 {
+			for albumArtist := range albumArtists {
+				oneAlbumArtistIsVarious = isVariousArtistName(albumArtist)
+			}
+		}
+		isCompilation := len(albumArtists) > 1 || !hasExplicitAlbumArtist ||
+			(len(albumArtists) == 1 && oneAlbumArtistIsVarious)
+		if !isCompilation {
+			continue
+		}
+		albumName := path.Base(directory)
+		albumArtist := "Various Artists"
+		albumArtistID := domain.StableID("artist", strings.ToLower(albumArtist))
+		albumID := domain.StableID("album", albumArtistID, strings.ToLower(albumName))
+		for _, index := range indexes {
+			tracks[index].Album = albumName
+			tracks[index].AlbumArtist = albumArtist
+			tracks[index].AlbumArtistID = albumArtistID
+			tracks[index].AlbumID = albumID
+		}
+	}
+}
+
+func isVariousArtistName(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "various artists", "various", "va", "v/a":
+		return true
+	default:
+		return false
 	}
 }
 

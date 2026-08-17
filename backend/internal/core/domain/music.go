@@ -14,23 +14,24 @@ type SourceRef struct {
 }
 
 type Track struct {
-	ID          string
-	Title       string
-	Artist      string
-	ArtistID    string
-	Album       string
-	AlbumID     string
-	AlbumArtist string
-	Source      SourceRef
-	TrackNumber int
-	DiscNumber  int
-	Year        int
-	Duration    time.Duration
-	Size        int64
-	BitRate     int
-	Suffix      string
-	ContentType string
-	CoverArtID  string
+	ID            string
+	Title         string
+	Artist        string
+	ArtistID      string
+	Album         string
+	AlbumID       string
+	AlbumArtist   string
+	AlbumArtistID string
+	Source        SourceRef
+	TrackNumber   int
+	DiscNumber    int
+	Year          int
+	Duration      time.Duration
+	Size          int64
+	BitRate       int
+	Suffix        string
+	ContentType   string
+	CoverArtID    string
 }
 
 type Artist struct {

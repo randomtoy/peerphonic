@@ -18,10 +18,13 @@ type catalogStub struct {
 
 func (c catalogStub) ReplaceProviderTracks(context.Context, string, []domain.Track) error { return nil }
 func (c catalogStub) Track(context.Context, string) (domain.Track, error)                 { return c.track, c.err }
-func (c catalogStub) Artists(context.Context) ([]domain.Artist, error)                    { return nil, nil }
-func (c catalogStub) Albums(context.Context, int, int) ([]domain.Album, error)            { return nil, nil }
-func (c catalogStub) AlbumsByArtist(context.Context, string) ([]domain.Album, error)      { return nil, nil }
-func (c catalogStub) TracksByAlbum(context.Context, string) ([]domain.Track, error)       { return nil, nil }
+func (c catalogStub) Artist(context.Context, string) (domain.Artist, error) {
+	return domain.Artist{}, nil
+}
+func (c catalogStub) Artists(context.Context) ([]domain.Artist, error)               { return nil, nil }
+func (c catalogStub) Albums(context.Context, int, int) ([]domain.Album, error)       { return nil, nil }
+func (c catalogStub) AlbumsByArtist(context.Context, string) ([]domain.Album, error) { return nil, nil }
+func (c catalogStub) TracksByAlbum(context.Context, string) ([]domain.Track, error)  { return nil, nil }
 func (c catalogStub) Search(context.Context, ports.CatalogSearch) (ports.CatalogSearchResult, error) {
 	return ports.CatalogSearchResult{}, nil
 }

@@ -245,16 +245,21 @@ func (h *Handler) getArtist(writer http.ResponseWriter, request *http.Request) {
 		h.writeError(writer, request, http.StatusBadRequest, 10, "Required parameter id is missing")
 		return
 	}
+	artist, err := h.catalog.Artist(request.Context(), id)
+	if errors.Is(err, ports.ErrNotFound) {
+		h.writeError(writer, request, http.StatusNotFound, 70, "Artist not found")
+		return
+	}
+	if err != nil {
+		h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to read the music catalog")
+		return
+	}
 	albums, err := h.catalog.AlbumsByArtist(request.Context(), id)
 	if err != nil {
 		h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to read the music catalog")
 		return
 	}
-	if len(albums) == 0 {
-		h.writeError(writer, request, http.StatusNotFound, 70, "Artist not found")
-		return
-	}
-	item := &artistID3{ID: id, Name: albums[0].Artist, AlbumCount: len(albums), Albums: []albumID3{}}
+	item := &artistID3{ID: id, Name: artist.Name, AlbumCount: len(albums), Albums: []albumID3{}}
 	for _, album := range albums {
 		item.Albums = append(item.Albums, makeAlbumID3(album))
 	}
@@ -516,7 +521,7 @@ func albumFromTracks(tracks []domain.Track) domain.Album {
 	first := tracks[0]
 	album := domain.Album{
 		ID: first.AlbumID, Name: first.Album, Artist: first.AlbumArtist,
-		ArtistID: first.ArtistID, Year: first.Year, SongCount: len(tracks),
+		ArtistID: first.AlbumArtistID, Year: first.Year, SongCount: len(tracks),
 		CoverArtID: first.CoverArtID,
 	}
 	for _, track := range tracks {

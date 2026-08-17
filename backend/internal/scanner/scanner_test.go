@@ -59,7 +59,7 @@ func TestScanBuildsAndReplacesLocalCatalog(t *testing.T) {
 		t.Fatalf("Scan() report = %#v", report)
 	}
 	artists, err := catalog.Artists(ctx)
-	if err != nil || len(artists) != 1 {
+	if err != nil || len(artists) != 2 {
 		t.Fatalf("Artists() = %#v, %v", artists, err)
 	}
 	albums, err := catalog.AlbumsByArtist(ctx, artists[0].ID)
@@ -83,5 +83,57 @@ func TestScanBuildsAndReplacesLocalCatalog(t *testing.T) {
 	tracks, err = catalog.TracksByAlbum(ctx, albums[0].ID)
 	if err != nil || len(tracks) != 1 {
 		t.Fatalf("tracks after rescan = %#v, %v", tracks, err)
+	}
+}
+
+type compilationExtractor struct{}
+
+func (compilationExtractor) Extract(path string, info os.FileInfo) (Metadata, error) {
+	artist := "First Artist"
+	if filepath.Base(path) == "second.mp3" {
+		artist = "Second Artist"
+	}
+	return Metadata{
+		Title: filepath.Base(path), Artist: artist, Album: "VA", AlbumArtist: artist,
+		Size: info.Size(), Suffix: "mp3", ContentType: "audio/mpeg",
+	}, nil
+}
+
+func TestScanGroupsInferredMultiArtistFolderAsCompilation(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	root := t.TempDir()
+	compilationDir := filepath.Join(root, "Compilation Volume")
+	if err := os.Mkdir(compilationDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"first.mp3", "second.mp3"} {
+		if err := os.WriteFile(filepath.Join(compilationDir, name), []byte("audio"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	catalog, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close()
+
+	if _, err := New(root, catalog, compilationExtractor{}).Scan(ctx); err != nil {
+		t.Fatal(err)
+	}
+	albums, err := catalog.Albums(ctx, 0, 10)
+	if err != nil || len(albums) != 1 {
+		t.Fatalf("Albums() = %#v, %v", albums, err)
+	}
+	if albums[0].Name != "Compilation Volume" || albums[0].Artist != "Various Artists" || albums[0].SongCount != 2 {
+		t.Fatalf("album = %#v", albums[0])
+	}
+	tracks, err := catalog.TracksByAlbum(ctx, albums[0].ID)
+	if err != nil || len(tracks) != 2 {
+		t.Fatalf("TracksByAlbum() = %#v, %v", tracks, err)
+	}
+	if tracks[0].ArtistID == tracks[1].ArtistID || tracks[0].AlbumArtistID != albums[0].ArtistID {
+		t.Fatalf("track identities = %#v", tracks)
 	}
 }

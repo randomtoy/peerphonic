@@ -14,6 +14,7 @@ var ErrNotFound = errors.New("not found")
 type Catalog interface {
 	ReplaceProviderTracks(ctx context.Context, provider string, tracks []domain.Track) error
 	Track(ctx context.Context, id string) (domain.Track, error)
+	Artist(ctx context.Context, id string) (domain.Artist, error)
 	Artists(ctx context.Context) ([]domain.Artist, error)
 	Albums(ctx context.Context, offset, limit int) ([]domain.Album, error)
 	AlbumsByArtist(ctx context.Context, artistID string) ([]domain.Album, error)
