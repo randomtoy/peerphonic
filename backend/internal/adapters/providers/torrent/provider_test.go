@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -110,11 +109,13 @@ func TestStreamingProviderReadsPersistedTorrentFileAndArtwork(t *testing.T) {
 	data := torrentBytes(t, info)
 	metadataRoot := t.TempDir()
 	dataRoot := t.TempDir()
-	provider, err := NewStreaming(metadataRoot, dataRoot, slog.Default())
+	provider, err := NewStreaming(metadataRoot, dataRoot)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer provider.Close()
+	completedFiles := make(chan CompletedFile, 1)
+	provider.SetCompletedHandler(func(file CompletedFile) { completedFiles <- file })
 	catalog, err := provider.ReadCatalog(bytes.NewReader(data))
 	if err != nil {
 		t.Fatal(err)
@@ -153,6 +154,15 @@ func TestStreamingProviderReadsPersistedTorrentFileAndArtwork(t *testing.T) {
 	if err != nil || !bytes.Equal(streamed, media) {
 		t.Fatalf("streamed %d bytes, err = %v", len(streamed), err)
 	}
+	select {
+	case completed := <-completedFiles:
+		if completed.TrackID != catalog.Tracks[0].Track.ID ||
+			completed.Path != filepath.Join(targetRoot, "01 Song.mp3") {
+			t.Fatalf("completed file = %#v", completed)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("completed file callback was not called")
+	}
 	ranged, err := provider.Resolve(ctx, catalog.Tracks[0].Ref)
 	if err != nil {
 		t.Fatal(err)
@@ -167,6 +177,11 @@ func TestStreamingProviderReadsPersistedTorrentFileAndArtwork(t *testing.T) {
 	ranged.Content.Close()
 	if !bytes.Equal(buffer, media[11:27]) {
 		t.Fatalf("range bytes = %q, want %q", buffer, media[11:27])
+	}
+	select {
+	case completed := <-completedFiles:
+		t.Fatalf("range read completed file = %#v", completed)
+	case <-time.After(50 * time.Millisecond):
 	}
 	cover, err := provider.OpenArtwork(ctx, catalog.Tracks[0].Track.CoverArtID)
 	if err != nil {

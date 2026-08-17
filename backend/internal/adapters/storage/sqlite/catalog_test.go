@@ -144,6 +144,59 @@ func TestCatalogRetainsAlbumAliasesAcrossMetadataChanges(t *testing.T) {
 	}
 }
 
+func TestCatalogUpdatesTrackMetadataWithoutReplacingSources(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	catalog, err := Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close()
+
+	track := domain.Track{
+		ID: "remote-track", Title: "01 Song", Artist: "Unknown", ArtistID: "artist-old",
+		Album: "Folder", AlbumID: "album-old", AlbumArtist: "Unknown",
+	}
+	ref := domain.SourceRef{Provider: "torrent", Key: "hash/01 Song.mp3"}
+	if err := catalog.ReplaceProviderTracks(ctx, "torrent", []domain.TrackSource{{
+		Track: track, Ref: ref,
+	}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	track.Title = "Tagged Song"
+	track.Artist = "Tagged Artist"
+	track.ArtistID = "artist-new"
+	track.Album = "Tagged Album"
+	track.AlbumID = "album-new"
+	track.AlbumArtist = "Tagged Artist"
+	track.AlbumArtistID = "artist-new"
+	track.Duration = 3 * time.Minute
+	track.BitRate = 320
+	if err := catalog.UpdateTrack(ctx, track); err != nil {
+		t.Fatal(err)
+	}
+
+	updated, err := catalog.Track(ctx, track.ID)
+	if err != nil || updated.Title != "Tagged Song" || updated.Duration != 3*time.Minute ||
+		updated.BitRate != 320 {
+		t.Fatalf("Track() = %#v, %v", updated, err)
+	}
+	sources, err := catalog.Sources(ctx, track.ID)
+	if err != nil || len(sources) != 1 || sources[0] != ref {
+		t.Fatalf("Sources() = %#v, %v", sources, err)
+	}
+	for _, albumID := range []string{"album-old", "album-new"} {
+		tracks, err := catalog.TracksByAlbum(ctx, albumID)
+		if err != nil || len(tracks) != 1 || tracks[0].AlbumID != "album-new" {
+			t.Fatalf("TracksByAlbum(%q) = %#v, %v", albumID, tracks, err)
+		}
+	}
+	if err := catalog.UpdateTrack(ctx, domain.Track{ID: "missing"}); !errors.Is(err, ports.ErrNotFound) {
+		t.Fatalf("UpdateTrack(missing) error = %v, want ErrNotFound", err)
+	}
+}
+
 func TestCatalogKeepsTrackUntilItsLastSourceIsRemoved(t *testing.T) {
 	t.Parallel()
 

@@ -41,13 +41,23 @@ const streamReadahead = 8 << 20
 type Provider struct {
 	metadataRoot string
 	dataRoot     string
-	logger       *slog.Logger
 
 	clientMu sync.Mutex
 	client   *torrentclient.Client
 
 	artworkMu sync.RWMutex
 	artworks  map[string]domain.SourceRef
+
+	completionMu sync.Mutex
+	completionWG sync.WaitGroup
+	trackIDs     map[string]string
+	onCompleted  func(CompletedFile)
+	closing      bool
+}
+
+type CompletedFile struct {
+	TrackID string
+	Path    string
 }
 
 type Catalog struct {
@@ -64,12 +74,15 @@ type catalogFile struct {
 }
 
 func New() *Provider {
-	return &Provider{artworks: make(map[string]domain.SourceRef)}
+	return &Provider{
+		artworks: make(map[string]domain.SourceRef),
+		trackIDs: make(map[string]string),
+	}
 }
 
 // NewStreaming configures a provider that joins a swarm only when media or
 // artwork is opened. Downloaded pieces are persisted under dataRoot.
-func NewStreaming(metadataRoot, dataRoot string, logger *slog.Logger) (*Provider, error) {
+func NewStreaming(metadataRoot, dataRoot string) (*Provider, error) {
 	metadataRoot, err := filepath.Abs(metadataRoot)
 	if err != nil {
 		return nil, fmt.Errorf("resolve torrent metadata directory: %w", err)
@@ -81,7 +94,6 @@ func NewStreaming(metadataRoot, dataRoot string, logger *slog.Logger) (*Provider
 	provider := New()
 	provider.metadataRoot = metadataRoot
 	provider.dataRoot = dataRoot
-	provider.logger = logger
 	return provider, nil
 }
 
@@ -108,15 +120,45 @@ func (p *Provider) OpenArtwork(ctx context.Context, id string) (ports.ResolvedSo
 	return p.open(ctx, ref)
 }
 
+func (p *Provider) SetCompletedHandler(handler func(CompletedFile)) {
+	p.completionMu.Lock()
+	p.onCompleted = handler
+	p.completionMu.Unlock()
+}
+
+// CachedPath returns a fully materialized file without starting the torrent
+// client. Incomplete files remain provider-owned .part data and are ignored.
+func (p *Provider) CachedPath(ref domain.SourceRef, expectedSize int64) (string, bool) {
+	if ref.Provider != Name {
+		return "", false
+	}
+	_, logicalPath, err := parseSourceKey(ref.Key)
+	if err != nil {
+		return "", false
+	}
+	mediaPath := filepath.Join(p.dataRoot, filepath.FromSlash(logicalPath))
+	info, err := os.Stat(mediaPath)
+	if err != nil || !info.Mode().IsRegular() || (expectedSize > 0 && info.Size() != expectedSize) {
+		return "", false
+	}
+	return mediaPath, true
+}
+
 func (p *Provider) Close() error {
+	p.completionMu.Lock()
+	p.closing = true
+	p.completionMu.Unlock()
 	p.clientMu.Lock()
 	client := p.client
 	p.client = nil
 	p.clientMu.Unlock()
 	if client == nil {
+		p.completionWG.Wait()
 		return nil
 	}
-	return errors.Join(client.Close()...)
+	err := errors.Join(client.Close()...)
+	p.completionWG.Wait()
+	return err
 }
 
 func (p *Provider) ReadCatalog(reader io.Reader) (Catalog, error) {
@@ -157,6 +199,7 @@ func (p *Provider) ReadCatalog(reader io.Reader) (Catalog, error) {
 	}
 	for _, file := range audioFiles {
 		track := makeTrack(infoHash, file.parts, file.length, file.extension, file.contentType)
+		p.registerTrack(track.Ref.Key, track.Track.ID)
 		if artwork, ok := bestArtwork(file.parts, artworkFiles); ok {
 			logicalPath := strings.Join(artwork.parts, "/")
 			id := domain.StableID("torrentart", infoHash, logicalPath)
@@ -198,8 +241,15 @@ func (p *Provider) open(ctx context.Context, ref domain.SourceRef) (ports.Resolv
 		reader.SetContext(ctx)
 		reader.SetReadahead(streamReadahead)
 		return ports.ResolvedSource{
-			Content: &boundedReader{ReadSeekCloser: reader, length: file.Length()},
-			Name:    path.Base(logicalPath), ContentType: contentType(logicalPath),
+			Content: &boundedReader{
+				ReadSeekCloser: reader,
+				length:         file.Length(),
+				contiguous:     true,
+				onComplete: func() {
+					p.notifyCompleted(ref, logicalPath)
+				},
+			},
+			Name: path.Base(logicalPath), ContentType: contentType(logicalPath),
 			Size: file.Length(), ModTime: time.Time{},
 		}, nil
 	}
@@ -222,7 +272,7 @@ func (p *Provider) ensureClient() (*torrentclient.Client, error) {
 	config.DataDir = p.dataRoot
 	config.ListenPort = 0
 	config.NoDefaultPortForwarding = true
-	config.Slogger = p.logger
+	config.Slogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	client, err := torrentclient.NewClient(config)
 	if err != nil {
 		return nil, fmt.Errorf("start torrent client: %w", err)
@@ -257,6 +307,32 @@ func (p *Provider) registerArtwork(id string, ref domain.SourceRef) {
 	p.artworkMu.Lock()
 	p.artworks[id] = ref
 	p.artworkMu.Unlock()
+}
+
+func (p *Provider) registerTrack(sourceKey, trackID string) {
+	p.completionMu.Lock()
+	p.trackIDs[sourceKey] = trackID
+	p.completionMu.Unlock()
+}
+
+func (p *Provider) notifyCompleted(ref domain.SourceRef, logicalPath string) {
+	p.completionMu.Lock()
+	trackID := p.trackIDs[ref.Key]
+	handler := p.onCompleted
+	if trackID == "" || handler == nil || p.closing {
+		p.completionMu.Unlock()
+		return
+	}
+	p.completionWG.Add(1)
+	p.completionMu.Unlock()
+	file := CompletedFile{
+		TrackID: trackID,
+		Path:    filepath.Join(p.dataRoot, filepath.FromSlash(logicalPath)),
+	}
+	go func() {
+		defer p.completionWG.Done()
+		handler(file)
+	}()
 }
 
 func bestArtwork(audioParts []string, candidates []catalogFile) (catalogFile, bool) {
@@ -306,8 +382,12 @@ func torrentArtworkPriority(name string) int {
 // exposed past the selected file's logical end.
 type boundedReader struct {
 	ports.ReadSeekCloser
-	position int64
-	length   int64
+	position    int64
+	length      int64
+	readStarted bool
+	contiguous  bool
+	completed   bool
+	onComplete  func()
 }
 
 func (r *boundedReader) Read(buffer []byte) (int, error) {
@@ -319,7 +399,12 @@ func (r *boundedReader) Read(buffer []byte) (int, error) {
 		buffer = buffer[:remaining]
 	}
 	read, err := r.ReadSeekCloser.Read(buffer)
+	r.readStarted = r.readStarted || read > 0
 	r.position += int64(read)
+	if r.position >= r.length && r.contiguous && !r.completed && r.onComplete != nil {
+		r.completed = true
+		r.onComplete()
+	}
 	if err == nil && r.position >= r.length {
 		err = io.EOF
 	}
@@ -327,9 +412,15 @@ func (r *boundedReader) Read(buffer []byte) (int, error) {
 }
 
 func (r *boundedReader) Seek(offset int64, whence int) (int64, error) {
+	previous := r.position
 	position, err := r.ReadSeekCloser.Seek(offset, whence)
 	if err == nil {
 		r.position = position
+		if !r.readStarted {
+			r.contiguous = position == 0
+		} else if position != previous {
+			r.contiguous = false
+		}
 	}
 	return position, err
 }

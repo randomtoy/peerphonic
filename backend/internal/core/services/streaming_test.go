@@ -21,6 +21,7 @@ func (c catalogStub) ReplaceProviderTracks(context.Context, string, []domain.Tra
 	return nil
 }
 func (c catalogStub) Track(context.Context, string) (domain.Track, error) { return c.track, nil }
+func (c catalogStub) UpdateTrack(context.Context, domain.Track) error     { return nil }
 func (c catalogStub) Sources(context.Context, string) ([]domain.SourceRef, error) {
 	return c.sources, c.sourcesErr
 }

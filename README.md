@@ -17,6 +17,7 @@ changing the client-facing streaming flow.
 - shared media cache with a size limit, LRU eviction, and pinned entries;
 - `.torrent` catalog import with on-demand, seekable track streaming;
 - on-demand album artwork from image files included in torrents;
+- background tag enrichment after a torrent track has been streamed completely;
 - a small Peerphonic health endpoint at `/api/v1/health`.
 
 The implemented OpenSubsonic endpoints are:
@@ -122,6 +123,12 @@ track or cover request. The reader prioritizes only the requested byte range and
 a small readahead window, so OpenSubsonic clients can begin playback while the
 selected track is downloading. Downloaded pieces are reused from
 `cache_dir/torrents` on later requests.
+
+After a track has been read completely from start to finish, Peerphonic inspects
+the materialized cache file in the background and updates its title, track/disc
+number, year, bitrate, duration where supported, and embedded artwork. Short
+range requests and seeks do not mark a track as complete. Album identity remains
+stable while individual tracks are enriched so existing client links keep working.
 
 Torrent metadata can also be uploaded with the Peerphonic API using the same
 credentials as OpenSubsonic:

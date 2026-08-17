@@ -46,7 +46,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		return fail(err)
 	}
 	torrentProvider, err = torrentprovider.NewStreaming(
-		cfg.TorrentDir, filepath.Join(cfg.CacheDir, "torrents"), logger,
+		cfg.TorrentDir, filepath.Join(cfg.CacheDir, "torrents"),
 	)
 	if err != nil {
 		return fail(err)
@@ -56,6 +56,14 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		return fail(err)
 	}
 	artwork := services.NewArtworkService(blobs, torrentProvider)
+	torrentEnricher := torrentscanner.NewEnricher(catalog, metadata.TagExtractor{}, artwork)
+	torrentProvider.SetCompletedHandler(func(file torrentprovider.CompletedFile) {
+		if err := torrentEnricher.Enrich(ctx, file.TrackID, file.Path); err != nil {
+			logger.Warn("torrent metadata enrichment failed", "track", file.TrackID, "error", err)
+			return
+		}
+		logger.Info("torrent metadata enriched", "track", file.TrackID)
+	})
 	mediaCache, err := services.NewMediaCache(blobs, catalog, cfg.CacheSizeBytes)
 	if err != nil {
 		return fail(err)
@@ -64,7 +72,9 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		return fail(fmt.Errorf("prune media cache: %w", err))
 	}
 	localScanner := scanner.New(cfg.MusicDir, catalog, metadata.TagExtractor{}, artwork)
-	torrentScanner := torrentscanner.New(cfg.TorrentDir, catalog, torrentProvider)
+	torrentScanner := torrentscanner.NewWithEnrichment(
+		cfg.TorrentDir, catalog, torrentProvider, metadata.TagExtractor{}, artwork,
+	)
 	scanManager := scanner.NewManager(ctx, scanner.NewGroup(localScanner, torrentScanner))
 	torrentImporter := torrentscanner.NewImporter(cfg.TorrentDir, torrentProvider, scanManager)
 	if cfg.Scan {

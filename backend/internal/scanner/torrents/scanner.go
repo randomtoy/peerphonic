@@ -15,13 +15,27 @@ import (
 )
 
 type Scanner struct {
-	root     string
-	catalog  ports.Catalog
-	provider *torrentprovider.Provider
+	root      string
+	catalog   ports.Catalog
+	provider  *torrentprovider.Provider
+	extractor metadataExtractor
+	artwork   scanner.ArtworkWriter
 }
 
 func New(root string, catalog ports.Catalog, provider *torrentprovider.Provider) *Scanner {
 	return &Scanner{root: root, catalog: catalog, provider: provider}
+}
+
+func NewWithEnrichment(
+	root string,
+	catalog ports.Catalog,
+	provider *torrentprovider.Provider,
+	extractor metadataExtractor,
+	artwork scanner.ArtworkWriter,
+) *Scanner {
+	return &Scanner{
+		root: root, catalog: catalog, provider: provider, extractor: extractor, artwork: artwork,
+	}
 }
 
 func (s *Scanner) Scan(ctx context.Context) (scanner.Report, error) {
@@ -64,6 +78,13 @@ func (s *Scanner) Scan(ctx context.Context) (scanner.Report, error) {
 				continue
 			}
 			seen[track.Ref.Key] = struct{}{}
+			if s.extractor != nil {
+				if cachedPath, ok := s.provider.CachedPath(track.Ref, track.Track.Size); ok {
+					if err := enrichTrack(ctx, &track.Track, cachedPath, s.extractor, s.artwork); err != nil {
+						warnings = append(warnings, scanner.Warning{Path: cachedPath, Err: err})
+					}
+				}
+			}
 			tracks = append(tracks, track)
 		}
 		return nil

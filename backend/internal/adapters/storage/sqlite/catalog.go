@@ -340,6 +340,50 @@ func (c *Catalog) Artist(ctx context.Context, id string) (domain.Artist, error) 
 	return artist, nil
 }
 
+func (c *Catalog) UpdateTrack(ctx context.Context, track domain.Track) error {
+	tx, err := c.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin track update: %w", err)
+	}
+	defer tx.Rollback()
+
+	var previousAlbumID string
+	if err := tx.QueryRowContext(ctx, "SELECT album_id FROM tracks WHERE id = ?", track.ID).
+		Scan(&previousAlbumID); errors.Is(err, sql.ErrNoRows) {
+		return ports.ErrNotFound
+	} else if err != nil {
+		return fmt.Errorf("query track before update: %w", err)
+	}
+	albumArtistID := track.AlbumArtistID
+	if albumArtistID == "" {
+		albumArtistID = track.ArtistID
+	}
+	if _, err := tx.ExecContext(ctx, `UPDATE tracks SET
+		title = ?, artist = ?, artist_id = ?, album = ?, album_id = ?,
+		album_artist = ?, album_artist_id = ?, track_number = ?, disc_number = ?,
+		year = ?, duration_ms = ?, size_bytes = ?, bit_rate = ?, suffix = ?,
+		content_type = ?, cover_art_id = ? WHERE id = ?`,
+		track.Title, track.Artist, track.ArtistID, track.Album, track.AlbumID,
+		track.AlbumArtist, albumArtistID, track.TrackNumber, track.DiscNumber,
+		track.Year, track.Duration.Milliseconds(), track.Size, track.BitRate,
+		track.Suffix, track.ContentType, track.CoverArtID, track.ID,
+	); err != nil {
+		return fmt.Errorf("update track %q: %w", track.ID, err)
+	}
+	if previousAlbumID != "" && previousAlbumID != track.AlbumID {
+		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO album_alias_tracks (
+			provider, alias_id, track_id
+		) SELECT provider, ?, track_id FROM track_sources WHERE track_id = ?`,
+			previousAlbumID, track.ID); err != nil {
+			return fmt.Errorf("preserve previous album for track %q: %w", track.ID, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit track update: %w", err)
+	}
+	return nil
+}
+
 func (c *Catalog) Albums(ctx context.Context, offset, limit int) ([]domain.Album, error) {
 	rows, err := c.db.QueryContext(ctx, `SELECT album_id, album, album_artist, album_artist_id,
 		MIN(NULLIF(year, 0)), COUNT(*), SUM(duration_ms), MIN(NULLIF(cover_art_id, ''))

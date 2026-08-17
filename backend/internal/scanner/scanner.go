@@ -173,6 +173,20 @@ func changedAlbumAliases(tracks []domain.TrackSource, originalAlbumIDs map[strin
 }
 
 func makeTrack(key string, metadata Metadata) domain.TrackSource {
+	track := domain.Track{
+		ID:    domain.StableID("track", LocalProvider, key),
+		Title: strings.TrimSuffix(filepath.Base(key), filepath.Ext(key)),
+	}
+	ApplyMetadata(&track, metadata)
+	return domain.TrackSource{
+		Track: track,
+		Ref:   domain.SourceRef{Provider: LocalProvider, Key: key},
+	}
+}
+
+// ApplyMetadata enriches an existing logical track without changing its stable
+// identity or source references.
+func ApplyMetadata(track *domain.Track, metadata Metadata) {
 	albumArtistName := strings.TrimSpace(metadata.AlbumArtist)
 	if albumArtistName == "" {
 		albumArtistName = strings.TrimSpace(metadata.Artist)
@@ -190,32 +204,26 @@ func makeTrack(key string, metadata Metadata) domain.TrackSource {
 	}
 	title := strings.TrimSpace(metadata.Title)
 	if title == "" {
-		title = strings.TrimSuffix(filepath.Base(key), filepath.Ext(key))
+		title = track.Title
 	}
 	trackArtistID := domain.StableID("artist", strings.ToLower(trackArtist))
 	albumArtistID := domain.StableID("artist", strings.ToLower(albumArtistName))
 	albumID := domain.StableID("album", albumArtistID, strings.ToLower(albumName))
-	return domain.TrackSource{
-		Track: domain.Track{
-			ID:            domain.StableID("track", LocalProvider, key),
-			Title:         title,
-			Artist:        trackArtist,
-			ArtistID:      trackArtistID,
-			Album:         albumName,
-			AlbumID:       albumID,
-			AlbumArtist:   albumArtistName,
-			AlbumArtistID: albumArtistID,
-			TrackNumber:   metadata.TrackNumber,
-			DiscNumber:    metadata.DiscNumber,
-			Year:          metadata.Year,
-			Duration:      metadata.Duration,
-			Size:          metadata.Size,
-			BitRate:       metadata.BitRate,
-			Suffix:        metadata.Suffix,
-			ContentType:   metadata.ContentType,
-		},
-		Ref: domain.SourceRef{Provider: LocalProvider, Key: key},
-	}
+	track.Title = title
+	track.Artist = trackArtist
+	track.ArtistID = trackArtistID
+	track.Album = albumName
+	track.AlbumID = albumID
+	track.AlbumArtist = albumArtistName
+	track.AlbumArtistID = albumArtistID
+	track.TrackNumber = metadata.TrackNumber
+	track.DiscNumber = metadata.DiscNumber
+	track.Year = metadata.Year
+	track.Duration = metadata.Duration
+	track.Size = metadata.Size
+	track.BitRate = metadata.BitRate
+	track.Suffix = metadata.Suffix
+	track.ContentType = metadata.ContentType
 }
 
 func normalizeCompilationAlbums(tracks []domain.TrackSource, explicitAlbumArtists map[string]bool) {
