@@ -7,7 +7,8 @@ changing the client-facing streaming flow.
 
 ## Current capabilities
 
-- recursive scanning of MP3, FLAC, Ogg/Opus, M4A, AAC, and WAV files;
+- recursive scanning and original-format streaming of MP3, FLAC, Ogg/Vorbis, Opus,
+  AAC, M4A/ALAC, WAV, AIFF, WMA, APE, WavPack, and Musepack files;
 - periodic background synchronization of local music and torrent metadata;
 - tag extraction with directory/filename fallbacks and conservative repair of legacy Cyrillic encodings;
 - a migrated SQLite metadata catalog;
@@ -118,6 +119,9 @@ granted these independently:
 | `dashboard.access` | Sign in to the administration dashboard |
 | `monitoring.view` | View cache usage, selected-track downloads, peers, and transfers |
 | `sources.manage` | Add, pause, pin, and remove torrent sources; scan the library; change torrent limits |
+| `soulseek.search` | Search and preview Soulseek results in the dashboard |
+| `soulseek.add` | Add individual Soulseek tracks or albums from the dashboard |
+| `soulseek.client-search` | Include playable Soulseek results after local results in OpenSubsonic searches |
 | `users.manage` | Create, reset, and remove regular user accounts |
 
 Only administrators can assign capabilities, create administrators, or manage
@@ -213,6 +217,16 @@ the file again.
 Search responses also group matches from the same peer and remote directory into
 album candidates while retaining every matched track for individual selection.
 Locked files and copies from different peers remain separate candidates.
+
+Users granted `soulseek.client-search` receive local catalog matches first in
+OpenSubsonic `search2` and `search3` responses. Soulseek fills any remaining song
+slots, and duplicate artist/album/title matches are removed. These remote matches
+remain temporary and do not appear in the shared library until the user starts
+playback. The first `stream` request persists the selected source and then follows
+the normal buffered Soulseek download and cache path. A Soulseek outage does not
+make local OpenSubsonic search fail. `sources.manage` retains the dashboard search
+and add capabilities for compatibility, but it does not implicitly enable network
+searches from music clients.
 
 When a Soulseek file completes, Peerphonic extracts its audio tags and embedded
 artwork through the same metadata boundary used for completed torrent tracks.
