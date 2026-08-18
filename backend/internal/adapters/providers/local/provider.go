@@ -57,6 +57,7 @@ func (p *Provider) Resolve(_ context.Context, _ string, ref domain.SourceRef) (p
 	return ports.ResolvedSource{
 		Content: file, Name: info.Name(), ContentType: format.ContentType,
 		Size: info.Size(), ModTime: info.ModTime(),
+		Revision: fmt.Sprintf("%s:%d:%d", ref.Key, info.Size(), info.ModTime().UnixNano()),
 	}, nil
 }
 

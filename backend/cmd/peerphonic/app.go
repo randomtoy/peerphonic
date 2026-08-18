@@ -207,7 +207,9 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		if ffmpegErr != nil {
 			logger.Warn("audio transcoding is unavailable", "error", ffmpegErr)
 		} else {
-			transcoder = ffmpeg
+			cachedTranscoder := services.NewCachedAudioTranscoder(ffmpeg, mediaCache)
+			transcoder = cachedTranscoder
+			downloadMonitors = append(downloadMonitors, cachedTranscoder)
 		}
 	}
 	downloadService := services.NewDownloadService(downloadMonitors...)

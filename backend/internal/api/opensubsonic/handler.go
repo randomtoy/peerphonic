@@ -905,7 +905,7 @@ func (h *Handler) serveTranscodedTrack(
 		}
 	}
 	transcoded, err := h.transcoder.Transcode(request.Context(), resolved, ports.AudioTranscodeOptions{
-		Format: "mp3", BitRate: bitRate,
+		TrackID: request.Form.Get("id"), Format: "mp3", BitRate: bitRate,
 	})
 	if err != nil {
 		_ = resolved.Content.Close()
@@ -918,6 +918,10 @@ func (h *Handler) serveTranscodedTrack(
 		writer.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{
 			"filename": transcoded.Name,
 		}))
+	}
+	if seekable, ok := transcoded.Content.(ports.ReadSeekCloser); ok && transcoded.Cached {
+		http.ServeContent(writer, request, transcoded.Name, transcoded.ModTime, seekable)
+		return
 	}
 	writer.WriteHeader(http.StatusOK)
 	if request.Method != http.MethodHead {

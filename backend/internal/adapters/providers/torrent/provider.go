@@ -649,7 +649,7 @@ func (p *Provider) open(ctx context.Context, ref domain.SourceRef) (ports.Resolv
 				onClose: func() { p.releaseStream(infoHash) },
 			},
 			Name: path.Base(logicalPath), ContentType: contentType(logicalPath),
-			Size: file.Length(), ModTime: time.Time{},
+			Size: file.Length(), ModTime: time.Time{}, Revision: ref.Key,
 		}, nil
 	}
 	return ports.ResolvedSource{}, fmt.Errorf("%w: torrent file %q is missing", ports.ErrSourceUnavailable, logicalPath)

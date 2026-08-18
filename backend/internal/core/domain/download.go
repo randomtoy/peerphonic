@@ -5,8 +5,10 @@ import "time"
 type DownloadState string
 
 const (
+	DownloadStateWaiting     DownloadState = "waiting"
 	DownloadStateQueued      DownloadState = "queued"
 	DownloadStateDownloading DownloadState = "downloading"
+	DownloadStateTranscoding DownloadState = "transcoding"
 	DownloadStateCached      DownloadState = "cached"
 	DownloadStateFailed      DownloadState = "failed"
 	DownloadStateCancelled   DownloadState = "cancelled"

@@ -33,9 +33,6 @@ func NewMediaCache(blobs ports.BlobStore, metadata ports.CacheMetadataStore, max
 }
 
 func (c *MediaCache) Put(ctx context.Context, key string, source io.Reader, pinned bool) error {
-	c.operation.Lock()
-	defer c.operation.Unlock()
-
 	if !validCacheKey(key) {
 		return fmt.Errorf("invalid media cache key %q", key)
 	}
@@ -43,6 +40,9 @@ func (c *MediaCache) Put(ctx context.Context, key string, source io.Reader, pinn
 	if err := c.blobs.Put(ctx, mediaCacheBlobKey(key), counter); err != nil {
 		return fmt.Errorf("store cached media %q: %w", key, err)
 	}
+
+	c.operation.Lock()
+	defer c.operation.Unlock()
 	entry := domain.CacheEntry{
 		Key: key, Size: counter.bytes, LastAccessed: c.now().UTC(), Pinned: pinned,
 	}

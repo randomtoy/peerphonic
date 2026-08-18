@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
 )
 
@@ -46,6 +47,9 @@ func (s *StreamingService) Open(ctx context.Context, trackID string) (ports.Reso
 		}
 		stream, err := provider.Resolve(ctx, trackID, source)
 		if err == nil {
+			if stream.Revision == "" {
+				stream.Revision = domain.StableID("source", source.Provider, source.Key)
+			}
 			return stream, nil
 		}
 		if ctx.Err() != nil {

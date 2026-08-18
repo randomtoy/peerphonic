@@ -23,9 +23,11 @@ type ResolvedSource struct {
 	ContentType string
 	Size        int64
 	ModTime     time.Time
+	Revision    string
 }
 
 type AudioTranscodeOptions struct {
+	TrackID string
 	Format  string
 	BitRate int
 }
@@ -34,6 +36,9 @@ type TranscodedSource struct {
 	Content     io.ReadCloser
 	Name        string
 	ContentType string
+	Size        int64
+	ModTime     time.Time
+	Cached      bool
 }
 
 // AudioTranscoder converts a resolved source while it is being read. The
