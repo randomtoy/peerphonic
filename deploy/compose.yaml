@@ -16,6 +16,8 @@ services:
       PEERPHONIC_TORRENT_PORT: "${PEERPHONIC_TORRENT_PORT:-42069}"
       PEERPHONIC_SLSKD_URL: "${PEERPHONIC_SLSKD_URL:-}"
       PEERPHONIC_SLSKD_API_KEY: "${PEERPHONIC_SLSKD_API_KEY:-}"
+      PEERPHONIC_SLSKD_DOWNLOADS_DIR: "/data/cache/soulseek/downloads"
+      PEERPHONIC_SLSKD_INCOMPLETE_DIR: "/data/cache/soulseek/incomplete"
     restart: unless-stopped
   web:
     build:

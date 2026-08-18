@@ -17,8 +17,10 @@ workspace. The Settings workspace changes aggregate torrent upload and download
 limits at runtime and persists them in the metadata database. It also reports
 whether an optional slskd API is configured, reachable, and authenticated
 without exposing the API key to the browser. The Search workspace queries
-connected Soulseek peers and shows audio files, queues, upload speeds, and free
-slots without downloading or importing the results.
+connected Soulseek peers, shows audio files, queues, upload speeds, and free
+slots, and lets an authorized user add an unlocked result to the library without
+starting the download. Playback later starts the single-file transfer and reuses
+the completed file from the shared cache.
 
 For local frontend work, serve this directory through a web server that proxies
 the API paths to the backend. Opening `index.html` directly does not provide an

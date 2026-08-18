@@ -149,6 +149,8 @@ then CLI flags.
 | `slskd_url` | `PEERPHONIC_SLSKD_URL` | `--slskd-url` | disabled |
 | `slskd_api_key` | `PEERPHONIC_SLSKD_API_KEY` | — | empty |
 | `slskd_timeout_seconds` | `PEERPHONIC_SLSKD_TIMEOUT_SECONDS` | `--slskd-timeout` | `5` |
+| `slskd_downloads_dir` | `PEERPHONIC_SLSKD_DOWNLOADS_DIR` | `--slskd-downloads` | `<cache>/soulseek/downloads` |
+| `slskd_incomplete_dir` | `PEERPHONIC_SLSKD_INCOMPLETE_DIR` | `--slskd-incomplete` | `<cache>/soulseek/incomplete` |
 
 Use a config file with `--config peerphonic.json` or set its path through
 `PEERPHONIC_CONFIG`. See [`backend/config.example.json`](backend/config.example.json).
@@ -180,6 +182,8 @@ curl -u admin:admin http://localhost:8080/api/v1/providers/soulseek/status
 curl -u admin:admin -X POST -H 'Content-Type: application/json' \
   -d '{"query":"Massive Attack Mezzanine","limit":50}' \
   http://localhost:8080/api/v1/providers/soulseek/search
+curl -u admin:admin -X POST \
+  http://localhost:8080/api/v1/providers/soulseek/tracks/SEARCH_RESULT_ID
 ```
 
 Library scans started through the Peerphonic API run in the background. Their
@@ -190,10 +194,17 @@ To prepare Soulseek integration, configure the slskd base URL and an API key
 with read/write access. Peerphonic authenticates with the `X-API-Key` header and
 uses slskd's `/api/v0/session` endpoint for readiness checks. Prefer HTTPS or a
 private container/Kubernetes network because the API key is a long-lived
-secret. Peerphonic can search the Soulseek network and returns generic track and
-availability metadata without exposing slskd response types. Search does not
-download or add results to the library yet; selecting and resolving one remote
-track is the next provider capability.
+secret. Peerphonic can search the Soulseek network, add a selected result to the
+catalog without downloading it, and enqueue only that file when an OpenSubsonic
+client starts playback. Reads follow slskd's growing incomplete file so clients
+can buffer before the complete download has finished. Completed files remain in
+the downloads directory and are reused by later playback requests.
+
+Peerphonic and slskd must see the same completed and incomplete storage. For a
+native installation, configure slskd's `SLSKD_DOWNLOADS_DIR` and
+`SLSKD_INCOMPLETE_DIR` to the two Peerphonic directories above. In containers or
+Kubernetes, mount the same volume into both services; the absolute mount paths
+may differ, but each pair must point at the same directory on that volume.
 
 ## Architecture
 

@@ -26,6 +26,8 @@ func TestLoadPrecedence(t *testing.T) {
 		"PEERPHONIC_SLSKD_URL":                               "http://slskd-env:5030",
 		"PEERPHONIC_SLSKD_API_KEY":                           "0123456789abcdef",
 		"PEERPHONIC_SLSKD_TIMEOUT_SECONDS":                   "7",
+		"PEERPHONIC_SLSKD_DOWNLOADS_DIR":                     filepath.Join(dir, "env-downloads"),
+		"PEERPHONIC_SLSKD_INCOMPLETE_DIR":                    filepath.Join(dir, "env-incomplete"),
 	}
 	lookup := func(key string) (string, bool) { value, ok := env[key]; return value, ok }
 
@@ -41,6 +43,7 @@ func TestLoadPrecedence(t *testing.T) {
 		"--scan-interval", "120",
 		"--slskd-url", "http://slskd-flag:5030",
 		"--slskd-timeout", "9",
+		"--slskd-downloads", filepath.Join(dir, "flag-downloads"),
 	}, lookup)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -71,6 +74,26 @@ func TestLoadPrecedence(t *testing.T) {
 	}
 	if cfg.SlskdURL != "http://slskd-flag:5030" || cfg.SlskdAPIKey != "0123456789abcdef" || cfg.SlskdTimeoutSeconds != 9 {
 		t.Errorf("slskd settings = URL %q, key %q, timeout %d", cfg.SlskdURL, cfg.SlskdAPIKey, cfg.SlskdTimeoutSeconds)
+	}
+	if cfg.SlskdDownloadsDir != filepath.Join(dir, "flag-downloads") ||
+		cfg.SlskdIncompleteDir != filepath.Join(dir, "env-incomplete") {
+		t.Errorf("slskd directories = downloads %q, incomplete %q", cfg.SlskdDownloadsDir, cfg.SlskdIncompleteDir)
+	}
+}
+
+func TestLoadDerivesSlskdDirectoriesFromCache(t *testing.T) {
+	t.Parallel()
+
+	cache := filepath.Join(t.TempDir(), "cache")
+	cfg, err := Load([]string{"--music", t.TempDir(), "--cache", cache}, func(string) (string, bool) {
+		return "", false
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.SlskdDownloadsDir != filepath.Join(cache, "soulseek", "downloads") ||
+		cfg.SlskdIncompleteDir != filepath.Join(cache, "soulseek", "incomplete") {
+		t.Fatalf("slskd directories = downloads %q, incomplete %q", cfg.SlskdDownloadsDir, cfg.SlskdIncompleteDir)
 	}
 }
 

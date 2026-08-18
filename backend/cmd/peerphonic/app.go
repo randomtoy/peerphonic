@@ -81,6 +81,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	}
 	var soulseekMonitor ports.ProviderStatusMonitor
 	var soulseekSearch ports.SourceSearcher
+	var soulseekStreaming ports.SourceProvider
 	if cfg.SlskdURL != "" {
 		soulseekClient, clientErr := soulseekprovider.NewSlskd(
 			cfg.SlskdURL, cfg.SlskdAPIKey, time.Duration(cfg.SlskdTimeoutSeconds)*time.Second,
@@ -88,8 +89,14 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		if clientErr != nil {
 			return fail(fmt.Errorf("initialize slskd client: %w", clientErr))
 		}
+		if clientErr := soulseekClient.SetMediaDirectories(
+			cfg.SlskdDownloadsDir, cfg.SlskdIncompleteDir,
+		); clientErr != nil {
+			return fail(fmt.Errorf("initialize slskd media directories: %w", clientErr))
+		}
 		soulseekMonitor = soulseekClient
 		soulseekSearch = services.NewDiscoveryService(soulseekClient, catalog)
+		soulseekStreaming = soulseekClient
 	}
 	blobs, err := filesystem.New(cfg.CacheDir)
 	if err != nil {
@@ -146,7 +153,11 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		logger.Warn("some torrent track downloads could not be resumed", "error", err)
 	}
 
-	streaming := services.NewStreamingService(catalog, provider, torrentProvider)
+	streamingProviders := []ports.SourceProvider{provider, torrentProvider}
+	if soulseekStreaming != nil {
+		streamingProviders = append(streamingProviders, soulseekStreaming)
+	}
+	streaming := services.NewStreamingService(catalog, streamingProviders...)
 	mux := http.NewServeMux()
 	mux.Handle("/rest/", opensubsonic.NewHandlerWithAuthenticator(
 		catalog, streaming, artwork, userService, scanManager,

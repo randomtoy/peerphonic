@@ -31,6 +31,8 @@ type Config struct {
 	SlskdURL              string `json:"slskd_url"`
 	SlskdAPIKey           string `json:"slskd_api_key"`
 	SlskdTimeoutSeconds   int    `json:"slskd_timeout_seconds"`
+	SlskdDownloadsDir     string `json:"slskd_downloads_dir"`
+	SlskdIncompleteDir    string `json:"slskd_incomplete_dir"`
 }
 
 func Defaults() Config {
@@ -89,6 +91,8 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	flags.IntVar(&cfg.ScanIntervalSeconds, "scan-interval", cfg.ScanIntervalSeconds, "background library scan interval in seconds (0 disables it)")
 	flags.StringVar(&cfg.SlskdURL, "slskd-url", cfg.SlskdURL, "slskd HTTP API base URL")
 	flags.IntVar(&cfg.SlskdTimeoutSeconds, "slskd-timeout", cfg.SlskdTimeoutSeconds, "slskd API timeout in seconds")
+	flags.StringVar(&cfg.SlskdDownloadsDir, "slskd-downloads", cfg.SlskdDownloadsDir, "shared slskd completed downloads directory")
+	flags.StringVar(&cfg.SlskdIncompleteDir, "slskd-incomplete", cfg.SlskdIncompleteDir, "shared slskd incomplete downloads directory")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -127,6 +131,16 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	if err != nil {
 		return Config{}, fmt.Errorf("resolve cache directory: %w", err)
 	}
+	if cfg.SlskdDownloadsDir == "" {
+		cfg.SlskdDownloadsDir = filepath.Join(cfg.CacheDir, "soulseek", "downloads")
+	} else if cfg.SlskdDownloadsDir, err = filepath.Abs(cfg.SlskdDownloadsDir); err != nil {
+		return Config{}, fmt.Errorf("resolve slskd downloads directory: %w", err)
+	}
+	if cfg.SlskdIncompleteDir == "" {
+		cfg.SlskdIncompleteDir = filepath.Join(cfg.CacheDir, "soulseek", "incomplete")
+	} else if cfg.SlskdIncompleteDir, err = filepath.Abs(cfg.SlskdIncompleteDir); err != nil {
+		return Config{}, fmt.Errorf("resolve slskd incomplete directory: %w", err)
+	}
 	cfg.TorrentDir, err = filepath.Abs(cfg.TorrentDir)
 	if err != nil {
 		return Config{}, fmt.Errorf("resolve torrent metadata directory: %w", err)
@@ -162,15 +176,17 @@ func readFile(path string, cfg *Config) error {
 
 func applyEnv(cfg *Config, lookup func(string) (string, bool)) error {
 	for key, target := range map[string]*string{
-		"PEERPHONIC_ADDRESS":       &cfg.Address,
-		"PEERPHONIC_MUSIC_DIR":     &cfg.MusicDir,
-		"PEERPHONIC_DATABASE":      &cfg.Database,
-		"PEERPHONIC_CACHE_DIR":     &cfg.CacheDir,
-		"PEERPHONIC_TORRENT_DIR":   &cfg.TorrentDir,
-		"PEERPHONIC_USERNAME":      &cfg.Username,
-		"PEERPHONIC_PASSWORD":      &cfg.Password,
-		"PEERPHONIC_SLSKD_URL":     &cfg.SlskdURL,
-		"PEERPHONIC_SLSKD_API_KEY": &cfg.SlskdAPIKey,
+		"PEERPHONIC_ADDRESS":              &cfg.Address,
+		"PEERPHONIC_MUSIC_DIR":            &cfg.MusicDir,
+		"PEERPHONIC_DATABASE":             &cfg.Database,
+		"PEERPHONIC_CACHE_DIR":            &cfg.CacheDir,
+		"PEERPHONIC_TORRENT_DIR":          &cfg.TorrentDir,
+		"PEERPHONIC_USERNAME":             &cfg.Username,
+		"PEERPHONIC_PASSWORD":             &cfg.Password,
+		"PEERPHONIC_SLSKD_URL":            &cfg.SlskdURL,
+		"PEERPHONIC_SLSKD_API_KEY":        &cfg.SlskdAPIKey,
+		"PEERPHONIC_SLSKD_DOWNLOADS_DIR":  &cfg.SlskdDownloadsDir,
+		"PEERPHONIC_SLSKD_INCOMPLETE_DIR": &cfg.SlskdIncompleteDir,
 	} {
 		if value, ok := lookup(key); ok {
 			*target = value

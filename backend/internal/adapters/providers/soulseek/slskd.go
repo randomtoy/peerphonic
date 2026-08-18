@@ -44,6 +44,7 @@ type Client struct {
 	endpoint   *url.URL
 	apiKey     string
 	httpClient *http.Client
+	downloads  *downloadCoordinator
 }
 
 func NewSlskd(endpoint, apiKey string, timeout time.Duration) (*Client, error) {
@@ -67,6 +68,15 @@ func NewSlskd(endpoint, apiKey string, timeout time.Duration) (*Client, error) {
 }
 
 func (c *Client) Name() string { return Name }
+
+func (c *Client) SetMediaDirectories(downloadsDir, incompleteDir string) error {
+	coordinator, err := newDownloadCoordinator(c, downloadsDir, incompleteDir)
+	if err != nil {
+		return err
+	}
+	c.downloads = coordinator
+	return nil
+}
 
 func (c *Client) ProviderStatus(ctx context.Context) domain.ProviderStatus {
 	status := domain.ProviderStatus{Provider: Name, Configured: true}
@@ -211,11 +221,9 @@ func mapSearchResults(responses []slskdSearchResponse, limit int) []domain.Track
 			displayPath := strings.ReplaceAll(file.Filename, "\\", "/")
 			title := strings.TrimSuffix(filepath.Base(displayPath), filepath.Ext(displayPath))
 			artist, album := provisionalArtistAlbum(displayPath)
-			refPayload, _ := json.Marshal(struct {
-				Peer string `json:"peer"`
-				Path string `json:"path"`
-				Size int64  `json:"size"`
-			}{Peer: response.Username, Path: file.Filename, Size: file.Size})
+			refPayload, _ := json.Marshal(remoteFileRef{
+				Peer: response.Username, Path: file.Filename, Size: file.Size,
+			})
 			track := domain.Track{
 				ID:    domain.StableID(Name, response.Username, file.Filename, strconv.FormatInt(file.Size, 10)),
 				Title: title, Artist: artist, ArtistID: domain.StableID("artist", artist),

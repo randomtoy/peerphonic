@@ -23,3 +23,7 @@ An existing slskd instance can be connected by setting
 `PEERPHONIC_SLSKD_URL` and `PEERPHONIC_SLSKD_API_KEY` before starting Compose.
 When both services run in the same Compose or Kubernetes network, use the
 internal service URL rather than publishing the slskd API to the internet.
+For playback, slskd must mount `deploy/data/cache/soulseek` and use its
+`downloads` and `incomplete` children as `SLSKD_DOWNLOADS_DIR` and
+`SLSKD_INCOMPLETE_DIR`. Peerphonic reads incomplete files from that shared
+storage while they grow and reuses completed downloads as its Soulseek cache.

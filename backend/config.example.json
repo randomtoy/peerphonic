@@ -16,5 +16,7 @@
   "scan_interval_seconds": 300,
   "slskd_url": "http://slskd:5030",
   "slskd_api_key": "replace-with-a-slskd-api-key",
-  "slskd_timeout_seconds": 5
+  "slskd_timeout_seconds": 5,
+  "slskd_downloads_dir": "/srv/peerphonic/cache/soulseek/downloads",
+  "slskd_incomplete_dir": "/srv/peerphonic/cache/soulseek/incomplete"
 }
