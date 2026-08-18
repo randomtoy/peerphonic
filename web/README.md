@@ -9,7 +9,9 @@ OpenSubsonic clients. The dashboard shows persistent selected-track downloads,
 live provider transfers, cache usage, torrent source controls, and forms for
 adding magnet links or `.torrent` files. Administrators can also create users,
 reset their passwords, remove accounts, and delegate individual dashboard,
-monitoring, source-management, and user-management capabilities.
+monitoring, source-management, and user-management capabilities. The workspace
+separates overview, source management, live activity, and user access into
+permission-aware navigation areas.
 
 For local frontend work, serve this directory through a web server that proxies
 the API paths to the backend. Opening `index.html` directly does not provide an

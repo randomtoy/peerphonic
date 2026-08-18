@@ -21,7 +21,7 @@
     </div>
   </header>
 
-  <main>
+  <main id="app-main">
     <section id="login-panel" class="login-panel" aria-labelledby="login-title">
       <div>
         <p class="eyebrow">SELF-HOSTED MUSIC</p>
@@ -36,72 +36,120 @@
       </form>
     </section>
 
-    <section id="dashboard" hidden>
-      <div class="hero">
-        <div><p class="eyebrow">SERVER OVERVIEW</p><h1>Library control room</h1></div>
-        <p id="updated-at" class="muted"></p>
+    <section id="dashboard" class="dashboard-shell" hidden>
+      <aside class="sidebar" aria-label="Dashboard navigation">
+        <nav class="sidebar-nav">
+          <p class="nav-label">Workspace</p>
+          <button class="nav-item" type="button" data-page="overview" aria-current="page">
+            <span class="nav-icon" aria-hidden="true">01</span>
+            <span><strong>Overview</strong><small>Server health</small></span>
+          </button>
+          <button class="nav-item" type="button" data-page="sources" data-required-permission="sources.manage">
+            <span class="nav-icon" aria-hidden="true">02</span>
+            <span><strong>Sources</strong><small>Import and manage</small></span>
+          </button>
+          <button class="nav-item" type="button" data-page="activity" data-required-permission="monitoring.view">
+            <span class="nav-icon" aria-hidden="true">03</span>
+            <span><strong>Activity</strong><small>Downloads and peers</small></span>
+          </button>
+          <button class="nav-item" type="button" data-page="users" data-required-permission="users.manage">
+            <span class="nav-icon" aria-hidden="true">04</span>
+            <span><strong>Users</strong><small>Accounts and access</small></span>
+          </button>
+        </nav>
+        <div class="account-card">
+          <span id="account-avatar" class="account-avatar" aria-hidden="true">A</span>
+          <span><strong id="account-name">—</strong><small id="account-role">—</small></span>
+        </div>
+      </aside>
+
+      <div class="workspace">
+        <header class="workspace-header">
+          <div>
+            <p id="page-eyebrow" class="eyebrow">CONTROL ROOM</p>
+            <h1 id="page-title">Server overview</h1>
+            <p id="page-description" class="page-description">A quick look at Peerphonic right now.</p>
+          </div>
+          <p id="updated-at" class="updated-at"></p>
+        </header>
+
+        <section class="dashboard-page" data-page-panel="overview" aria-labelledby="page-title">
+          <div id="summary" class="summary-grid" aria-live="polite"></div>
+          <div class="overview-note">
+            <span class="health-indicator" aria-hidden="true"></span>
+            <div><strong>Peerphonic is online</strong><p>Music clients can browse and stream available tracks.</p></div>
+          </div>
+        </section>
+
+        <section class="dashboard-page" data-page-panel="sources" hidden>
+          <section id="sources-section" class="panel" aria-labelledby="sources-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">LIBRARY SOURCES</p><h2 id="sources-title">Imported torrents</h2><p class="section-description">Pause, pin or remove sources already connected to the library.</p></div>
+              <span id="source-count" class="pill"></span>
+            </div>
+            <div id="sources" class="source-list"></div>
+          </section>
+
+          <section id="add-source-section" class="panel" aria-labelledby="add-source-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">ADD MUSIC</p><h2 id="add-source-title">Import a new source</h2><p class="section-description">Use a magnet link or upload a torrent file.</p></div>
+            </div>
+            <div class="import-grid">
+              <form id="magnet-form" class="import-card">
+                <div><span class="card-kicker">MAGNET</span><h3>Paste a magnet link</h3><p>Metadata is fetched in the background. Audio downloads only when a track is played.</p></div>
+                <label>Magnet URI<textarea id="magnet-uri" name="magnet" rows="3" placeholder="magnet:?xt=urn:btih:…" required></textarea></label>
+                <button class="button primary" type="submit">Add magnet</button>
+              </form>
+              <form id="torrent-form" class="import-card">
+                <div><span class="card-kicker">FILE</span><h3>Upload a torrent file</h3><p>Catalog metadata is imported now; audio stays remote until playback.</p></div>
+                <label class="file-field">Torrent file<input id="torrent-file" name="torrent" type="file" accept=".torrent,application/x-bittorrent" required></label>
+                <button class="button primary" type="submit">Upload .torrent</button>
+              </form>
+            </div>
+            <p id="import-message" class="form-message" role="status"></p>
+            <div class="section-heading compact">
+              <div><p class="eyebrow">IMPORT QUEUE</p><h3>Recent magnet imports</h3></div>
+              <span id="import-count" class="pill"></span>
+            </div>
+            <div id="imports" class="source-list"></div>
+          </section>
+        </section>
+
+        <section class="dashboard-page" data-page-panel="activity" hidden>
+          <section id="downloads-section" class="panel" aria-labelledby="downloads-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">CACHE</p><h2 id="downloads-title">Track downloads</h2><p class="section-description">Tracks requested for playback and their local cache progress.</p></div>
+              <span id="download-count" class="pill"></span>
+            </div>
+            <div id="downloads" class="card-grid"></div>
+          </section>
+
+          <section id="transfers-section" class="panel" aria-labelledby="transfers-title">
+            <div class="section-heading"><div><p class="eyebrow">NETWORK</p><h2 id="transfers-title">Live transfers</h2><p class="section-description">Peer availability, transfer progress and uploaded data.</p></div></div>
+            <div id="transfers" class="card-grid"></div>
+          </section>
+        </section>
+
+        <section class="dashboard-page" data-page-panel="users" hidden>
+          <section id="users-section" class="panel" aria-labelledby="users-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">ACCESS CONTROL</p><h2 id="users-title">Users and permissions</h2><p class="section-description">Create accounts and choose which parts of the dashboard they can manage.</p></div>
+              <span id="user-count" class="pill"></span>
+            </div>
+            <details class="create-user-panel">
+              <summary><span>Create a user</span><small>Add a new OpenSubsonic account</small></summary>
+              <form id="user-form" class="user-form">
+                <label>Username<input id="new-username" name="username" autocomplete="off" required></label>
+                <label>Password<input id="new-password" name="password" type="password" minlength="8" maxlength="72" autocomplete="new-password" required></label>
+                <label>Role<select id="new-user-role" name="role"><option value="user">User</option><option value="admin">Administrator</option></select></label>
+                <button class="button primary" type="submit">Create user</button>
+              </form>
+            </details>
+            <p id="user-message" class="form-message" role="status"></p>
+            <div id="users" class="source-list"></div>
+          </section>
+        </section>
       </div>
-      <div id="summary" class="summary-grid" aria-live="polite"></div>
-
-      <section id="add-source-section" class="section" aria-labelledby="add-source-title">
-        <div class="section-heading">
-          <div><p class="eyebrow">ADD MUSIC</p><h2 id="add-source-title">Import a torrent source</h2></div>
-        </div>
-        <div class="import-grid">
-          <form id="magnet-form" class="import-card">
-            <div><h3>Magnet link</h3><p>Metadata is fetched in the background. Audio downloads only when a track is played.</p></div>
-            <label>Magnet URI<textarea id="magnet-uri" name="magnet" rows="4" placeholder="magnet:?xt=urn:btih:…" required></textarea></label>
-            <button class="button primary" type="submit">Add magnet</button>
-          </form>
-          <form id="torrent-form" class="import-card">
-            <div><h3>Torrent file</h3><p>Upload metadata now. The source appears in the library after a catalog scan.</p></div>
-            <label>Torrent file<input id="torrent-file" name="torrent" type="file" accept=".torrent,application/x-bittorrent" required></label>
-            <button class="button primary" type="submit">Upload .torrent</button>
-          </form>
-        </div>
-        <p id="import-message" class="form-message" role="status"></p>
-        <div class="section-heading compact">
-          <div><p class="eyebrow">IMPORT QUEUE</p><h3>Recent magnet imports</h3></div>
-          <span id="import-count" class="pill"></span>
-        </div>
-        <div id="imports" class="source-list"></div>
-      </section>
-
-      <section id="downloads-section" class="section" aria-labelledby="downloads-title">
-        <div class="section-heading">
-          <div><p class="eyebrow">CACHE JOBS</p><h2 id="downloads-title">Track downloads</h2></div>
-          <span id="download-count" class="pill"></span>
-        </div>
-        <div id="downloads" class="card-grid"></div>
-      </section>
-
-      <section id="users-section" class="section" aria-labelledby="users-title">
-        <div class="section-heading">
-          <div><p class="eyebrow">ACCESS</p><h2 id="users-title">Users</h2></div>
-          <span id="user-count" class="pill"></span>
-        </div>
-        <form id="user-form" class="user-form">
-          <label>Username<input id="new-username" name="username" autocomplete="off" required></label>
-          <label>Password<input id="new-password" name="password" type="password" minlength="8" maxlength="72" autocomplete="new-password" required></label>
-          <label>Role<select id="new-user-role" name="role"><option value="user">User</option><option value="admin">Administrator</option></select></label>
-          <button class="button primary" type="submit">Create user</button>
-        </form>
-        <p id="user-message" class="form-message" role="status"></p>
-        <div id="users" class="source-list"></div>
-      </section>
-
-      <section id="transfers-section" class="section" aria-labelledby="transfers-title">
-        <div class="section-heading"><div><p class="eyebrow">NETWORK</p><h2 id="transfers-title">Live transfers</h2></div></div>
-        <div id="transfers" class="card-grid"></div>
-      </section>
-
-      <section id="sources-section" class="section" aria-labelledby="sources-title">
-        <div class="section-heading">
-          <div><p class="eyebrow">SOURCES</p><h2 id="sources-title">Imported torrents</h2></div>
-          <span id="source-count" class="pill"></span>
-        </div>
-        <div id="sources" class="source-list"></div>
-      </section>
     </section>
   </main>
 

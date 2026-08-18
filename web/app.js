@@ -1,5 +1,6 @@
 const state = {
   authorization: sessionStorage.getItem("peerphonic.authorization") || "",
+  activePage: sessionStorage.getItem("peerphonic.activePage") || "overview",
   refreshTimer: 0,
 };
 
@@ -39,6 +40,15 @@ const elements = {
   usersSection: document.querySelector("#users-section"),
   transfersSection: document.querySelector("#transfers-section"),
   sourcesSection: document.querySelector("#sources-section"),
+  navigation: document.querySelector(".sidebar-nav"),
+  navItems: [...document.querySelectorAll("[data-page]")],
+  pagePanels: [...document.querySelectorAll("[data-page-panel]")],
+  pageEyebrow: document.querySelector("#page-eyebrow"),
+  pageTitle: document.querySelector("#page-title"),
+  pageDescription: document.querySelector("#page-description"),
+  accountAvatar: document.querySelector("#account-avatar"),
+  accountName: document.querySelector("#account-name"),
+  accountRole: document.querySelector("#account-role"),
 };
 
 const permissions = {
@@ -53,6 +63,29 @@ const permissionLabels = {
   "monitoring.view": "Monitoring",
   "sources.manage": "Sources",
   "users.manage": "Users",
+};
+
+const pages = {
+  overview: {
+    eyebrow: "CONTROL ROOM",
+    title: "Server overview",
+    description: "A quick look at Peerphonic right now.",
+  },
+  sources: {
+    eyebrow: "MUSIC LIBRARY",
+    title: "Sources",
+    description: "Connect, import and maintain the music available to your clients.",
+  },
+  activity: {
+    eyebrow: "LIVE STATUS",
+    title: "Activity",
+    description: "Follow on-demand downloads, cache progress and peer transfers.",
+  },
+  users: {
+    eyebrow: "ACCESS CONTROL",
+    title: "Users and permissions",
+    description: "Manage accounts and delegate access to individual features.",
+  },
 };
 
 function api(path, options = {}) {
@@ -101,6 +134,34 @@ function showDashboard(visible) {
   elements.connection.classList.toggle("online", visible);
 }
 
+function activatePage(requestedPage) {
+  const availablePages = elements.navItems.filter((item) => !item.hidden).map((item) => item.dataset.page);
+  const page = availablePages.includes(requestedPage) ? requestedPage : "overview";
+  const metadata = pages[page];
+  state.activePage = page;
+  sessionStorage.setItem("peerphonic.activePage", page);
+  elements.navItems.forEach((item) => {
+    if (item.dataset.page === page) item.setAttribute("aria-current", "page");
+    else item.removeAttribute("aria-current");
+  });
+  elements.pagePanels.forEach((panel) => { panel.hidden = panel.dataset.pagePanel !== page; });
+  elements.pageEyebrow.textContent = metadata.eyebrow;
+  elements.pageTitle.textContent = metadata.title;
+  elements.pageDescription.textContent = metadata.description;
+}
+
+function configureNavigation(session) {
+  const allowed = new Set(session.permissions || []);
+  elements.navItems.forEach((item) => {
+    const required = item.dataset.requiredPermission;
+    item.hidden = Boolean(required && !allowed.has(required));
+  });
+  elements.accountName.textContent = session.username;
+  elements.accountRole.textContent = session.role === "admin" ? "Administrator" : "User";
+  elements.accountAvatar.textContent = (session.username || "?").charAt(0).toUpperCase();
+  activatePage(state.activePage);
+}
+
 function renderSummary(cache, imports, downloads, transfers, sources, users, session) {
   const allowed = new Set(session.permissions || []);
   const capacity = cache.capacityBytes || 0;
@@ -108,20 +169,20 @@ function renderSummary(cache, imports, downloads, transfers, sources, users, ses
   const activeStreams = transfers.reduce((total, item) => total + (item.activeStreams || 0), 0);
   const activeDownloads = downloads.filter((item) => item.state === "downloading").length;
   const activeImports = imports.filter((item) => item.state === "fetching_metadata" || item.state === "scanning").length;
-  const metrics = [["Account", session.username, "accent"]];
+  const metrics = [];
   if (allowed.has(permissions.monitoring)) metrics.push(
-    ["Cache used", formatBytes(cache.sizeBytes), ""],
-    ["Utilization", `${utilization}%`, ""],
-    ["Active streams", activeStreams, ""],
-    ["Downloads", activeDownloads, ""],
+    ["Media cache", formatBytes(cache.sizeBytes), "accent", `${utilization}% of capacity`],
+    ["Active streams", activeStreams, "", "playing right now"],
+    ["Downloads", activeDownloads, "", "currently running"],
   );
   if (allowed.has(permissions.sources)) metrics.push(
-    ["Imports", activeImports, ""],
-    ["Torrent sources", sources.length, ""],
+    ["Sources", sources.length, "", "torrent libraries"],
+    ["Imports", activeImports, "", "currently processing"],
   );
-  if (allowed.has(permissions.users)) metrics.push(["Users", users.length, ""]);
-  elements.summary.innerHTML = metrics.map(([label, value, kind]) =>
-    `<article class="metric ${kind}"><span class="metric-label">${label}</span><strong class="metric-value">${value}</strong></article>`
+  if (allowed.has(permissions.users)) metrics.push(["Users", users.length, "", "configured accounts"]);
+  if (!metrics.length) metrics.push(["Account", session.username, "accent", "dashboard access"]);
+  elements.summary.innerHTML = metrics.map(([label, value, kind, detail]) =>
+    `<article class="metric ${kind}"><span class="metric-label">${label}</span><strong class="metric-value">${value}</strong><small class="metric-detail">${detail}</small></article>`
   ).join("");
 }
 
@@ -276,6 +337,7 @@ async function refresh() {
     elements.downloadsSection.hidden = !canMonitor;
     elements.transfersSection.hidden = !canMonitor;
     elements.usersSection.hidden = !canManageUsers;
+    configureNavigation(session);
     renderSummary(cache, imports, downloads, transfers, sources, users, session);
     renderImports(imports);
     renderDownloads(downloads);
@@ -316,6 +378,11 @@ elements.loginForm.addEventListener("submit", (event) => {
 });
 
 elements.refresh.addEventListener("click", refresh);
+elements.navigation.addEventListener("click", (event) => {
+  const item = event.target.closest("[data-page]");
+  if (!item || item.hidden) return;
+  activatePage(item.dataset.page);
+});
 elements.logout.addEventListener("click", () => {
   window.clearTimeout(state.refreshTimer);
   state.authorization = "";
