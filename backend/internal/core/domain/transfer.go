@@ -11,6 +11,8 @@ type SourceTransfer struct {
 	TotalBytes       int64
 	DownloadedBytes  int64
 	UploadedBytes    int64
+	DownloadLimit    int64
+	UploadLimit      int64
 	Peers            int
 	ActivePeers      int
 	ConnectedSeeders int

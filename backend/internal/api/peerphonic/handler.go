@@ -24,6 +24,8 @@ type transferResponse struct {
 	TotalBytes       int64  `json:"totalBytes"`
 	DownloadedBytes  int64  `json:"downloadedBytes"`
 	UploadedBytes    int64  `json:"uploadedBytes"`
+	DownloadLimit    int64  `json:"downloadLimitBytesPerSecond"`
+	UploadLimit      int64  `json:"uploadLimitBytesPerSecond"`
 	Peers            int    `json:"peers"`
 	ActivePeers      int    `json:"activePeers"`
 	ConnectedSeeders int    `json:"connectedSeeders"`
@@ -138,6 +140,7 @@ func NewHandler(
 					Provider: item.Provider, ID: item.ID, Name: item.Name,
 					CompletedBytes: item.CompletedBytes, TotalBytes: item.TotalBytes,
 					DownloadedBytes: item.DownloadedBytes, UploadedBytes: item.UploadedBytes,
+					DownloadLimit: item.DownloadLimit, UploadLimit: item.UploadLimit,
 					Peers: item.Peers, ActivePeers: item.ActivePeers,
 					ConnectedSeeders: item.ConnectedSeeders,
 					ActiveStreams:    item.ActiveStreams,

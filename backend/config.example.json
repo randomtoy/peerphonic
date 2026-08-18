@@ -8,6 +8,8 @@
   "torrent_seed": true,
   "torrent_port": 42069,
   "torrent_port_forwarding": false,
+  "torrent_upload_limit_bytes_per_second": 0,
+  "torrent_download_limit_bytes_per_second": 0,
   "username": "music",
   "password": "change-me",
   "scan_on_start": true

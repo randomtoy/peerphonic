@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	torrentclient "github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/bencode"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
@@ -244,6 +245,22 @@ func TestCacheUsageAllowsMissingDataDirectory(t *testing.T) {
 	}
 	if usage.Name != Name || usage.Size != 0 || usage.Entries != 0 {
 		t.Fatalf("CacheUsage() = %#v", usage)
+	}
+}
+
+func TestApplyTransferLimits(t *testing.T) {
+	t.Parallel()
+
+	clientConfig := torrentclient.NewDefaultClientConfig()
+	applyTransferLimits(clientConfig, StreamingOptions{UploadLimit: 1024, DownloadLimit: 2048})
+	if got := int64(clientConfig.UploadRateLimiter.Limit()); got != 1024 {
+		t.Fatalf("upload limit = %d, want 1024", got)
+	}
+	if clientConfig.UploadRateLimiter.Burst() < 256<<10 {
+		t.Fatalf("upload burst = %d, want at least %d", clientConfig.UploadRateLimiter.Burst(), 256<<10)
+	}
+	if got := int64(clientConfig.DownloadRateLimiter.Limit()); got != 2048 {
+		t.Fatalf("download limit = %d, want 2048", got)
 	}
 }
 

@@ -51,6 +51,8 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 			Seed:           cfg.TorrentSeed,
 			ListenPort:     cfg.TorrentPort,
 			PortForwarding: cfg.TorrentPortForwarding,
+			UploadLimit:    cfg.TorrentUploadLimit,
+			DownloadLimit:  cfg.TorrentDownloadLimit,
 		},
 	)
 	if err != nil {

@@ -22,6 +22,8 @@ type Config struct {
 	TorrentSeed           bool   `json:"torrent_seed"`
 	TorrentPort           int    `json:"torrent_port"`
 	TorrentPortForwarding bool   `json:"torrent_port_forwarding"`
+	TorrentUploadLimit    int64  `json:"torrent_upload_limit_bytes_per_second"`
+	TorrentDownloadLimit  int64  `json:"torrent_download_limit_bytes_per_second"`
 	Username              string `json:"username"`
 	Password              string `json:"password"`
 	Scan                  bool   `json:"scan_on_start"`
@@ -73,6 +75,8 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	flags.BoolVar(&cfg.TorrentSeed, "torrent-seed", cfg.TorrentSeed, "upload verified torrent pieces")
 	flags.IntVar(&cfg.TorrentPort, "torrent-port", cfg.TorrentPort, "BitTorrent listen port (0 chooses a random port)")
 	flags.BoolVar(&cfg.TorrentPortForwarding, "torrent-port-forwarding", cfg.TorrentPortForwarding, "enable UPnP/NAT-PMP torrent port forwarding")
+	flags.Int64Var(&cfg.TorrentUploadLimit, "torrent-upload-limit", cfg.TorrentUploadLimit, "torrent upload limit in bytes per second (0 is unlimited)")
+	flags.Int64Var(&cfg.TorrentDownloadLimit, "torrent-download-limit", cfg.TorrentDownloadLimit, "torrent download limit in bytes per second (0 is unlimited)")
 	flags.StringVar(&cfg.Username, "username", cfg.Username, "OpenSubsonic username")
 	flags.StringVar(&cfg.Password, "password", cfg.Password, "OpenSubsonic password")
 	flags.BoolVar(&cfg.Scan, "scan", cfg.Scan, "scan music directory on startup")
@@ -90,6 +94,9 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	}
 	if cfg.TorrentPort < 0 || cfg.TorrentPort > 65535 {
 		return Config{}, errors.New("torrent port must be between 0 and 65535")
+	}
+	if cfg.TorrentUploadLimit < 0 || cfg.TorrentDownloadLimit < 0 {
+		return Config{}, errors.New("torrent transfer limits must be non-negative")
 	}
 
 	var err error
@@ -186,6 +193,20 @@ func applyEnv(cfg *Config, lookup func(string) (string, bool)) error {
 			return fmt.Errorf("parse PEERPHONIC_TORRENT_PORT: %w", err)
 		}
 		cfg.TorrentPort = parsed
+	}
+	if value, ok := lookup("PEERPHONIC_TORRENT_UPLOAD_LIMIT_BYTES_PER_SECOND"); ok {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return fmt.Errorf("parse PEERPHONIC_TORRENT_UPLOAD_LIMIT_BYTES_PER_SECOND: %w", err)
+		}
+		cfg.TorrentUploadLimit = parsed
+	}
+	if value, ok := lookup("PEERPHONIC_TORRENT_DOWNLOAD_LIMIT_BYTES_PER_SECOND"); ok {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return fmt.Errorf("parse PEERPHONIC_TORRENT_DOWNLOAD_LIMIT_BYTES_PER_SECOND: %w", err)
+		}
+		cfg.TorrentDownloadLimit = parsed
 	}
 	return nil
 }

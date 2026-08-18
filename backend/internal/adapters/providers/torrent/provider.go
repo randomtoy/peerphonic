@@ -23,6 +23,7 @@ import (
 	"github.com/anacrolix/torrent/storage"
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
+	"golang.org/x/time/rate"
 )
 
 const Name = "torrent"
@@ -73,6 +74,8 @@ type StreamingOptions struct {
 	Seed           bool
 	ListenPort     int
 	PortForwarding bool
+	UploadLimit    int64
+	DownloadLimit  int64
 }
 
 type CompletedFile struct {
@@ -267,6 +270,8 @@ func (p *Provider) Transfers(ctx context.Context) ([]domain.SourceTransfer, erro
 			CompletedBytes: torrent.BytesCompleted(), TotalBytes: torrent.Length(),
 			DownloadedBytes: stats.BytesReadUsefulData.Int64(),
 			UploadedBytes:   stats.BytesWrittenData.Int64(),
+			DownloadLimit:   p.options.DownloadLimit,
+			UploadLimit:     p.options.UploadLimit,
 			Peers:           stats.TotalPeers, ActivePeers: stats.ActivePeers,
 			ConnectedSeeders: stats.ConnectedSeeders,
 			ActiveStreams:    streams[infoHash],
@@ -568,6 +573,7 @@ func (p *Provider) ensureClient() (*torrentclient.Client, error) {
 	config.ListenPort = p.options.ListenPort
 	config.NoDefaultPortForwarding = !p.options.PortForwarding
 	config.Seed = p.options.Seed
+	applyTransferLimits(config, p.options)
 	config.Slogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	client, err := torrentclient.NewClient(config)
 	if err != nil {
@@ -575,6 +581,18 @@ func (p *Provider) ensureClient() (*torrentclient.Client, error) {
 	}
 	p.client = client
 	return client, nil
+}
+
+func applyTransferLimits(config *torrentclient.ClientConfig, options StreamingOptions) {
+	if options.UploadLimit > 0 {
+		config.UploadRateLimiter = rate.NewLimiter(
+			rate.Limit(options.UploadLimit),
+			max(config.MaxAllocPeerRequestDataPerConn, 256<<10),
+		)
+	}
+	if options.DownloadLimit > 0 {
+		config.DownloadRateLimiter = rate.NewLimiter(rate.Limit(options.DownloadLimit), 0)
+	}
 }
 
 func parseSourceKey(key string) (infoHash, logicalPath string, err error) {

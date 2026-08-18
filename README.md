@@ -108,6 +108,8 @@ then CLI flags.
 | `torrent_seed` | `PEERPHONIC_TORRENT_SEED` | `--torrent-seed` | `true` |
 | `torrent_port` | `PEERPHONIC_TORRENT_PORT` | `--torrent-port` | `42069` |
 | `torrent_port_forwarding` | `PEERPHONIC_TORRENT_PORT_FORWARDING` | `--torrent-port-forwarding` | `false` |
+| `torrent_upload_limit_bytes_per_second` | `PEERPHONIC_TORRENT_UPLOAD_LIMIT_BYTES_PER_SECOND` | `--torrent-upload-limit` | `0` (unlimited) |
+| `torrent_download_limit_bytes_per_second` | `PEERPHONIC_TORRENT_DOWNLOAD_LIMIT_BYTES_PER_SECOND` | `--torrent-download-limit` | `0` (unlimited) |
 | `username` | `PEERPHONIC_USERNAME` | `--username` | `admin` |
 | `password` | `PEERPHONIC_PASSWORD` | `--password` | `admin` |
 | `scan_on_start` | `PEERPHONIC_SCAN_ON_START` | `--scan` | `true` |
@@ -157,6 +159,9 @@ Verified downloaded pieces are uploaded to other peers by default while the
 torrent remains attached. Set `torrent_seed` to `false` to disable seeding. A
 stable listen port makes manual router forwarding possible; alternatively,
 enable `torrent_port_forwarding` to let Peerphonic request UPnP/NAT-PMP mapping.
+Upload and download limits are independent byte-per-second ceilings. A value of
+zero leaves that direction unlimited; limits apply to aggregate torrent traffic,
+not separately to each peer or track.
 
 Live transfer state is available without attaching inactive catalog sources:
 

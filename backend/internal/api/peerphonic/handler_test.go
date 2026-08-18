@@ -40,6 +40,7 @@ func (transferMonitorStub) Transfers(context.Context) ([]domain.SourceTransfer, 
 	return []domain.SourceTransfer{{
 		Provider: "torrent", ID: "abc", Name: "Album", CompletedBytes: 75, TotalBytes: 100,
 		DownloadedBytes: 80, UploadedBytes: 25, Peers: 4, ActivePeers: 2,
+		DownloadLimit: 2048, UploadLimit: 1024,
 		ConnectedSeeders: 1, ActiveStreams: 1, Seeding: true,
 	}}, nil
 }
@@ -130,6 +131,8 @@ func TestTransferStatusRequiresAuthentication(t *testing.T) {
 		!strings.Contains(body, `"provider":"torrent"`) ||
 		!strings.Contains(body, `"completedBytes":75`) ||
 		!strings.Contains(body, `"uploadedBytes":25`) ||
+		!strings.Contains(body, `"downloadLimitBytesPerSecond":2048`) ||
+		!strings.Contains(body, `"uploadLimitBytesPerSecond":1024`) ||
 		!strings.Contains(body, `"activePeers":2`) ||
 		!strings.Contains(body, `"activeStreams":1`) ||
 		!strings.Contains(body, `"seeding":true`) {

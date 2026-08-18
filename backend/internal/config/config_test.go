@@ -15,11 +15,13 @@ func TestLoadPrecedence(t *testing.T) {
 		t.Fatal(err)
 	}
 	env := map[string]string{
-		"PEERPHONIC_ADDRESS":          ":2000",
-		"PEERPHONIC_USERNAME":         "env",
-		"PEERPHONIC_CACHE_SIZE_BYTES": "2048",
-		"PEERPHONIC_TORRENT_SEED":     "false",
-		"PEERPHONIC_TORRENT_PORT":     "43000",
+		"PEERPHONIC_ADDRESS":                                 ":2000",
+		"PEERPHONIC_USERNAME":                                "env",
+		"PEERPHONIC_CACHE_SIZE_BYTES":                        "2048",
+		"PEERPHONIC_TORRENT_SEED":                            "false",
+		"PEERPHONIC_TORRENT_PORT":                            "43000",
+		"PEERPHONIC_TORRENT_UPLOAD_LIMIT_BYTES_PER_SECOND":   "1024",
+		"PEERPHONIC_TORRENT_DOWNLOAD_LIMIT_BYTES_PER_SECOND": "2048",
 	}
 	lookup := func(key string) (string, bool) { value, ok := env[key]; return value, ok }
 
@@ -30,6 +32,8 @@ func TestLoadPrecedence(t *testing.T) {
 		"--torrent-seed=true",
 		"--torrent-port", "44000",
 		"--torrent-port-forwarding=true",
+		"--torrent-upload-limit", "4096",
+		"--torrent-download-limit", "8192",
 	}, lookup)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -51,6 +55,9 @@ func TestLoadPrecedence(t *testing.T) {
 	}
 	if !cfg.TorrentSeed || cfg.TorrentPort != 44000 || !cfg.TorrentPortForwarding {
 		t.Errorf("torrent settings = seed %t, port %d, forwarding %t", cfg.TorrentSeed, cfg.TorrentPort, cfg.TorrentPortForwarding)
+	}
+	if cfg.TorrentUploadLimit != 4096 || cfg.TorrentDownloadLimit != 8192 {
+		t.Errorf("torrent limits = upload %d, download %d", cfg.TorrentUploadLimit, cfg.TorrentDownloadLimit)
 	}
 }
 
@@ -94,5 +101,16 @@ func TestDefaultsEnableTorrentSeeding(t *testing.T) {
 	cfg := Defaults()
 	if !cfg.TorrentSeed || cfg.TorrentPort != 42069 || cfg.TorrentPortForwarding {
 		t.Fatalf("torrent defaults = seed %t, port %d, forwarding %t", cfg.TorrentSeed, cfg.TorrentPort, cfg.TorrentPortForwarding)
+	}
+}
+
+func TestLoadRejectsNegativeTorrentTransferLimit(t *testing.T) {
+	t.Parallel()
+
+	_, err := Load([]string{"--music", t.TempDir(), "--torrent-upload-limit", "-1"}, func(string) (string, bool) {
+		return "", false
+	})
+	if err == nil {
+		t.Fatal("Load() error = nil, want invalid torrent transfer limit error")
 	}
 }
