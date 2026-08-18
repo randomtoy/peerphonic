@@ -14,6 +14,7 @@ changing the client-facing streaming flow.
 - XML and JSON OpenSubsonic responses;
 - password, hex-encoded password, and token/salt authentication;
 - persistent administrator and listener accounts with isolated personal library state;
+- per-user dashboard capabilities delegated by administrators;
 - artist/album/track browsing and HTTP range streaming;
 - genre browsing and album filtering from embedded tags;
 - paged album lists ordered by name, artist, import time, year, or randomly;
@@ -108,6 +109,20 @@ reversible credential protected by a random AES-GCM key stored next to the
 database as `<database>.auth.key`; back up that `0600` file together with the
 database.
 
+Administrators always have every management capability. Regular users can be
+granted these independently:
+
+| Capability | Access |
+| --- | --- |
+| `dashboard.access` | Sign in to the administration dashboard |
+| `monitoring.view` | View cache usage, selected-track downloads, peers, and transfers |
+| `sources.manage` | Add, pause, pin, and remove torrent sources |
+| `users.manage` | Create, reset, and remove regular user accounts |
+
+Only administrators can assign capabilities, create administrators, or manage
+administrator accounts. A delegated user manager cannot elevate itself or
+another user.
+
 ## Configuration
 
 Configuration is applied in this order: defaults, JSON config file, environment,
@@ -144,6 +159,9 @@ curl -u admin:admin http://localhost:8080/api/v1/users
 curl -u admin:admin -H 'Content-Type: application/json' \
   -d '{"username":"listener","password":"replace-this-password","role":"user"}' \
   http://localhost:8080/api/v1/users
+curl -u admin:admin -X PUT -H 'Content-Type: application/json' \
+  -d '{"permissions":["dashboard.access","monitoring.view"]}' \
+  http://localhost:8080/api/v1/users/listener/permissions
 ```
 
 ## Architecture

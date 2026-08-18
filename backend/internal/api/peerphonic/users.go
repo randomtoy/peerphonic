@@ -14,14 +14,14 @@ import (
 
 func registerUserRoutes(mux *http.ServeMux, authenticator ports.Authenticator, users ports.UserManager) {
 	mux.HandleFunc("GET /api/v1/session", func(writer http.ResponseWriter, request *http.Request) {
-		actor, ok := requireAdministrator(writer, request, authenticator)
+		actor, ok := requirePermission(writer, request, authenticator, domain.PermissionDashboardAccess)
 		if !ok {
 			return
 		}
 		writeJSON(writer, http.StatusOK, newUserResponse(actor))
 	})
 	mux.HandleFunc("GET /api/v1/users", func(writer http.ResponseWriter, request *http.Request) {
-		actor, ok := requireAdministrator(writer, request, authenticator)
+		actor, ok := requirePermission(writer, request, authenticator, domain.PermissionUsersManage)
 		if !ok {
 			return
 		}
@@ -37,21 +37,22 @@ func registerUserRoutes(mux *http.ServeMux, authenticator ports.Authenticator, u
 		writeJSON(writer, http.StatusOK, response)
 	})
 	mux.HandleFunc("POST /api/v1/users", func(writer http.ResponseWriter, request *http.Request) {
-		actor, ok := requireAdministrator(writer, request, authenticator)
+		actor, ok := requirePermission(writer, request, authenticator, domain.PermissionUsersManage)
 		if !ok {
 			return
 		}
 		var payload struct {
-			Username string          `json:"username"`
-			Password string          `json:"password"`
-			Role     domain.UserRole `json:"role"`
+			Username    string              `json:"username"`
+			Password    string              `json:"password"`
+			Role        domain.UserRole     `json:"role"`
+			Permissions []domain.Permission `json:"permissions"`
 		}
 		if err := decodeUserRequest(writer, request, &payload); err != nil {
 			http.Error(writer, "invalid user request", http.StatusBadRequest)
 			return
 		}
 		created, err := users.CreateUser(
-			request.Context(), actor, payload.Username, payload.Password, payload.Role,
+			request.Context(), actor, payload.Username, payload.Password, payload.Role, payload.Permissions,
 		)
 		if err != nil {
 			writeUserError(writer, err)
@@ -60,7 +61,7 @@ func registerUserRoutes(mux *http.ServeMux, authenticator ports.Authenticator, u
 		writeJSON(writer, http.StatusCreated, newUserResponse(created))
 	})
 	mux.HandleFunc("PUT /api/v1/users/{username}/password", func(writer http.ResponseWriter, request *http.Request) {
-		actor, ok := requireAdministrator(writer, request, authenticator)
+		actor, ok := requirePermission(writer, request, authenticator, domain.PermissionUsersManage)
 		if !ok {
 			return
 		}
@@ -79,8 +80,29 @@ func registerUserRoutes(mux *http.ServeMux, authenticator ports.Authenticator, u
 		}
 		writer.WriteHeader(http.StatusNoContent)
 	})
-	mux.HandleFunc("DELETE /api/v1/users/{username}", func(writer http.ResponseWriter, request *http.Request) {
+	mux.HandleFunc("PUT /api/v1/users/{username}/permissions", func(writer http.ResponseWriter, request *http.Request) {
 		actor, ok := requireAdministrator(writer, request, authenticator)
+		if !ok {
+			return
+		}
+		var payload struct {
+			Permissions []domain.Permission `json:"permissions"`
+		}
+		if err := decodeUserRequest(writer, request, &payload); err != nil {
+			http.Error(writer, "invalid permission request", http.StatusBadRequest)
+			return
+		}
+		updated, err := users.UpdatePermissions(
+			request.Context(), actor, request.PathValue("username"), payload.Permissions,
+		)
+		if err != nil {
+			writeUserError(writer, err)
+			return
+		}
+		writeJSON(writer, http.StatusOK, newUserResponse(updated))
+	})
+	mux.HandleFunc("DELETE /api/v1/users/{username}", func(writer http.ResponseWriter, request *http.Request) {
+		actor, ok := requirePermission(writer, request, authenticator, domain.PermissionUsersManage)
 		if !ok {
 			return
 		}
@@ -107,7 +129,7 @@ func decodeUserRequest(writer http.ResponseWriter, request *http.Request, target
 
 func newUserResponse(user domain.User) userResponse {
 	return userResponse{
-		Username: user.Username, Role: user.Role,
+		Username: user.Username, Role: user.Role, Permissions: user.EffectivePermissions(),
 		CreatedAt: user.CreatedAt.Format(time.RFC3339), UpdatedAt: user.UpdatedAt.Format(time.RFC3339),
 	}
 }
@@ -127,7 +149,7 @@ func writeUserError(writer http.ResponseWriter, err error) {
 	case errors.Is(err, ports.ErrNotFound):
 		http.Error(writer, "user not found", http.StatusNotFound)
 	case errors.Is(err, ports.ErrForbidden):
-		http.Error(writer, "administrator access required", http.StatusForbidden)
+		http.Error(writer, "operation is not permitted", http.StatusForbidden)
 	default:
 		http.Error(writer, "manage users", http.StatusInternalServerError)
 	}

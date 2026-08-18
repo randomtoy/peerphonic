@@ -58,6 +58,18 @@ func (s *userStoreStub) UpdateUserPassword(
 	return nil
 }
 
+func (s *userStoreStub) UpdateUserPermissions(
+	_ context.Context, username string, permissions []domain.Permission,
+) error {
+	credential, ok := s.credentials[username]
+	if !ok {
+		return ports.ErrNotFound
+	}
+	credential.User.Permissions = append([]domain.Permission(nil), permissions...)
+	s.credentials[username] = credential
+	return nil
+}
+
 func (s *userStoreStub) DeleteUser(_ context.Context, username string) error {
 	if _, ok := s.credentials[username]; !ok {
 		return ports.ErrNotFound
@@ -99,11 +111,12 @@ func TestUserServiceBootstrapAuthenticationAndAdministration(t *testing.T) {
 	if err != nil || admin.Username != "admin" || !admin.IsAdmin() {
 		t.Fatalf("AuthenticatePassword() = %#v, %v", admin, err)
 	}
-	created, err := service.CreateUser(ctx, admin, "Алиса", "password-123", domain.UserRoleUser)
+	created, err := service.CreateUser(ctx, admin, "Алиса", "password-123", domain.UserRoleUser,
+		[]domain.Permission{domain.PermissionDashboardAccess})
 	if err != nil || created.Username != "алиса" || created.Role != domain.UserRoleUser {
 		t.Fatalf("CreateUser() = %#v, %v", created, err)
 	}
-	if _, err := service.CreateUser(ctx, admin, "Алиса", "password-123", domain.UserRoleUser); !errors.Is(err, ports.ErrAlreadyExists) {
+	if _, err := service.CreateUser(ctx, admin, "Алиса", "password-123", domain.UserRoleUser, nil); !errors.Is(err, ports.ErrAlreadyExists) {
 		t.Fatalf("duplicate CreateUser() error = %v", err)
 	}
 	salt := "random-salt"
@@ -112,8 +125,36 @@ func TestUserServiceBootstrapAuthenticationAndAdministration(t *testing.T) {
 	if err != nil || user.Username != "алиса" {
 		t.Fatalf("AuthenticateToken() = %#v, %v", user, err)
 	}
+	if !user.HasPermission(domain.PermissionDashboardAccess) {
+		t.Fatalf("authenticated user permissions = %#v", user.Permissions)
+	}
 	if _, err := service.Users(ctx, user); !errors.Is(err, ports.ErrForbidden) {
 		t.Fatalf("non-admin Users() error = %v", err)
+	}
+	updated, err := service.UpdatePermissions(ctx, admin, user.Username, []domain.Permission{
+		domain.PermissionUsersManage, domain.PermissionDashboardAccess, domain.PermissionUsersManage,
+	})
+	if err != nil || len(updated.Permissions) != 2 || updated.Permissions[0] != domain.PermissionDashboardAccess {
+		t.Fatalf("UpdatePermissions() = %#v, %v", updated, err)
+	}
+	user, err = service.AuthenticatePassword(ctx, user.Username, "password-123")
+	if err != nil || !user.HasPermission(domain.PermissionUsersManage) {
+		t.Fatalf("delegated AuthenticatePassword() = %#v, %v", user, err)
+	}
+	if _, err := service.Users(ctx, user); err != nil {
+		t.Fatalf("delegated Users() error = %v", err)
+	}
+	if _, err := service.UpdatePermissions(ctx, user, user.Username, nil); !errors.Is(err, ports.ErrForbidden) {
+		t.Fatalf("delegated UpdatePermissions() error = %v", err)
+	}
+	if _, err := service.CreateUser(ctx, user, "second-admin", "password-123", domain.UserRoleAdmin, nil); !errors.Is(err, ports.ErrForbidden) {
+		t.Fatalf("delegated administrator CreateUser() error = %v", err)
+	}
+	if err := service.UpdatePassword(ctx, user, admin.Username, "new-admin-password"); !errors.Is(err, ports.ErrForbidden) {
+		t.Fatalf("delegated administrator UpdatePassword() error = %v", err)
+	}
+	if err := service.DeleteUser(ctx, user, admin.Username); !errors.Is(err, ports.ErrForbidden) {
+		t.Fatalf("delegated administrator DeleteUser() error = %v", err)
 	}
 	if err := service.UpdatePassword(ctx, user, user.Username, "new-password"); err != nil {
 		t.Fatal(err)
@@ -144,7 +185,7 @@ func TestUserServiceValidatesNewCredentials(t *testing.T) {
 		{username: "user", password: "short", role: domain.UserRoleUser},
 		{username: "user", password: "password", role: "owner"},
 	} {
-		if _, err := service.CreateUser(ctx, admin, test.username, test.password, test.role); !errors.Is(err, ErrInvalidUser) {
+		if _, err := service.CreateUser(ctx, admin, test.username, test.password, test.role, nil); !errors.Is(err, ErrInvalidUser) {
 			t.Fatalf("CreateUser(%q) error = %v", test.username, err)
 		}
 	}

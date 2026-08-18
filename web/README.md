@@ -8,7 +8,8 @@ The container deployment serves it at `http://localhost:8081` and proxies
 OpenSubsonic clients. The dashboard shows persistent selected-track downloads,
 live provider transfers, cache usage, torrent source controls, and forms for
 adding magnet links or `.torrent` files. Administrators can also create users,
-reset their passwords, and remove accounts.
+reset their passwords, remove accounts, and delegate individual dashboard,
+monitoring, source-management, and user-management capabilities.
 
 For local frontend work, serve this directory through a web server that proxies
 the API paths to the backend. Opening `index.html` directly does not provide an

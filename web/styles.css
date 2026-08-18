@@ -74,6 +74,13 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .user-form { padding: 18px; display: grid; grid-template-columns: minmax(150px, 1fr) minmax(180px, 1fr) 160px auto; gap: 12px; align-items: end; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .user-form label { margin: 0; }
 .user-form .button.primary { width: auto; }
+.user-row { align-items: start; }
+.permission-list { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+.permission-chip { width: auto; margin: 0; display: inline-flex; grid-template-columns: none; align-items: center; gap: 7px; padding: 7px 10px; color: var(--text); border: 1px solid var(--line); border-radius: 999px; background: var(--bg); cursor: pointer; }
+.permission-chip input { width: 14px; height: 14px; margin: 0; padding: 0; accent-color: var(--accent); }
+.permission-chip:has(input:checked) { color: #151a08; background: var(--accent); border-color: var(--accent); }
+.permission-chip:has(input:disabled) { cursor: default; opacity: .72; }
+.permission-chip span { font-size: 12px; font-weight: 700; }
 .card-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
 .transfer-card, .source-row { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .transfer-card { padding: 22px; }

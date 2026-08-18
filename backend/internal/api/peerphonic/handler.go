@@ -90,10 +90,11 @@ type sourceImportsResponse struct {
 }
 
 type userResponse struct {
-	Username  string          `json:"username"`
-	Role      domain.UserRole `json:"role"`
-	CreatedAt string          `json:"createdAt"`
-	UpdatedAt string          `json:"updatedAt"`
+	Username    string              `json:"username"`
+	Role        domain.UserRole     `json:"role"`
+	Permissions []domain.Permission `json:"permissions"`
+	CreatedAt   string              `json:"createdAt"`
+	UpdatedAt   string              `json:"updatedAt"`
 }
 
 type usersResponse struct {
@@ -171,6 +172,9 @@ func newHandler(
 	})
 	if cache != nil {
 		mux.HandleFunc("GET /api/v1/cache/status", func(writer http.ResponseWriter, request *http.Request) {
+			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionMonitoringView); !ok {
+				return
+			}
 			stats, err := cache.Stats(request.Context())
 			if err != nil {
 				http.Error(writer, "read media cache status", http.StatusInternalServerError)
@@ -193,7 +197,7 @@ func newHandler(
 	}
 	if torrentImporter != nil {
 		mux.HandleFunc("POST /api/v1/torrents", func(writer http.ResponseWriter, request *http.Request) {
-			if _, ok := requireAdministrator(writer, request, authenticator); !ok {
+			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
 				return
 			}
 			request.Body = http.MaxBytesReader(writer, request.Body, 16<<20)
@@ -217,7 +221,7 @@ func newHandler(
 	}
 	if uriImporter != nil {
 		mux.HandleFunc("POST /api/v1/torrents/magnet", func(writer http.ResponseWriter, request *http.Request) {
-			if _, ok := requireAdministrator(writer, request, authenticator); !ok {
+			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
 				return
 			}
 			request.Body = http.MaxBytesReader(writer, request.Body, 64<<10)
@@ -244,7 +248,7 @@ func newHandler(
 			_ = json.NewEncoder(writer).Encode(newSourceImportResponse(item))
 		})
 		mux.HandleFunc("GET /api/v1/imports", func(writer http.ResponseWriter, request *http.Request) {
-			if _, ok := requireAdministrator(writer, request, authenticator); !ok {
+			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
 				return
 			}
 			items, err := uriImporter.SourceImports(request.Context())
@@ -262,7 +266,7 @@ func newHandler(
 	}
 	if sources != nil {
 		mux.HandleFunc("GET /api/v1/torrents", func(writer http.ResponseWriter, request *http.Request) {
-			if _, ok := requireAdministrator(writer, request, authenticator); !ok {
+			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
 				return
 			}
 			items, err := sources.ManagedSources(request.Context())
@@ -291,7 +295,7 @@ func newHandler(
 			},
 		} {
 			mux.HandleFunc("POST /api/v1/torrents/{id}/"+action, func(writer http.ResponseWriter, request *http.Request) {
-				if _, ok := requireAdministrator(writer, request, authenticator); !ok {
+				if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
 					return
 				}
 				if err := update(request.Context(), request.PathValue("id")); err != nil {
@@ -302,7 +306,7 @@ func newHandler(
 			})
 		}
 		mux.HandleFunc("DELETE /api/v1/torrents/{id}", func(writer http.ResponseWriter, request *http.Request) {
-			if _, ok := requireAdministrator(writer, request, authenticator); !ok {
+			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
 				return
 			}
 			deleteData := false
@@ -323,7 +327,7 @@ func newHandler(
 	}
 	if transfers != nil {
 		mux.HandleFunc("GET /api/v1/transfers", func(writer http.ResponseWriter, request *http.Request) {
-			if _, ok := requireAdministrator(writer, request, authenticator); !ok {
+			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionMonitoringView); !ok {
 				return
 			}
 			items, err := transfers.Transfers(request.Context())
@@ -350,7 +354,7 @@ func newHandler(
 	}
 	if downloads != nil {
 		mux.HandleFunc("GET /api/v1/downloads", func(writer http.ResponseWriter, request *http.Request) {
-			if _, ok := requireAdministrator(writer, request, authenticator); !ok {
+			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionMonitoringView); !ok {
 				return
 			}
 			items, err := downloads.TrackDownloads(request.Context())
@@ -425,6 +429,25 @@ func requireAdministrator(
 	}
 	if !user.IsAdmin() {
 		http.Error(writer, "administrator access required", http.StatusForbidden)
+		return domain.User{}, false
+	}
+	return user, true
+}
+
+func requirePermission(
+	writer http.ResponseWriter,
+	request *http.Request,
+	authenticator ports.Authenticator,
+	permission domain.Permission,
+) (domain.User, bool) {
+	user, err := authenticateBasic(request, authenticator)
+	if err != nil {
+		writer.Header().Set("WWW-Authenticate", `Basic realm="Peerphonic"`)
+		http.Error(writer, "authentication required", http.StatusUnauthorized)
+		return domain.User{}, false
+	}
+	if !user.HasPermission(permission) {
+		http.Error(writer, "permission required: "+string(permission), http.StatusForbidden)
 		return domain.User{}, false
 	}
 	return user, true

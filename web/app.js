@@ -34,6 +34,25 @@ const elements = {
   sources: document.querySelector("#sources"),
   sourceCount: document.querySelector("#source-count"),
   updatedAt: document.querySelector("#updated-at"),
+  addSourceSection: document.querySelector("#add-source-section"),
+  downloadsSection: document.querySelector("#downloads-section"),
+  usersSection: document.querySelector("#users-section"),
+  transfersSection: document.querySelector("#transfers-section"),
+  sourcesSection: document.querySelector("#sources-section"),
+};
+
+const permissions = {
+  dashboard: "dashboard.access",
+  monitoring: "monitoring.view",
+  sources: "sources.manage",
+  users: "users.manage",
+};
+
+const permissionLabels = {
+  "dashboard.access": "Dashboard",
+  "monitoring.view": "Monitoring",
+  "sources.manage": "Sources",
+  "users.manage": "Users",
 };
 
 function api(path, options = {}) {
@@ -82,21 +101,25 @@ function showDashboard(visible) {
   elements.connection.classList.toggle("online", visible);
 }
 
-function renderSummary(cache, imports, downloads, transfers, sources, users) {
+function renderSummary(cache, imports, downloads, transfers, sources, users, session) {
+  const allowed = new Set(session.permissions || []);
   const capacity = cache.capacityBytes || 0;
   const utilization = capacity ? Math.round((cache.sizeBytes / capacity) * 100) : 0;
   const activeStreams = transfers.reduce((total, item) => total + (item.activeStreams || 0), 0);
   const activeDownloads = downloads.filter((item) => item.state === "downloading").length;
   const activeImports = imports.filter((item) => item.state === "fetching_metadata" || item.state === "scanning").length;
-  const metrics = [
-    ["Cache used", formatBytes(cache.sizeBytes), "accent"],
+  const metrics = [["Account", session.username, "accent"]];
+  if (allowed.has(permissions.monitoring)) metrics.push(
+    ["Cache used", formatBytes(cache.sizeBytes), ""],
     ["Utilization", `${utilization}%`, ""],
     ["Active streams", activeStreams, ""],
     ["Downloads", activeDownloads, ""],
+  );
+  if (allowed.has(permissions.sources)) metrics.push(
     ["Imports", activeImports, ""],
     ["Torrent sources", sources.length, ""],
-    ["Users", users.length, ""],
-  ];
+  );
+  if (allowed.has(permissions.users)) metrics.push(["Users", users.length, ""]);
   elements.summary.innerHTML = metrics.map(([label, value, kind]) =>
     `<article class="metric ${kind}"><span class="metric-label">${label}</span><strong class="metric-value">${value}</strong></article>`
   ).join("");
@@ -105,16 +128,28 @@ function renderSummary(cache, imports, downloads, transfers, sources, users) {
 function renderUsers(items, session) {
   elements.userCount.textContent = `${items.length} total`;
   elements.users.replaceChildren();
-  elements.users.innerHTML = items.map((item) => `<article class="source-row">
+  const canAssign = session.role === "admin";
+  elements.newUserRole.disabled = !canAssign;
+  elements.users.innerHTML = items.map((item) => {
+    const assigned = new Set(item.permissions || []);
+    const protectedAccount = item.role === "admin" && !canAssign;
+    return `<article class="source-row user-row" data-user="${escapeHTML(item.username)}">
     <div class="source-copy">
       <h3>${escapeHTML(item.username)}</h3>
       <p class="source-meta"><span>${item.role === "admin" ? "Administrator" : "User"}</span></p>
+      <div class="permission-list" aria-label="Permissions for ${escapeHTML(item.username)}">
+        ${Object.entries(permissionLabels).map(([permission, label]) => `<label class="permission-chip">
+          <input type="checkbox" data-permission="${permission}" ${assigned.has(permission) ? "checked" : ""} ${!canAssign || item.role === "admin" ? "disabled" : ""}>
+          <span>${label}</span>
+        </label>`).join("")}
+      </div>
     </div>
     <div class="source-actions">
-      <button class="button secondary" data-user-action="password" data-username="${escapeHTML(item.username)}">Reset password</button>
-      <button class="button danger" data-user-action="delete" data-username="${escapeHTML(item.username)}" ${item.username === session.username ? "disabled" : ""}>Delete</button>
+      <button class="button secondary" data-user-action="password" data-username="${escapeHTML(item.username)}" ${protectedAccount ? "disabled" : ""}>Reset password</button>
+      <button class="button danger" data-user-action="delete" data-username="${escapeHTML(item.username)}" ${item.username === session.username || protectedAccount ? "disabled" : ""}>Delete</button>
     </div>
-  </article>`).join("");
+  </article>`;
+  }).join("");
 }
 
 function renderImports(items) {
@@ -218,21 +253,30 @@ async function refresh() {
   if (!state.authorization) return;
   elements.refresh.disabled = true;
   try {
-    const [cache, importPayload, downloadPayload, transferPayload, sourcePayload, userPayload, session] = await Promise.all([
-      api("/api/v1/cache/status"),
-      api("/api/v1/imports"),
-      api("/api/v1/downloads"),
-      api("/api/v1/transfers"),
-      api("/api/v1/torrents"),
-      api("/api/v1/users"),
-      api("/api/v1/session"),
+    const session = await api("/api/v1/session");
+    const allowed = new Set(session.permissions || []);
+    const canMonitor = allowed.has(permissions.monitoring);
+    const canManageSources = allowed.has(permissions.sources);
+    const canManageUsers = allowed.has(permissions.users);
+    const [cache, importPayload, downloadPayload, transferPayload, sourcePayload, userPayload] = await Promise.all([
+      canMonitor ? api("/api/v1/cache/status") : Promise.resolve({}),
+      canManageSources ? api("/api/v1/imports") : Promise.resolve({ imports: [] }),
+      canMonitor ? api("/api/v1/downloads") : Promise.resolve({ downloads: [] }),
+      canMonitor ? api("/api/v1/transfers") : Promise.resolve({ transfers: [] }),
+      canManageSources ? api("/api/v1/torrents") : Promise.resolve({ sources: [] }),
+      canManageUsers ? api("/api/v1/users") : Promise.resolve({ users: [] }),
     ]);
     const imports = importPayload.imports || [];
     const downloads = downloadPayload.downloads || [];
     const transfers = transferPayload.transfers || [];
     const sources = sourcePayload.sources || [];
     const users = userPayload.users || [];
-    renderSummary(cache, imports, downloads, transfers, sources, users);
+    elements.addSourceSection.hidden = !canManageSources;
+    elements.sourcesSection.hidden = !canManageSources;
+    elements.downloadsSection.hidden = !canMonitor;
+    elements.transfersSection.hidden = !canMonitor;
+    elements.usersSection.hidden = !canManageUsers;
+    renderSummary(cache, imports, downloads, transfers, sources, users, session);
     renderImports(imports);
     renderDownloads(downloads);
     renderTransfers(transfers);
@@ -342,6 +386,7 @@ elements.userForm.addEventListener("submit", async (event) => {
         username: elements.newUsername.value,
         password: elements.newPassword.value,
         role: elements.newUserRole.value,
+        permissions: [],
       }),
     });
     elements.userForm.reset();
@@ -381,6 +426,30 @@ elements.users.addEventListener("click", async (event) => {
     elements.userMessage.className = "form-message error";
     elements.userMessage.textContent = error.message;
     button.disabled = false;
+  }
+});
+
+elements.users.addEventListener("change", async (event) => {
+  const checkbox = event.target.closest("input[data-permission]");
+  if (!checkbox) return;
+  const row = checkbox.closest("article[data-user]");
+  const username = row.dataset.user;
+  const assigned = [...row.querySelectorAll("input[data-permission]:checked")].map((item) => item.dataset.permission);
+  row.querySelectorAll("input[data-permission]").forEach((item) => { item.disabled = true; });
+  elements.userMessage.className = "form-message";
+  elements.userMessage.textContent = `Updating permissions for ${username}…`;
+  try {
+    await api(`/api/v1/users/${encodeURIComponent(username)}/permissions`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ permissions: assigned }),
+    });
+    elements.userMessage.textContent = `Permissions updated for ${username}.`;
+    await refresh();
+  } catch (error) {
+    elements.userMessage.className = "form-message error";
+    elements.userMessage.textContent = error.message;
+    await refresh();
   }
 });
 

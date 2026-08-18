@@ -78,8 +78,44 @@ func TestLocalFileToOpenSubsonicStream(t *testing.T) {
 	if nonAdminUsersResponse.Code != http.StatusForbidden {
 		t.Fatalf("non-admin users status = %d, want %d", nonAdminUsersResponse.Code, http.StatusForbidden)
 	}
+	permissionRequest := httptest.NewRequest(
+		http.MethodPut, "/api/v1/users/listener/permissions",
+		strings.NewReader(`{"permissions":["dashboard.access","monitoring.view"]}`),
+	)
+	permissionRequest.SetBasicAuth("admin", "secret")
+	permissionRequest.Header.Set("Content-Type", "application/json")
+	permissionResponse := httptest.NewRecorder()
+	app.handler.ServeHTTP(permissionResponse, permissionRequest)
+	if permissionResponse.Code != http.StatusOK ||
+		!strings.Contains(permissionResponse.Body.String(), `"dashboard.access"`) {
+		t.Fatalf("update permissions status = %d, body = %s", permissionResponse.Code, permissionResponse.Body.String())
+	}
+	listenerSessionRequest := httptest.NewRequest(http.MethodGet, "/api/v1/session", nil)
+	listenerSessionRequest.SetBasicAuth("listener", "listener-password")
+	listenerSession := httptest.NewRecorder()
+	app.handler.ServeHTTP(listenerSession, listenerSessionRequest)
+	if listenerSession.Code != http.StatusOK ||
+		!strings.Contains(listenerSession.Body.String(), `"monitoring.view"`) {
+		t.Fatalf("listener session status = %d, body = %s", listenerSession.Code, listenerSession.Body.String())
+	}
+	listenerCacheRequest := httptest.NewRequest(http.MethodGet, "/api/v1/cache/status", nil)
+	listenerCacheRequest.SetBasicAuth("listener", "listener-password")
+	listenerCache := httptest.NewRecorder()
+	app.handler.ServeHTTP(listenerCache, listenerCacheRequest)
+	if listenerCache.Code != http.StatusOK {
+		t.Fatalf("delegated cache status = %d, body = %s", listenerCache.Code, listenerCache.Body.String())
+	}
+	listenerSourcesRequest := httptest.NewRequest(http.MethodGet, "/api/v1/torrents", nil)
+	listenerSourcesRequest.SetBasicAuth("listener", "listener-password")
+	listenerSources := httptest.NewRecorder()
+	app.handler.ServeHTTP(listenerSources, listenerSourcesRequest)
+	if listenerSources.Code != http.StatusForbidden {
+		t.Fatalf("undelegated source status = %d, want %d", listenerSources.Code, http.StatusForbidden)
+	}
 	cacheResponse := httptest.NewRecorder()
-	app.handler.ServeHTTP(cacheResponse, httptest.NewRequest(http.MethodGet, "/api/v1/cache/status", nil))
+	cacheRequest := httptest.NewRequest(http.MethodGet, "/api/v1/cache/status", nil)
+	cacheRequest.SetBasicAuth("admin", "secret")
+	app.handler.ServeHTTP(cacheResponse, cacheRequest)
 	if cacheResponse.Code != http.StatusOK || !strings.Contains(cacheResponse.Body.String(), `"capacityBytes":1024`) {
 		t.Fatalf("cache status = %d, body = %s", cacheResponse.Code, cacheResponse.Body.String())
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -46,7 +47,7 @@ func (s *UserService) EnsureBootstrapAdmin(ctx context.Context, username, passwo
 	if password == "" || len([]byte(password)) > 72 {
 		return fmt.Errorf("%w: bootstrap password must contain 1 to 72 bytes", ErrInvalidUser)
 	}
-	credential, err := s.newCredential(username, password, domain.UserRoleAdmin)
+	credential, err := s.newCredential(username, password, domain.UserRoleAdmin, nil)
 	if err != nil {
 		return err
 	}
@@ -99,7 +100,7 @@ func (s *UserService) AuthenticateToken(
 }
 
 func (s *UserService) Users(ctx context.Context, actor domain.User) ([]domain.User, error) {
-	if !actor.IsAdmin() {
+	if !actor.HasPermission(domain.PermissionUsersManage) {
 		return nil, ports.ErrForbidden
 	}
 	return s.store.Users(ctx)
@@ -110,8 +111,9 @@ func (s *UserService) CreateUser(
 	actor domain.User,
 	username, password string,
 	role domain.UserRole,
+	permissions []domain.Permission,
 ) (domain.User, error) {
-	if !actor.IsAdmin() {
+	if !actor.HasPermission(domain.PermissionUsersManage) {
 		return domain.User{}, ports.ErrForbidden
 	}
 	username, err := normalizeUsername(username)
@@ -124,7 +126,17 @@ func (s *UserService) CreateUser(
 	if role != domain.UserRoleAdmin && role != domain.UserRoleUser {
 		return domain.User{}, fmt.Errorf("%w: role must be admin or user", ErrInvalidUser)
 	}
-	credential, err := s.newCredential(username, password, role)
+	permissions, err = normalizePermissions(permissions)
+	if err != nil {
+		return domain.User{}, err
+	}
+	if !actor.IsAdmin() && (role != domain.UserRoleUser || len(permissions) != 0) {
+		return domain.User{}, ports.ErrForbidden
+	}
+	if role == domain.UserRoleAdmin {
+		permissions = nil
+	}
+	credential, err := s.newCredential(username, password, role, permissions)
 	if err != nil {
 		return domain.User{}, err
 	}
@@ -143,8 +155,17 @@ func (s *UserService) UpdatePassword(
 	if err != nil {
 		return err
 	}
-	if !actor.IsAdmin() && actor.Username != username {
-		return ports.ErrForbidden
+	if actor.Username != username {
+		if !actor.HasPermission(domain.PermissionUsersManage) {
+			return ports.ErrForbidden
+		}
+		target, targetErr := s.store.UserCredential(ctx, username)
+		if targetErr != nil {
+			return targetErr
+		}
+		if target.User.IsAdmin() && !actor.IsAdmin() {
+			return ports.ErrForbidden
+		}
 	}
 	if err := validatePassword(password); err != nil {
 		return err
@@ -159,7 +180,7 @@ func (s *UserService) UpdatePassword(
 }
 
 func (s *UserService) DeleteUser(ctx context.Context, actor domain.User, username string) error {
-	if !actor.IsAdmin() {
+	if !actor.HasPermission(domain.PermissionUsersManage) {
 		return ports.ErrForbidden
 	}
 	username, err := normalizeUsername(username)
@@ -167,10 +188,17 @@ func (s *UserService) DeleteUser(ctx context.Context, actor domain.User, usernam
 		return err
 	}
 	if actor.Username == username {
-		return fmt.Errorf("%w: administrators cannot delete their own account", ErrInvalidUser)
+		return fmt.Errorf("%w: users cannot delete their own account", ErrInvalidUser)
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	target, err := s.store.UserCredential(ctx, username)
+	if err != nil {
+		return err
+	}
+	if target.User.IsAdmin() && !actor.IsAdmin() {
+		return ports.ErrForbidden
+	}
 	users, err := s.store.Users(ctx)
 	if err != nil {
 		return err
@@ -193,8 +221,39 @@ func (s *UserService) DeleteUser(ctx context.Context, actor domain.User, usernam
 	return s.store.DeleteUser(ctx, username)
 }
 
+func (s *UserService) UpdatePermissions(
+	ctx context.Context, actor domain.User, username string, permissions []domain.Permission,
+) (domain.User, error) {
+	if !actor.IsAdmin() {
+		return domain.User{}, ports.ErrForbidden
+	}
+	username, err := normalizeUsername(username)
+	if err != nil {
+		return domain.User{}, err
+	}
+	permissions, err = normalizePermissions(permissions)
+	if err != nil {
+		return domain.User{}, err
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	credential, err := s.store.UserCredential(ctx, username)
+	if err != nil {
+		return domain.User{}, err
+	}
+	if credential.User.IsAdmin() {
+		return domain.User{}, fmt.Errorf("%w: administrator permissions cannot be restricted", ErrInvalidUser)
+	}
+	if err := s.store.UpdateUserPermissions(ctx, username, permissions); err != nil {
+		return domain.User{}, err
+	}
+	credential.User.Permissions = permissions
+	credential.User.UpdatedAt = time.Now().UTC()
+	return credential.User, nil
+}
+
 func (s *UserService) newCredential(
-	username, password string, role domain.UserRole,
+	username, password string, role domain.UserRole, permissions []domain.Permission,
 ) (ports.UserCredential, error) {
 	passwordHash, encryptedToken, err := s.codec.Encode(password)
 	if err != nil {
@@ -202,7 +261,9 @@ func (s *UserService) newCredential(
 	}
 	now := time.Now().UTC()
 	return ports.UserCredential{
-		User:         domain.User{Username: username, Role: role, CreatedAt: now, UpdatedAt: now},
+		User: domain.User{
+			Username: username, Role: role, Permissions: permissions, CreatedAt: now, UpdatedAt: now,
+		},
 		PasswordHash: passwordHash, EncryptedToken: encryptedToken,
 	}, nil
 }
@@ -228,4 +289,21 @@ func validatePassword(password string) error {
 		return fmt.Errorf("%w: password must contain 8 to 72 bytes", ErrInvalidUser)
 	}
 	return nil
+}
+
+func normalizePermissions(permissions []domain.Permission) ([]domain.Permission, error) {
+	seen := make(map[domain.Permission]struct{}, len(permissions))
+	result := make([]domain.Permission, 0, len(permissions))
+	for _, permission := range permissions {
+		if !domain.ValidPermission(permission) {
+			return nil, fmt.Errorf("%w: unsupported permission %q", ErrInvalidUser, permission)
+		}
+		if _, exists := seen[permission]; exists {
+			continue
+		}
+		seen[permission] = struct{}{}
+		result = append(result, permission)
+	}
+	sort.Slice(result, func(i, j int) bool { return result[i] < result[j] })
+	return result, nil
 }

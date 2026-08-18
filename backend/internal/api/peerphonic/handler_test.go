@@ -143,9 +143,10 @@ func TestUnknownRouteIsNotFound(t *testing.T) {
 func TestCacheStatus(t *testing.T) {
 	t.Parallel()
 
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/cache/status", nil)
+	request.SetBasicAuth("alice", "secret")
 	response := httptest.NewRecorder()
-	NewHandler(cacheStatusStub{}, nil, nil, nil, nil, nil, "", "").ServeHTTP(response,
-		httptest.NewRequest(http.MethodGet, "/api/v1/cache/status", nil))
+	NewHandler(cacheStatusStub{}, nil, nil, nil, nil, nil, "alice", "secret").ServeHTTP(response, request)
 	if response.Code != http.StatusOK ||
 		!strings.Contains(response.Body.String(), `"capacityBytes":100`) ||
 		!strings.Contains(response.Body.String(), `"pinnedEntries":1`) ||

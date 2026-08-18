@@ -25,6 +25,7 @@ type UserStore interface {
 	UserCredential(ctx context.Context, username string) (UserCredential, error)
 	CreateUser(ctx context.Context, credential UserCredential) error
 	UpdateUserPassword(ctx context.Context, username string, passwordHash, encryptedToken []byte) error
+	UpdateUserPermissions(ctx context.Context, username string, permissions []domain.Permission) error
 	DeleteUser(ctx context.Context, username string) error
 }
 
@@ -41,7 +42,8 @@ type Authenticator interface {
 
 type UserManager interface {
 	Users(ctx context.Context, actor domain.User) ([]domain.User, error)
-	CreateUser(ctx context.Context, actor domain.User, username, password string, role domain.UserRole) (domain.User, error)
+	CreateUser(ctx context.Context, actor domain.User, username, password string, role domain.UserRole, permissions []domain.Permission) (domain.User, error)
 	UpdatePassword(ctx context.Context, actor domain.User, username, password string) error
+	UpdatePermissions(ctx context.Context, actor domain.User, username string, permissions []domain.Permission) (domain.User, error)
 	DeleteUser(ctx context.Context, actor domain.User, username string) error
 }

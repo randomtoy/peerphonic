@@ -23,7 +23,11 @@ func TestUserStorageLifecycle(t *testing.T) {
 	defer catalog.Close()
 	now := time.Now().UTC().Truncate(time.Microsecond)
 	credential := ports.UserCredential{
-		User:         domain.User{Username: "alice", Role: domain.UserRoleUser, CreatedAt: now, UpdatedAt: now},
+		User: domain.User{
+			Username: "alice", Role: domain.UserRoleUser,
+			Permissions: []domain.Permission{domain.PermissionDashboardAccess},
+			CreatedAt:   now, UpdatedAt: now,
+		},
 		PasswordHash: []byte("hash"), EncryptedToken: []byte("encrypted"),
 	}
 	if err := catalog.CreateUser(ctx, credential); err != nil {
@@ -34,6 +38,7 @@ func TestUserStorageLifecycle(t *testing.T) {
 	}
 	stored, err := catalog.UserCredential(ctx, "alice")
 	if err != nil || stored.User.Role != domain.UserRoleUser ||
+		!stored.User.HasPermission(domain.PermissionDashboardAccess) ||
 		!bytes.Equal(stored.PasswordHash, credential.PasswordHash) ||
 		!bytes.Equal(stored.EncryptedToken, credential.EncryptedToken) {
 		t.Fatalf("UserCredential() = %#v, %v", stored, err)
@@ -41,8 +46,15 @@ func TestUserStorageLifecycle(t *testing.T) {
 	if err := catalog.UpdateUserPassword(ctx, "alice", []byte("new-hash"), []byte("new-token")); err != nil {
 		t.Fatal(err)
 	}
+	if err := catalog.UpdateUserPermissions(ctx, "alice", []domain.Permission{
+		domain.PermissionMonitoringView, domain.PermissionSourcesManage,
+	}); err != nil {
+		t.Fatal(err)
+	}
 	stored, err = catalog.UserCredential(ctx, "alice")
-	if err != nil || string(stored.PasswordHash) != "new-hash" || string(stored.EncryptedToken) != "new-token" {
+	if err != nil || string(stored.PasswordHash) != "new-hash" || string(stored.EncryptedToken) != "new-token" ||
+		!stored.User.HasPermission(domain.PermissionMonitoringView) ||
+		!stored.User.HasPermission(domain.PermissionSourcesManage) {
 		t.Fatalf("updated UserCredential() = %#v, %v", stored, err)
 	}
 	users, err := catalog.Users(ctx)
