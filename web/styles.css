@@ -15,7 +15,7 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); }
-button, input { font: inherit; }
+button, input, textarea { font: inherit; }
 button { cursor: pointer; }
 
 .topbar { height: 72px; padding: 0 clamp(20px, 4vw, 64px); display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; background: rgb(11 13 14 / 92%); backdrop-filter: blur(16px); }
@@ -36,9 +36,12 @@ h2 { margin-bottom: 0; font-size: clamp(24px, 3vw, 34px); letter-spacing: -.035e
 .login-panel { min-height: calc(100vh - 210px); display: grid; grid-template-columns: 1.4fr minmax(300px, .6fr); align-items: center; gap: clamp(48px, 10vw, 140px); }
 .login-form { padding: 28px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: 0 32px 90px rgb(0 0 0 / 32%); }
 label { display: grid; gap: 8px; margin-bottom: 18px; color: var(--muted); font-size: 13px; }
-input { width: 100%; padding: 13px 14px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; outline: 0; }
-input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(200 255 90 / 10%); }
+input, textarea { width: 100%; padding: 13px 14px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; outline: 0; }
+textarea { resize: vertical; min-height: 108px; }
+input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(200 255 90 / 10%); }
 .form-error { min-height: 18px; margin: 14px 0 0; color: var(--danger); font-size: 13px; }
+.form-message { min-height: 20px; margin: 14px 2px 0; color: var(--accent); font-size: 13px; }
+.form-message.error { color: var(--danger); }
 
 .button { min-height: 38px; padding: 9px 14px; border: 1px solid transparent; border-radius: 10px; color: var(--text); background: var(--surface-2); font-weight: 700; font-size: 13px; }
 .button:hover { filter: brightness(1.12); }
@@ -59,13 +62,22 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(200 255 90 
 
 .section { margin-top: 72px; }
 .section-heading { margin-bottom: 22px; }
+.section-heading.compact { margin-top: 34px; }
+.section-heading.compact h3 { margin: 0; font-size: 18px; }
 .pill { padding: 6px 10px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; font-size: 12px; }
+.import-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+.import-card { min-width: 0; padding: 22px; display: flex; flex-direction: column; justify-content: space-between; gap: 22px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.import-card h3 { margin: 0 0 8px; font-size: 18px; }
+.import-card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
+.import-card label { margin: 0; }
+.import-card .button.primary { width: auto; align-self: flex-start; }
 .card-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
 .transfer-card, .source-row { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .transfer-card { padding: 22px; }
 .card-title { display: flex; justify-content: space-between; gap: 14px; margin-bottom: 18px; }
 .card-title h3, .source-copy h3 { margin: 0; overflow-wrap: anywhere; font-size: 16px; }
 .status { color: var(--accent); font-size: 12px; white-space: nowrap; }
+.status.failed { color: var(--danger); }
 .progress { height: 6px; overflow: hidden; border-radius: 99px; background: var(--line); }
 .progress > span { display: block; height: 100%; background: var(--accent); }
 .facts { margin-top: 16px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
@@ -87,6 +99,7 @@ input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(200 255 90 
   .login-panel { grid-template-columns: 1fr; align-content: center; gap: 30px; }
   .summary-grid { grid-template-columns: repeat(2, 1fr); }
   .card-grid { grid-template-columns: 1fr; }
+  .import-grid { grid-template-columns: 1fr; }
   .source-row { grid-template-columns: 1fr; }
   .source-actions { justify-content: flex-start; }
   .connection-state { display: none; }

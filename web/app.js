@@ -1,5 +1,6 @@
 const state = {
   authorization: sessionStorage.getItem("peerphonic.authorization") || "",
+  refreshTimer: 0,
 };
 
 const elements = {
@@ -13,6 +14,13 @@ const elements = {
   refresh: document.querySelector("#refresh"),
   logout: document.querySelector("#logout"),
   summary: document.querySelector("#summary"),
+  magnetForm: document.querySelector("#magnet-form"),
+  magnetURI: document.querySelector("#magnet-uri"),
+  torrentForm: document.querySelector("#torrent-form"),
+  torrentFile: document.querySelector("#torrent-file"),
+  importMessage: document.querySelector("#import-message"),
+  imports: document.querySelector("#imports"),
+  importCount: document.querySelector("#import-count"),
   downloads: document.querySelector("#downloads"),
   downloadCount: document.querySelector("#download-count"),
   transfers: document.querySelector("#transfers"),
@@ -67,21 +75,52 @@ function showDashboard(visible) {
   elements.connection.classList.toggle("online", visible);
 }
 
-function renderSummary(cache, downloads, transfers, sources) {
+function renderSummary(cache, imports, downloads, transfers, sources) {
   const capacity = cache.capacityBytes || 0;
   const utilization = capacity ? Math.round((cache.sizeBytes / capacity) * 100) : 0;
   const activeStreams = transfers.reduce((total, item) => total + (item.activeStreams || 0), 0);
   const activeDownloads = downloads.filter((item) => item.state === "downloading").length;
+  const activeImports = imports.filter((item) => item.state === "fetching_metadata" || item.state === "scanning").length;
   const metrics = [
     ["Cache used", formatBytes(cache.sizeBytes), "accent"],
     ["Utilization", `${utilization}%`, ""],
     ["Active streams", activeStreams, ""],
     ["Downloads", activeDownloads, ""],
+    ["Imports", activeImports, ""],
     ["Torrent sources", sources.length, ""],
   ];
   elements.summary.innerHTML = metrics.map(([label, value, kind]) =>
     `<article class="metric ${kind}"><span class="metric-label">${label}</span><strong class="metric-value">${value}</strong></article>`
   ).join("");
+}
+
+function renderImports(items) {
+  elements.importCount.textContent = `${items.length} total`;
+  elements.imports.replaceChildren();
+  if (!items.length) {
+    elements.imports.append(empty("No magnet imports yet."));
+    return;
+  }
+  elements.imports.innerHTML = items.map((item) => {
+    const labels = {
+      fetching_metadata: "Fetching metadata",
+      scanning: "Scanning library",
+      ready: "Ready",
+      failed: "Failed",
+    };
+    return `<article class="source-row">
+      <div class="source-copy">
+        <h3>${escapeHTML(item.name || item.sourceId || item.id)}</h3>
+        <p class="source-meta">
+          <span>${escapeHTML(labels[item.state] || item.state)}</span>
+          ${item.tracks ? `<span>${item.tracks} tracks</span>` : ""}
+          <span>${escapeHTML(item.provider)}</span>
+        </p>
+        ${item.error ? `<p class="form-error">${escapeHTML(item.error)}</p>` : ""}
+      </div>
+      <span class="status ${item.state === "failed" ? "failed" : ""}">${escapeHTML(labels[item.state] || item.state)}</span>
+    </article>`;
+  }).join("");
 }
 
 function renderDownloads(items) {
@@ -156,22 +195,29 @@ async function refresh() {
   if (!state.authorization) return;
   elements.refresh.disabled = true;
   try {
-    const [cache, downloadPayload, transferPayload, sourcePayload] = await Promise.all([
+    const [cache, importPayload, downloadPayload, transferPayload, sourcePayload] = await Promise.all([
       api("/api/v1/cache/status"),
+      api("/api/v1/imports"),
       api("/api/v1/downloads"),
       api("/api/v1/transfers"),
       api("/api/v1/torrents"),
     ]);
+    const imports = importPayload.imports || [];
     const downloads = downloadPayload.downloads || [];
     const transfers = transferPayload.transfers || [];
     const sources = sourcePayload.sources || [];
-    renderSummary(cache, downloads, transfers, sources);
+    renderSummary(cache, imports, downloads, transfers, sources);
+    renderImports(imports);
     renderDownloads(downloads);
     renderTransfers(transfers);
     renderSources(sources);
     elements.updatedAt.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
     elements.loginError.textContent = "";
     showDashboard(true);
+    const active = imports.some((item) => item.state === "fetching_metadata" || item.state === "scanning") ||
+      downloads.some((item) => item.state === "downloading");
+    window.clearTimeout(state.refreshTimer);
+    if (active) state.refreshTimer = window.setTimeout(refresh, 3000);
   } catch (error) {
     if (error.status === 401) {
       state.authorization = "";
@@ -200,10 +246,59 @@ elements.loginForm.addEventListener("submit", (event) => {
 
 elements.refresh.addEventListener("click", refresh);
 elements.logout.addEventListener("click", () => {
+  window.clearTimeout(state.refreshTimer);
   state.authorization = "";
   sessionStorage.removeItem("peerphonic.authorization");
   elements.password.value = "";
   showDashboard(false);
+});
+
+elements.magnetForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = elements.magnetForm.querySelector("button[type=submit]");
+  button.disabled = true;
+  elements.importMessage.className = "form-message";
+  elements.importMessage.textContent = "Adding magnet…";
+  try {
+    await api("/api/v1/torrents/magnet", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ magnet: elements.magnetURI.value }),
+    });
+    elements.magnetForm.reset();
+    elements.importMessage.textContent = "Magnet accepted. Metadata retrieval is running in the background.";
+    await refresh();
+  } catch (error) {
+    elements.importMessage.className = "form-message error";
+    elements.importMessage.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+elements.torrentForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const file = elements.torrentFile.files[0];
+  if (!file) return;
+  const button = elements.torrentForm.querySelector("button[type=submit]");
+  button.disabled = true;
+  elements.importMessage.className = "form-message";
+  elements.importMessage.textContent = `Uploading ${file.name}…`;
+  try {
+    const result = await api("/api/v1/torrents", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-bittorrent" },
+      body: file,
+    });
+    elements.torrentForm.reset();
+    elements.importMessage.textContent = `Imported ${result.name || file.name} (${result.tracks || 0} tracks).`;
+    await refresh();
+  } catch (error) {
+    elements.importMessage.className = "form-message error";
+    elements.importMessage.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
 });
 
 elements.sources.addEventListener("click", async (event) => {

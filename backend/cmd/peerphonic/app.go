@@ -26,6 +26,7 @@ type application struct {
 	handler         http.Handler
 	catalog         *sqlite.Catalog
 	torrentProvider *torrentprovider.Provider
+	magnetImporter  *torrentscanner.MagnetImporter
 }
 
 func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logger) (*application, error) {
@@ -34,7 +35,11 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		return nil, err
 	}
 	var torrentProvider *torrentprovider.Provider
+	var magnetImporter *torrentscanner.MagnetImporter
 	fail := func(err error) (*application, error) {
+		if magnetImporter != nil {
+			magnetImporter.Close()
+		}
 		if torrentProvider != nil {
 			_ = torrentProvider.Close()
 		}
@@ -105,6 +110,10 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 			return fail(fmt.Errorf("prune provider cache: %w", err))
 		}
 	}
+	magnetImporter, err = torrentscanner.NewMagnetImporter(ctx, cfg.TorrentDir, torrentProvider, torrentImporter)
+	if err != nil {
+		return fail(fmt.Errorf("initialize magnet imports: %w", err))
+	}
 	scanManager.StartPeriodic(time.Duration(cfg.ScanIntervalSeconds) * time.Second)
 	if err := torrentProvider.ResumeTrackDownloads(ctx); err != nil {
 		logger.Warn("some torrent track downloads could not be resumed", "error", err)
@@ -114,14 +123,19 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	mux := http.NewServeMux()
 	mux.Handle("/rest/", opensubsonic.NewHandler(catalog, streaming, artwork, cfg.Username, cfg.Password, scanManager))
 	mux.Handle("/", peerphonic.NewHandler(
-		cacheStatus, torrentImporter, torrentManager, torrentProvider, torrentProvider,
+		cacheStatus, torrentImporter, magnetImporter, torrentManager, torrentProvider, torrentProvider,
 		cfg.Username, cfg.Password,
 	))
-	return &application{handler: mux, catalog: catalog, torrentProvider: torrentProvider}, nil
+	return &application{
+		handler: mux, catalog: catalog, torrentProvider: torrentProvider, magnetImporter: magnetImporter,
+	}, nil
 }
 
 func (a *application) Close() error {
 	var closeErrors []error
+	if a.magnetImporter != nil {
+		a.magnetImporter.Close()
+	}
 	if a.torrentProvider != nil {
 		if err := a.torrentProvider.Close(); err != nil {
 			closeErrors = append(closeErrors, fmt.Errorf("close torrent provider: %w", err))

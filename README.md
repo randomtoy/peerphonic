@@ -219,6 +219,22 @@ curl -u admin:admin --data-binary @album.torrent \
   http://localhost:8080/api/v1/torrents
 ```
 
+Magnet links are accepted asynchronously so slow metadata discovery does not
+hold an HTTP connection open:
+
+```bash
+curl -u admin:admin -H 'Content-Type: application/json' \
+  -d '{"magnet":"magnet:?xt=urn:btih:..."}' \
+  http://localhost:8080/api/v1/torrents/magnet
+curl -u admin:admin http://localhost:8080/api/v1/imports
+```
+
+The import endpoint returns HTTP 202 immediately. Jobs move through
+`fetching_metadata`, `scanning`, and `ready` or `failed`; unfinished jobs resume
+after a server restart. Fetching magnet metadata does not select media files,
+so track data still starts on the first playback request. Both magnet links and
+`.torrent` files can also be added from the administration dashboard.
+
 Imported torrents can be listed and managed without restarting the server:
 
 ```bash

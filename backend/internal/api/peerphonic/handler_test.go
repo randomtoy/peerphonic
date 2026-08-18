@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
@@ -21,6 +22,11 @@ type sourceImporterStub struct {
 type transferMonitorStub struct{}
 
 type downloadMonitorStub struct{}
+
+type uriImporterStub struct {
+	uri   string
+	items []domain.SourceImport
+}
 
 type sourceManagerStub struct {
 	sources         []domain.ManagedSource
@@ -66,6 +72,18 @@ func (downloadMonitorStub) TrackDownloads(context.Context) ([]domain.TrackDownlo
 	}}, nil
 }
 
+func (s *uriImporterStub) ImportURI(_ context.Context, uri string) (domain.SourceImport, error) {
+	s.uri = uri
+	return domain.SourceImport{
+		ID: "job-1", Provider: "torrent", SourceID: "abc", Name: "Album",
+		State: domain.SourceImportStateFetching, CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(2, 0),
+	}, nil
+}
+
+func (s *uriImporterStub) SourceImports(context.Context) ([]domain.SourceImport, error) {
+	return s.items, nil
+}
+
 func (s *sourceManagerStub) ManagedSources(context.Context) ([]domain.ManagedSource, error) {
 	return s.sources, s.managementError
 }
@@ -96,7 +114,7 @@ func TestHealth(t *testing.T) {
 	t.Parallel()
 
 	response := httptest.NewRecorder()
-	NewHandler(nil, nil, nil, nil, nil, "", "").ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
+	NewHandler(nil, nil, nil, nil, nil, nil, "", "").ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"status":"ok"`) {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -106,7 +124,7 @@ func TestRootIsReachableForClientDiscovery(t *testing.T) {
 	t.Parallel()
 
 	response := httptest.NewRecorder()
-	NewHandler(nil, nil, nil, nil, nil, "", "").ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	NewHandler(nil, nil, nil, nil, nil, nil, "", "").ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"service":"peerphonic"`) {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -116,7 +134,7 @@ func TestUnknownRouteIsNotFound(t *testing.T) {
 	t.Parallel()
 
 	response := httptest.NewRecorder()
-	NewHandler(nil, nil, nil, nil, nil, "", "").ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/unknown", nil))
+	NewHandler(nil, nil, nil, nil, nil, nil, "", "").ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/unknown", nil))
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusNotFound)
 	}
@@ -126,7 +144,7 @@ func TestCacheStatus(t *testing.T) {
 	t.Parallel()
 
 	response := httptest.NewRecorder()
-	NewHandler(cacheStatusStub{}, nil, nil, nil, nil, "", "").ServeHTTP(response,
+	NewHandler(cacheStatusStub{}, nil, nil, nil, nil, nil, "", "").ServeHTTP(response,
 		httptest.NewRequest(http.MethodGet, "/api/v1/cache/status", nil))
 	if response.Code != http.StatusOK ||
 		!strings.Contains(response.Body.String(), `"capacityBytes":100`) ||
@@ -140,7 +158,7 @@ func TestTorrentImportRequiresBasicAuthentication(t *testing.T) {
 	t.Parallel()
 
 	importer := &sourceImporterStub{}
-	handler := NewHandler(nil, importer, nil, nil, nil, "alice", "secret")
+	handler := NewHandler(nil, importer, nil, nil, nil, nil, "alice", "secret")
 	unauthorized := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorized,
 		httptest.NewRequest(http.MethodPost, "/api/v1/torrents", strings.NewReader("torrent")))
@@ -159,10 +177,47 @@ func TestTorrentImportRequiresBasicAuthentication(t *testing.T) {
 	}
 }
 
+func TestMagnetImportIsAsynchronousAndListed(t *testing.T) {
+	t.Parallel()
+
+	importer := &uriImporterStub{items: []domain.SourceImport{{
+		ID: "job-1", Provider: "torrent", SourceID: "abc", Name: "Album", Tracks: 4,
+		State: domain.SourceImportStateReady, CreatedAt: time.Unix(1, 0), UpdatedAt: time.Unix(2, 0),
+	}}}
+	handler := NewHandler(nil, nil, importer, nil, nil, nil, "alice", "secret")
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(
+		http.MethodPost, "/api/v1/torrents/magnet", strings.NewReader(`{"magnet":"magnet:?xt=urn:btih:abc"}`),
+	))
+	if unauthorized.Code != http.StatusUnauthorized || importer.uri != "" {
+		t.Fatalf("unauthorized status = %d, URI = %q", unauthorized.Code, importer.uri)
+	}
+
+	request := httptest.NewRequest(
+		http.MethodPost, "/api/v1/torrents/magnet", strings.NewReader(`{"magnet":"magnet:?xt=urn:btih:abc"}`),
+	)
+	request.SetBasicAuth("alice", "secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || importer.uri == "" ||
+		!strings.Contains(response.Body.String(), `"state":"fetching_metadata"`) {
+		t.Fatalf("status = %d, body = %s, URI = %q", response.Code, response.Body.String(), importer.uri)
+	}
+
+	request = httptest.NewRequest(http.MethodGet, "/api/v1/imports", nil)
+	request.SetBasicAuth("alice", "secret")
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"tracks":4`) ||
+		!strings.Contains(response.Body.String(), `"state":"ready"`) {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
 func TestTransferStatusRequiresAuthentication(t *testing.T) {
 	t.Parallel()
 
-	handler := NewHandler(nil, nil, nil, transferMonitorStub{}, nil, "alice", "secret")
+	handler := NewHandler(nil, nil, nil, nil, transferMonitorStub{}, nil, "alice", "secret")
 	unauthorized := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/v1/transfers", nil))
 	if unauthorized.Code != http.StatusUnauthorized {
@@ -190,7 +245,7 @@ func TestTransferStatusRequiresAuthentication(t *testing.T) {
 func TestTrackDownloadStatusRequiresAuthentication(t *testing.T) {
 	t.Parallel()
 
-	handler := NewHandler(nil, nil, nil, nil, downloadMonitorStub{}, "alice", "secret")
+	handler := NewHandler(nil, nil, nil, nil, nil, downloadMonitorStub{}, "alice", "secret")
 	unauthorized := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/v1/downloads", nil))
 	if unauthorized.Code != http.StatusUnauthorized {
@@ -216,7 +271,7 @@ func TestTorrentManagementRequiresAuthenticationAndReturnsSources(t *testing.T) 
 		Provider: "torrent", ID: "abc", Name: "Album", Tracks: 12,
 		Attached: true, Paused: false, Pinned: true,
 	}}}
-	handler := NewHandler(nil, nil, manager, nil, nil, "alice", "secret")
+	handler := NewHandler(nil, nil, nil, manager, nil, nil, "alice", "secret")
 	unauthorized := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/v1/torrents", nil))
 	if unauthorized.Code != http.StatusUnauthorized {
@@ -238,7 +293,7 @@ func TestTorrentManagementActions(t *testing.T) {
 	t.Parallel()
 
 	manager := &sourceManagerStub{}
-	handler := NewHandler(nil, nil, manager, nil, nil, "alice", "secret")
+	handler := NewHandler(nil, nil, nil, manager, nil, nil, "alice", "secret")
 	for _, test := range []struct {
 		path string
 		want func() bool
@@ -270,7 +325,7 @@ func TestTorrentManagementReportsConflicts(t *testing.T) {
 	t.Parallel()
 
 	manager := &sourceManagerStub{managementError: ports.ErrSourceBusy}
-	handler := NewHandler(nil, nil, manager, nil, nil, "alice", "secret")
+	handler := NewHandler(nil, nil, nil, manager, nil, nil, "alice", "secret")
 	request := httptest.NewRequest(http.MethodDelete, "/api/v1/torrents/source-a", nil)
 	request.SetBasicAuth("alice", "secret")
 	response := httptest.NewRecorder()

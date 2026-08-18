@@ -128,6 +128,39 @@ func TestReadCatalogSupportsSingleFileTorrent(t *testing.T) {
 	}
 }
 
+func TestFetchMagnetMetadataUsesExistingTorrentWithoutStartingDownload(t *testing.T) {
+	t.Parallel()
+
+	data := torrentBytes(t, metainfo.Info{
+		Name: "Artist - Album", Length: 321,
+		PieceLength: 16 * 1024, Pieces: make([]byte, 20),
+	})
+	metadata, err := metainfo.Load(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := metadata.UnmarshalInfo()
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := t.TempDir()
+	provider, err := NewStreaming(root, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	if err := os.WriteFile(filepath.Join(root, metadata.HashInfoBytes().HexString()+".torrent"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fetched, err := provider.FetchMagnetMetadata(context.Background(), metadata.Magnet(nil, &info).String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(fetched, data) || provider.client != nil {
+		t.Fatalf("fetched existing metadata differs or torrent client was started")
+	}
+}
+
 func TestReadCatalogRecognizesDiscographySections(t *testing.T) {
 	t.Parallel()
 

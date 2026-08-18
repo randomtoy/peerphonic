@@ -43,6 +43,30 @@
       </div>
       <div id="summary" class="summary-grid" aria-live="polite"></div>
 
+      <section class="section" aria-labelledby="add-source-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">ADD MUSIC</p><h2 id="add-source-title">Import a torrent source</h2></div>
+        </div>
+        <div class="import-grid">
+          <form id="magnet-form" class="import-card">
+            <div><h3>Magnet link</h3><p>Metadata is fetched in the background. Audio downloads only when a track is played.</p></div>
+            <label>Magnet URI<textarea id="magnet-uri" name="magnet" rows="4" placeholder="magnet:?xt=urn:btih:…" required></textarea></label>
+            <button class="button primary" type="submit">Add magnet</button>
+          </form>
+          <form id="torrent-form" class="import-card">
+            <div><h3>Torrent file</h3><p>Upload metadata now. The source appears in the library after a catalog scan.</p></div>
+            <label>Torrent file<input id="torrent-file" name="torrent" type="file" accept=".torrent,application/x-bittorrent" required></label>
+            <button class="button primary" type="submit">Upload .torrent</button>
+          </form>
+        </div>
+        <p id="import-message" class="form-message" role="status"></p>
+        <div class="section-heading compact">
+          <div><p class="eyebrow">IMPORT QUEUE</p><h3>Recent magnet imports</h3></div>
+          <span id="import-count" class="pill"></span>
+        </div>
+        <div id="imports" class="source-list"></div>
+      </section>
+
       <section class="section" aria-labelledby="downloads-title">
         <div class="section-heading">
           <div><p class="eyebrow">CACHE JOBS</p><h2 id="downloads-title">Track downloads</h2></div>

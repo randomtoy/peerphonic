@@ -5,8 +5,10 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
@@ -71,6 +73,22 @@ type managedSourcesResponse struct {
 	Sources []managedSourceResponse `json:"sources"`
 }
 
+type sourceImportResponse struct {
+	ID        string                   `json:"id"`
+	Provider  string                   `json:"provider"`
+	Name      string                   `json:"name,omitempty"`
+	SourceID  string                   `json:"sourceId,omitempty"`
+	Tracks    int                      `json:"tracks"`
+	State     domain.SourceImportState `json:"state"`
+	Error     string                   `json:"error,omitempty"`
+	CreatedAt string                   `json:"createdAt"`
+	UpdatedAt string                   `json:"updatedAt"`
+}
+
+type sourceImportsResponse struct {
+	Imports []sourceImportResponse `json:"imports"`
+}
+
 type cacheComponentResponse struct {
 	Name           string `json:"name"`
 	SizeBytes      int64  `json:"sizeBytes"`
@@ -90,6 +108,7 @@ type cacheStatusResponse struct {
 func NewHandler(
 	cache cacheStatus,
 	torrentImporter ports.SourceImporter,
+	uriImporter ports.SourceURIImporter,
 	sources ports.SourceManager,
 	transfers ports.SourceTransferMonitor,
 	downloads ports.TrackDownloadMonitor,
@@ -156,6 +175,51 @@ func NewHandler(
 				Name   string `json:"name"`
 				Tracks int    `json:"tracks"`
 			}{ID: result.SourceID, Name: result.Name, Tracks: result.Tracks})
+		})
+	}
+	if uriImporter != nil {
+		mux.HandleFunc("POST /api/v1/torrents/magnet", func(writer http.ResponseWriter, request *http.Request) {
+			if !requireBasicAuthentication(writer, request, username, password) {
+				return
+			}
+			request.Body = http.MaxBytesReader(writer, request.Body, 64<<10)
+			decoder := json.NewDecoder(request.Body)
+			decoder.DisallowUnknownFields()
+			var payload struct {
+				Magnet string `json:"magnet"`
+			}
+			if err := decoder.Decode(&payload); err != nil || strings.TrimSpace(payload.Magnet) == "" {
+				http.Error(writer, "invalid magnet request", http.StatusBadRequest)
+				return
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				http.Error(writer, "invalid magnet request", http.StatusBadRequest)
+				return
+			}
+			item, err := uriImporter.ImportURI(request.Context(), payload.Magnet)
+			if err != nil {
+				http.Error(writer, "invalid magnet URI", http.StatusBadRequest)
+				return
+			}
+			writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+			writer.WriteHeader(http.StatusAccepted)
+			_ = json.NewEncoder(writer).Encode(newSourceImportResponse(item))
+		})
+		mux.HandleFunc("GET /api/v1/imports", func(writer http.ResponseWriter, request *http.Request) {
+			if !requireBasicAuthentication(writer, request, username, password) {
+				return
+			}
+			items, err := uriImporter.SourceImports(request.Context())
+			if err != nil {
+				http.Error(writer, "read source imports", http.StatusInternalServerError)
+				return
+			}
+			response := sourceImportsResponse{Imports: make([]sourceImportResponse, 0, len(items))}
+			for _, item := range items {
+				response.Imports = append(response.Imports, newSourceImportResponse(item))
+			}
+			writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+			_ = json.NewEncoder(writer).Encode(response)
 		})
 	}
 	if sources != nil {
@@ -272,6 +336,14 @@ func NewHandler(
 		})
 	}
 	return mux
+}
+
+func newSourceImportResponse(item domain.SourceImport) sourceImportResponse {
+	return sourceImportResponse{
+		ID: item.ID, Provider: item.Provider, Name: item.Name, SourceID: item.SourceID,
+		Tracks: item.Tracks, State: item.State, Error: item.Error,
+		CreatedAt: item.CreatedAt.Format(time.RFC3339), UpdatedAt: item.UpdatedAt.Format(time.RFC3339),
+	}
 }
 
 func basicAuthenticated(request *http.Request, username, password string) bool {
