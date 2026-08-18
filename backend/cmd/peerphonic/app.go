@@ -26,10 +26,11 @@ import (
 )
 
 type application struct {
-	handler         http.Handler
-	catalog         *sqlite.Catalog
-	torrentProvider *torrentprovider.Provider
-	magnetImporter  *torrentscanner.MagnetImporter
+	handler          http.Handler
+	catalog          *sqlite.Catalog
+	torrentProvider  *torrentprovider.Provider
+	soulseekProvider *soulseekprovider.Client
+	magnetImporter   *torrentscanner.MagnetImporter
 }
 
 func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logger) (*application, error) {
@@ -38,6 +39,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		return nil, err
 	}
 	var torrentProvider *torrentprovider.Provider
+	var soulseekClient *soulseekprovider.Client
 	var magnetImporter *torrentscanner.MagnetImporter
 	fail := func(err error) (*application, error) {
 		if magnetImporter != nil {
@@ -45,6 +47,9 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		}
 		if torrentProvider != nil {
 			_ = torrentProvider.Close()
+		}
+		if soulseekClient != nil {
+			_ = soulseekClient.Close()
 		}
 		catalog.Close()
 		return nil, err
@@ -81,7 +86,6 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	}
 	var soulseekMonitor ports.ProviderStatusMonitor
 	var soulseekSearch ports.SourceSearcher
-	var soulseekClient *soulseekprovider.Client
 	if cfg.SlskdURL != "" {
 		var clientErr error
 		soulseekClient, clientErr = soulseekprovider.NewSlskd(
@@ -103,14 +107,23 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		return fail(err)
 	}
 	artwork := services.NewArtworkService(blobs, torrentProvider)
-	torrentEnricher := torrentscanner.NewEnricher(catalog, metadata.TagExtractor{}, artwork)
+	completedEnricher := scanner.NewEnricher(catalog, metadata.TagExtractor{}, artwork)
 	torrentProvider.SetCompletedHandler(func(file torrentprovider.CompletedFile) {
-		if err := torrentEnricher.Enrich(ctx, file.TrackID, file.Path); err != nil {
+		if err := completedEnricher.Enrich(ctx, file.TrackID, file.Path); err != nil {
 			logger.Warn("torrent metadata enrichment failed", "track", file.TrackID, "error", err)
 			return
 		}
 		logger.Info("torrent metadata enriched", "track", file.TrackID)
 	})
+	if soulseekClient != nil {
+		soulseekClient.SetCompletedHandler(func(file soulseekprovider.CompletedFile) {
+			if err := completedEnricher.Enrich(context.WithoutCancel(ctx), file.TrackID, file.Path); err != nil {
+				logger.Warn("Soulseek metadata enrichment failed", "track", file.TrackID, "error", err)
+				return
+			}
+			logger.Info("Soulseek metadata enriched", "track", file.TrackID)
+		})
+	}
 	mediaCache, err := services.NewMediaCache(blobs, catalog, cfg.CacheSizeBytes)
 	if err != nil {
 		return fail(err)
@@ -155,6 +168,11 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	if err := torrentProvider.ResumeTrackDownloads(ctx); err != nil {
 		logger.Warn("some torrent track downloads could not be resumed", "error", err)
 	}
+	if soulseekClient != nil {
+		if err := soulseekClient.ResumeTrackDownloads(ctx); err != nil {
+			logger.Warn("some Soulseek track downloads could not be resumed", "error", err)
+		}
+	}
 
 	streamingProviders := []ports.SourceProvider{provider, torrentProvider}
 	downloadMonitors := []ports.TrackDownloadMonitor{torrentProvider}
@@ -173,7 +191,8 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		userService, userService, soulseekMonitor, soulseekSearch, transferSettings, scanManager,
 	))
 	return &application{
-		handler: mux, catalog: catalog, torrentProvider: torrentProvider, magnetImporter: magnetImporter,
+		handler: mux, catalog: catalog, torrentProvider: torrentProvider,
+		soulseekProvider: soulseekClient, magnetImporter: magnetImporter,
 	}, nil
 }
 
@@ -185,6 +204,11 @@ func (a *application) Close() error {
 	if a.torrentProvider != nil {
 		if err := a.torrentProvider.Close(); err != nil {
 			closeErrors = append(closeErrors, fmt.Errorf("close torrent provider: %w", err))
+		}
+	}
+	if a.soulseekProvider != nil {
+		if err := a.soulseekProvider.Close(); err != nil {
+			closeErrors = append(closeErrors, fmt.Errorf("close Soulseek provider: %w", err))
 		}
 	}
 	if err := a.catalog.Close(); err != nil {

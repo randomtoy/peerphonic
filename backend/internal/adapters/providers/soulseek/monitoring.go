@@ -16,6 +16,52 @@ import (
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
 )
 
+func (c *Client) ResumeTrackDownloads(ctx context.Context) error {
+	if c.downloads == nil {
+		return nil
+	}
+	return c.downloads.resume(ctx)
+}
+
+func (c *downloadCoordinator) resume(ctx context.Context) error {
+	var resumeErrors []error
+	resumeErrors = append(resumeErrors, c.loadErrors...)
+	c.mu.Lock()
+	jobs := make([]*downloadJob, 0, len(c.jobs))
+	for _, job := range c.jobs {
+		jobs = append(jobs, job)
+	}
+	c.mu.Unlock()
+	c.mu.Lock()
+	records := make([]*downloadJob, 0, len(c.records))
+	for _, job := range c.records {
+		records = append(records, job)
+	}
+	c.mu.Unlock()
+	for _, job := range records {
+		download, _ := job.snapshot()
+		if download.State == domain.DownloadStateCached {
+			c.client.notifyCompleted(CompletedFile{TrackID: download.TrackID, Path: job.finalPath})
+		}
+	}
+	for _, job := range jobs {
+		if err := ctx.Err(); err != nil {
+			return errors.Join(append(resumeErrors, err)...)
+		}
+		job.mu.Lock()
+		key, batchID := job.key, job.batchID
+		job.mu.Unlock()
+		if batchID == "" {
+			err := errors.New("resume Soulseek download: missing slskd batch ID")
+			c.finishJob(key, job, domain.DownloadStateFailed, err)
+			resumeErrors = append(resumeErrors, err)
+			continue
+		}
+		c.startMonitor(key, job, batchID)
+	}
+	return errors.Join(resumeErrors...)
+}
+
 func (c *Client) TrackDownloads(ctx context.Context) ([]domain.TrackDownload, error) {
 	if c.downloads == nil {
 		return nil, nil
@@ -36,7 +82,13 @@ func (c *downloadCoordinator) trackDownloads(ctx context.Context) ([]domain.Trac
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		result = append(result, job.snapshot())
+		download, changed := job.snapshot()
+		if changed {
+			if err := c.persistJob(job); err != nil {
+				return nil, err
+			}
+		}
+		result = append(result, download)
 	}
 	sort.Slice(result, func(i, j int) bool {
 		if result[i].StartedAt.Equal(result[j].StartedAt) {
@@ -47,17 +99,19 @@ func (c *downloadCoordinator) trackDownloads(ctx context.Context) ([]domain.Trac
 	return result, nil
 }
 
-func (j *downloadJob) snapshot() domain.TrackDownload {
+func (j *downloadJob) snapshot() (domain.TrackDownload, bool) {
 	j.mu.Lock()
 	defer j.mu.Unlock()
+	changed := false
 	if j.download.State == domain.DownloadStateCached {
 		if _, err := os.Stat(j.finalPath); errors.Is(err, os.ErrNotExist) {
 			j.download.State = domain.DownloadStateEvicted
 			j.download.CompletedBytes = 0
 			j.download.UpdatedAt = time.Now().UTC()
+			changed = true
 		}
 	}
-	return j.download
+	return j.download, changed
 }
 
 func (c *Client) CancelTrackDownload(ctx context.Context, id string) error {

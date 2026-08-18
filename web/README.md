@@ -23,7 +23,8 @@ starting the download. Playback later starts the single-file transfer and reuses
 the completed file from the shared cache. The Activity workspace combines
 torrent and Soulseek jobs, including queued and cancelled states. Accounts with
 source-management access can cancel an active Soulseek transfer or retry a
-failed, cancelled, or evicted one.
+failed, cancelled, or evicted one. Active Soulseek job monitoring resumes after
+a Peerphonic restart without enqueueing a duplicate slskd transfer.
 
 For local frontend work, serve this directory through a web server that proxies
 the API paths to the backend. Opening `index.html` directly does not provide an

@@ -18,7 +18,7 @@ type Scanner struct {
 	root      string
 	catalog   ports.Catalog
 	provider  *torrentprovider.Provider
-	extractor metadataExtractor
+	extractor scanner.Extractor
 	artwork   scanner.ArtworkWriter
 }
 
@@ -30,7 +30,7 @@ func NewWithEnrichment(
 	root string,
 	catalog ports.Catalog,
 	provider *torrentprovider.Provider,
-	extractor metadataExtractor,
+	extractor scanner.Extractor,
 	artwork scanner.ArtworkWriter,
 ) *Scanner {
 	return &Scanner{
@@ -84,7 +84,7 @@ func (s *Scanner) Scan(ctx context.Context) (scanner.Report, error) {
 			seen[track.Ref.Key] = struct{}{}
 			if s.extractor != nil {
 				if cachedPath, ok := s.provider.CachedPath(track.Ref, track.Track.Size); ok {
-					if err := enrichTrack(ctx, &track.Track, cachedPath, s.extractor, s.artwork); err != nil {
+					if err := scanner.EnrichTrack(ctx, &track.Track, cachedPath, s.extractor, s.artwork); err != nil {
 						warnings = append(warnings, scanner.Warning{Path: cachedPath, Err: err})
 					}
 				}

@@ -38,10 +38,16 @@ type downloadCoordinator struct {
 	client        *Client
 	downloadsDir  string
 	incompleteDir string
+	stateDir      string
+	ctx           context.Context
+	stop          context.CancelFunc
+	loadErrors    []error
 
-	mu      sync.Mutex
-	jobs    map[string]*downloadJob
-	records map[string]*downloadJob
+	mu        sync.Mutex
+	persistMu sync.Mutex
+	monitorWG sync.WaitGroup
+	jobs      map[string]*downloadJob
+	records   map[string]*downloadJob
 }
 
 type downloadJob struct {
@@ -54,10 +60,21 @@ type downloadJob struct {
 	incompletePath string
 	done           chan struct{}
 
-	mu       sync.Mutex
-	download domain.TrackDownload
-	err      error
-	finished bool
+	mu          sync.Mutex
+	download    domain.TrackDownload
+	err         error
+	finished    bool
+	monitoring  bool
+	lastPersist time.Time
+}
+
+type persistedDownloadJob struct {
+	Download   domain.TrackDownload `json:"download"`
+	Key        string               `json:"key"`
+	TrackID    string               `json:"trackId"`
+	Remote     remoteFileRef        `json:"remote"`
+	BatchID    string               `json:"batchId,omitempty"`
+	TransferID string               `json:"transferId,omitempty"`
 }
 
 type slskdDownloadBatchResponse struct {
@@ -100,15 +117,23 @@ func newDownloadCoordinator(
 	if err != nil {
 		return nil, fmt.Errorf("resolve slskd incomplete directory: %w", err)
 	}
+	stateDir := filepath.Join(filepath.Dir(downloadsDir), "jobs")
 	for _, directory := range []string{downloadsDir, incompleteDir} {
 		if err := os.MkdirAll(directory, 0o750); err != nil {
 			return nil, fmt.Errorf("create slskd media directory %q: %w", directory, err)
 		}
 	}
-	return &downloadCoordinator{
+	if err := os.MkdirAll(stateDir, 0o700); err != nil {
+		return nil, fmt.Errorf("create Soulseek job directory %q: %w", stateDir, err)
+	}
+	coordinatorContext, cancel := context.WithCancel(context.Background())
+	coordinator := &downloadCoordinator{
 		client: client, downloadsDir: downloadsDir, incompleteDir: incompleteDir,
+		stateDir: stateDir, ctx: coordinatorContext, stop: cancel,
 		jobs: make(map[string]*downloadJob), records: make(map[string]*downloadJob),
-	}, nil
+	}
+	coordinator.loadErrors = coordinator.loadRecords()
+	return coordinator, nil
 }
 
 func (c *Client) Resolve(ctx context.Context, ref domain.SourceRef) (ports.ResolvedSource, error) {
@@ -207,6 +232,10 @@ func (c *downloadCoordinator) ensureDownload(
 	c.jobs[key] = job
 	c.records[downloadID] = job
 	c.mu.Unlock()
+	if err := c.persistJob(job); err != nil {
+		c.finishJob(key, job, domain.DownloadStateFailed, err)
+		return nil, err
+	}
 
 	payload := struct {
 		Username string `json:"username"`
@@ -245,11 +274,32 @@ func (c *downloadCoordinator) ensureDownload(
 	job.batchID = response.Batch.ID
 	job.transferID = response.Batch.Transfers[0].ID
 	job.mu.Unlock()
-	go c.monitorDownload(key, job, response.Batch.ID)
+	if err := c.persistJob(job); err != nil {
+		c.finishJob(key, job, domain.DownloadStateFailed, err)
+		return nil, err
+	}
+	c.startMonitor(key, job, response.Batch.ID)
 	return job, nil
 }
 
+func (c *downloadCoordinator) startMonitor(key string, job *downloadJob, batchID string) {
+	if !job.beginMonitoring() {
+		return
+	}
+	c.monitorWG.Add(1)
+	go func() {
+		defer c.monitorWG.Done()
+		c.monitorDownload(key, job, batchID)
+	}()
+}
+
+func (c *downloadCoordinator) close() {
+	c.stop()
+	c.monitorWG.Wait()
+}
+
 func (c *downloadCoordinator) monitorDownload(key string, job *downloadJob, batchID string) {
+	defer job.endMonitoring()
 	ticker := time.NewTicker(downloadPollInterval)
 	defer ticker.Stop()
 	consecutiveErrors := 0
@@ -258,7 +308,7 @@ func (c *downloadCoordinator) monitorDownload(key string, job *downloadJob, batc
 			return
 		}
 		var batch slskdDownloadBatch
-		ctx, cancel := context.WithTimeout(context.Background(), c.client.httpClient.Timeout)
+		ctx, cancel := context.WithTimeout(c.ctx, c.client.httpClient.Timeout)
 		err := c.client.doJSON(ctx, http.MethodGet,
 			"/api/v0/transfers/downloads/batches/"+url.PathEscape(batchID), nil, &batch)
 		cancel()
@@ -275,13 +325,20 @@ func (c *downloadCoordinator) monitorDownload(key string, job *downloadJob, batc
 				return
 			}
 			transfer := batch.Transfers[0]
-			job.updateTransfer(transfer)
+			changed := job.updateTransfer(transfer)
+			if changed && job.persistDue(time.Second) {
+				if err := c.persistJob(job); err != nil {
+					c.finishJob(key, job, domain.DownloadStateFailed, err)
+					return
+				}
+			}
 			if transferSucceeded(transfer.State) {
 				if err := waitForFinalFile(job.finalPath, 10*time.Second); err != nil {
 					c.finishJob(key, job, domain.DownloadStateFailed, err)
 					return
 				}
 				c.finishJob(key, job, domain.DownloadStateCached, nil)
+				c.client.notifyCompleted(CompletedFile{TrackID: job.trackID, Path: job.finalPath})
 				return
 			}
 			if transferFailed(transfer.State) {
@@ -297,7 +354,11 @@ func (c *downloadCoordinator) monitorDownload(key string, job *downloadJob, batc
 				return
 			}
 		}
-		<-ticker.C
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -361,6 +422,7 @@ func (c *downloadCoordinator) finishJob(
 	}
 	close(job.done)
 	job.mu.Unlock()
+	_ = c.persistJob(job)
 	c.removeJob(key, job)
 }
 
@@ -384,23 +446,53 @@ func (j *downloadJob) isFinished() bool {
 	return j.finished
 }
 
-func (j *downloadJob) updateTransfer(transfer slskdDownloadTransfer) {
+func (j *downloadJob) beginMonitoring() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.finished || j.monitoring {
+		return false
+	}
+	j.monitoring = true
+	return true
+}
+
+func (j *downloadJob) endMonitoring() {
+	j.mu.Lock()
+	j.monitoring = false
+	j.mu.Unlock()
+}
+
+func (j *downloadJob) updateTransfer(transfer slskdDownloadTransfer) bool {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	if j.finished {
-		return
+		return false
 	}
+	previousID := j.transferID
+	previousBytes := j.download.CompletedBytes
+	previousState := j.download.State
 	if transfer.ID != "" {
 		j.transferID = transfer.ID
 	}
 	j.download.CompletedBytes = min(transfer.BytesTransferred, j.download.TotalBytes)
-	j.download.UpdatedAt = time.Now().UTC()
 	if stateContains(transfer.State, "InProgress") {
 		j.download.State = domain.DownloadStateDownloading
 	} else if stateContains(transfer.State, "Queued") || stateContains(transfer.State, "Requested") ||
 		stateContains(transfer.State, "Initializing") {
 		j.download.State = domain.DownloadStateQueued
 	}
+	changed := previousID != j.transferID || previousBytes != j.download.CompletedBytes ||
+		previousState != j.download.State
+	if changed {
+		j.download.UpdatedAt = time.Now().UTC()
+	}
+	return changed
+}
+
+func (j *downloadJob) persistDue(interval time.Duration) bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return time.Since(j.lastPersist) >= interval
 }
 
 func (c *downloadCoordinator) rememberCached(
@@ -417,10 +509,11 @@ func (c *downloadCoordinator) rememberCached(
 		existing.download.Error = ""
 		existing.download.UpdatedAt = info.ModTime().UTC()
 		existing.mu.Unlock()
+		_ = c.persistJob(existing)
 		return
 	}
 	completedAt := info.ModTime().UTC()
-	c.records[id] = &downloadJob{
+	job := &downloadJob{
 		key: key, trackID: trackID, remote: remote,
 		finalPath: filepath.Join(c.downloadsDir, trackID, name),
 		download: domain.TrackDownload{
@@ -431,6 +524,8 @@ func (c *downloadCoordinator) rememberCached(
 		},
 		finished: true,
 	}
+	c.records[id] = job
+	_ = c.persistJob(job)
 }
 
 func sanitizedFilename(path string) string {

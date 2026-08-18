@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
@@ -45,6 +46,14 @@ type Client struct {
 	apiKey     string
 	httpClient *http.Client
 	downloads  *downloadCoordinator
+
+	completedMu      sync.RWMutex
+	completedHandler func(CompletedFile)
+}
+
+type CompletedFile struct {
+	TrackID string
+	Path    string
 }
 
 func NewSlskd(endpoint, apiKey string, timeout time.Duration) (*Client, error) {
@@ -69,12 +78,37 @@ func NewSlskd(endpoint, apiKey string, timeout time.Duration) (*Client, error) {
 
 func (c *Client) Name() string { return Name }
 
+func (c *Client) SetCompletedHandler(handler func(CompletedFile)) {
+	c.completedMu.Lock()
+	c.completedHandler = handler
+	c.completedMu.Unlock()
+}
+
+func (c *Client) notifyCompleted(file CompletedFile) {
+	c.completedMu.RLock()
+	handler := c.completedHandler
+	c.completedMu.RUnlock()
+	if handler != nil {
+		handler(file)
+	}
+}
+
 func (c *Client) SetMediaDirectories(downloadsDir, incompleteDir string) error {
 	coordinator, err := newDownloadCoordinator(c, downloadsDir, incompleteDir)
 	if err != nil {
 		return err
 	}
+	if c.downloads != nil {
+		c.downloads.close()
+	}
 	c.downloads = coordinator
+	return nil
+}
+
+func (c *Client) Close() error {
+	if c.downloads != nil {
+		c.downloads.close()
+	}
 	return nil
 }
 

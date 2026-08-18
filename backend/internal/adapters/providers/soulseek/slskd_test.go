@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -245,6 +246,8 @@ func TestSlskdResolveStreamsGrowingFileAndReusesCompletedDownload(t *testing.T) 
 	if err := client.SetMediaDirectories(downloadsDir, incompleteDir); err != nil {
 		t.Fatal(err)
 	}
+	completed := make(chan CompletedFile, 1)
+	client.SetCompletedHandler(func(file CompletedFile) { completed <- file })
 	encoded, _ := json.Marshal(remote)
 	ref := domain.SourceRef{Provider: Name, Key: base64.RawURLEncoding.EncodeToString(encoded)}
 	resolved, err := client.Resolve(context.Background(), ref)
@@ -269,6 +272,14 @@ func TestSlskdResolveStreamsGrowingFileAndReusesCompletedDownload(t *testing.T) 
 	_ = resolved.Content.Close()
 	if string(data) != "audio-data" {
 		t.Fatalf("streamed data = %q", data)
+	}
+	select {
+	case file := <-completed:
+		if file.TrackID != trackID || file.Path != finalPath {
+			t.Fatalf("completed file = %#v", file)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("completed file callback was not invoked")
 	}
 
 	cached, err := client.Resolve(context.Background(), ref)
@@ -370,6 +381,97 @@ func TestSlskdDownloadCanBeCancelledAndRetried(t *testing.T) {
 	}
 }
 
+func TestSlskdDownloadResumesMonitoringAfterClientRestart(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	downloadsDir := filepath.Join(root, "downloads")
+	incompleteDir := filepath.Join(root, "incomplete")
+	remote := remoteFileRef{Peer: "peer-one", Path: `Album\song.mp3`, Size: 10}
+	trackID := domain.StableID(Name, remote.Peer, remote.Path, strconv.FormatInt(remote.Size, 10))
+	finalPath := filepath.Join(downloadsDir, trackID, "song.mp3")
+	var enqueueCalls atomic.Int32
+	var complete atomic.Bool
+	var writeFinal sync.Once
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v0/transfers/downloads/batches":
+			enqueueCalls.Add(1)
+			_, _ = writer.Write([]byte(`{"batch":{"id":"batch-1","transfers":[{"id":"transfer-1","state":"Queued, Locally"}]},"failures":[]}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v0/transfers/downloads/batches/batch-1":
+			if complete.Load() {
+				writeFinal.Do(func() {
+					if err := os.MkdirAll(filepath.Dir(finalPath), 0o750); err != nil {
+						t.Error(err)
+					}
+					if err := os.WriteFile(finalPath, []byte("audio-data"), 0o640); err != nil {
+						t.Error(err)
+					}
+				})
+				_, _ = writer.Write([]byte(`{"id":"batch-1","transfers":[{"id":"transfer-1","state":"Completed, Succeeded, Remotely","bytesTransferred":10}]}`))
+				return
+			}
+			_, _ = writer.Write([]byte(`{"id":"batch-1","transfers":[{"id":"transfer-1","state":"Queued, Locally"}]}`))
+		default:
+			http.Error(writer, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	encoded, _ := json.Marshal(remote)
+	ref := domain.SourceRef{Provider: Name, Key: base64.RawURLEncoding.EncodeToString(encoded)}
+	first, err := NewSlskd(server.URL, "key", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.SetMediaDirectories(downloadsDir, incompleteDir); err != nil {
+		t.Fatal(err)
+	}
+	resolved, err := first.Resolve(context.Background(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resolved.Content.Close()
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := NewSlskd(server.URL, "key", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	if err := second.SetMediaDirectories(downloadsDir, incompleteDir); err != nil {
+		t.Fatal(err)
+	}
+	downloads, err := second.TrackDownloads(context.Background())
+	if err != nil || len(downloads) != 1 || downloads[0].State != domain.DownloadStateQueued {
+		t.Fatalf("restored TrackDownloads() = %#v, %v", downloads, err)
+	}
+	complete.Store(true)
+	if err := second.ResumeTrackDownloads(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		downloads, err = second.TrackDownloads(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(downloads) == 1 && downloads[0].State == domain.DownloadStateCached {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("resumed TrackDownloads() = %#v", downloads)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if enqueueCalls.Load() != 1 {
+		t.Fatalf("enqueue calls = %d, want 1", enqueueCalls.Load())
+	}
+}
+
 func TestSlskdResolveRequiresMediaDirectoriesAndValidReference(t *testing.T) {
 	t.Parallel()
 
@@ -401,5 +503,31 @@ func TestSlskdPathSanitizationMatchesRemoteRoots(t *testing.T) {
 		if got := sanitizedRemoteDirectory(path); got != want {
 			t.Errorf("sanitizedRemoteDirectory(%q) = %q, want %q", path, got, want)
 		}
+	}
+}
+
+func TestSlskdResumeReportsInvalidPersistedJobWithoutBlockingStartup(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	downloadsDir := filepath.Join(root, "downloads")
+	incompleteDir := filepath.Join(root, "incomplete")
+	jobsDir := filepath.Join(root, "jobs")
+	if err := os.MkdirAll(jobsDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(jobsDir, "broken.json"), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	client, err := NewSlskd("http://slskd:5030", "key", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.SetMediaDirectories(downloadsDir, incompleteDir); err != nil {
+		t.Fatalf("SetMediaDirectories() error = %v", err)
+	}
+	if err := client.ResumeTrackDownloads(context.Background()); err == nil {
+		t.Fatal("ResumeTrackDownloads() error = nil")
 	}
 }

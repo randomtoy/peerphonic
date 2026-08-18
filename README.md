@@ -198,7 +198,15 @@ secret. Peerphonic can search the Soulseek network, add a selected result to the
 catalog without downloading it, and enqueue only that file when an OpenSubsonic
 client starts playback. Reads follow slskd's growing incomplete file so clients
 can buffer before the complete download has finished. Completed files remain in
-the downloads directory and are reused by later playback requests.
+the downloads directory and are reused by later playback requests. Active jobs
+are recorded atomically under `<cache>/soulseek/jobs`; after a Peerphonic
+restart, monitoring reconnects to the existing slskd batch instead of enqueueing
+the file again.
+
+When a Soulseek file completes, Peerphonic extracts its audio tags and embedded
+artwork through the same metadata boundary used for completed torrent tracks.
+The provisional album identity is kept stable so one enriched track cannot
+split away from the album already visible to OpenSubsonic clients.
 
 Peerphonic and slskd must see the same completed and incomplete storage. For a
 native installation, configure slskd's `SLSKD_DOWNLOADS_DIR` and
