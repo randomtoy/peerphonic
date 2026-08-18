@@ -27,7 +27,9 @@ into one album card, with individual track controls retained inside it. Playback
 the completed file from the shared cache. The Activity workspace combines
 torrent and Soulseek jobs, groups multiple source attempts for one logical track,
 and shows sampled speed, stalled progress, connected torrent peers and seeders,
-including queued and cancelled states. Accounts with
+including waiting, downloading, transcoding, cached, and cancelled states.
+Completed MP3 transcodes are kept in the shared LRU cache and reused for later
+OpenSubsonic range requests. Accounts with
 source-management access can cancel an active Soulseek transfer or retry a
 failed, cancelled, or evicted one. Active Soulseek job monitoring resumes after
 a Peerphonic restart without enqueueing a duplicate slskd transfer.

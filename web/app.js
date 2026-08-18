@@ -127,6 +127,11 @@ const pages = {
 };
 
 const mebibyte = 1024 * 1024;
+const activeDownloadStates = new Set(["waiting", "queued", "downloading", "transcoding"]);
+
+function isActiveDownload(item) {
+  return activeDownloadStates.has(item.state);
+}
 
 function api(path, options = {}) {
   return fetch(path, {
@@ -207,7 +212,7 @@ function renderSummary(cache, imports, downloads, transfers, sources, users, ses
   const capacity = cache.capacityBytes || 0;
   const utilization = capacity ? Math.round((cache.sizeBytes / capacity) * 100) : 0;
   const activeStreams = transfers.reduce((total, item) => total + (item.activeStreams || 0), 0);
-  const activeDownloads = downloads.filter((item) => item.state === "queued" || item.state === "downloading").length;
+  const activeDownloads = downloads.filter(isActiveDownload).length;
   const activeImports = imports.filter((item) => item.state === "fetching_metadata" || item.state === "scanning").length;
   const metrics = [];
   if (allowed.has(permissions.monitoring)) metrics.push(
@@ -283,7 +288,7 @@ function renderImports(items) {
 }
 
 function groupTrackDownloads(items) {
-  const rank = { cached: 0, downloading: 1, queued: 2, failed: 3, cancelled: 4, evicted: 5 };
+  const rank = { cached: 0, transcoding: 1, downloading: 2, waiting: 3, queued: 4, failed: 5, cancelled: 6, evicted: 7 };
   const groups = new Map();
   items.forEach((item) => {
     const key = `${item.provider || "unknown"}:${item.trackId || item.id}`;
@@ -322,7 +327,7 @@ function relativeTime(value, now = Date.now()) {
 
 function sampleDownload(item, now = Date.now()) {
   const previous = state.downloadSamples.get(item.id);
-  const active = item.state === "queued" || item.state === "downloading";
+  const active = isActiveDownload(item);
   let rate = 0;
   let lastProgressAt = previous?.lastProgressAt || now;
   if (previous && active) {
@@ -348,6 +353,11 @@ function downloadNetworkSummary(item, transfer, sample, now) {
   if (item.state === "cancelled") return `Download was cancelled${attempts}`;
   if (item.state === "evicted") return `Removed from cache; playback will fetch it again${attempts}`;
   if (sample.stalled) return `No new data since ${relativeTime(sample.lastProgressAt, now)}${attempts}`;
+  if (item.provider === "transcode") {
+    return item.state === "transcoding"
+      ? `Creating a reusable MP3 variant${attempts}`
+      : `Preparing the transcoder${attempts}`;
+  }
   if (item.provider === "torrent") {
     if (!transfer) return `Connecting to torrent swarm${attempts}`;
     if ((transfer.connectedSeeders || 0) > 0) {
@@ -356,12 +366,12 @@ function downloadNetworkSummary(item, transfer, sample, now) {
     if ((transfer.peers || 0) > 0) return `Peers connected, but no complete seed is available${attempts}`;
     return `No peers connected; waiting for the swarm${attempts}`;
   }
-  return `${item.state === "queued" ? "Waiting for" : "Receiving from"} Soulseek peer ${item.sourceId || "unknown"}${attempts}`;
+  return `${item.state === "waiting" || item.state === "queued" ? "Waiting for" : "Receiving from"} Soulseek peer ${item.sourceId || "unknown"}${attempts}`;
 }
 
 function renderDownloads(items, transfers = [], canManageSources = false) {
   const grouped = groupTrackDownloads(items);
-  const activeCount = grouped.filter((item) => item.state === "queued" || item.state === "downloading").length;
+  const activeCount = grouped.filter(isActiveDownload).length;
   const attentionCount = grouped.filter((item) => item.state === "failed" || item.state === "cancelled").length;
   elements.downloadCount.textContent = `${grouped.length} tracks · ${activeCount} active${attentionCount ? ` · ${attentionCount} attention` : ""}`;
   elements.downloads.replaceChildren();
@@ -374,8 +384,10 @@ function renderDownloads(items, transfers = [], canManageSources = false) {
   elements.downloads.innerHTML = grouped.map((item) => {
     const percent = item.totalBytes ? Math.min(100, Math.round((item.completedBytes / item.totalBytes) * 100)) : 0;
     const stateLabels = {
+      waiting: "Waiting",
       queued: "Queued",
       downloading: "Downloading",
+      transcoding: "Transcoding",
       cached: "Cached",
       failed: "Failed",
       cancelled: "Cancelled",
@@ -384,18 +396,21 @@ function renderDownloads(items, transfers = [], canManageSources = false) {
     const stateLabel = stateLabels[item.state] || item.state;
     const transfer = transferBySource.get(`${item.provider}:${item.sourceId}`);
     const sample = sampleDownload(item, now);
-    const active = item.state === "queued" || item.state === "downloading";
+    const active = isActiveDownload(item);
     const speed = !active ? "—" : sample.measuring ? "Measuring…" : sample.rate > 0 ? `${formatBytes(sample.rate)}/s` : "0 B/s";
     const networkSummary = downloadNetworkSummary(item, transfer, sample, now);
     const canControl = canManageSources && item.provider === "soulseek";
-    const canCancel = canControl && (item.state === "queued" || item.state === "downloading");
+    const canCancel = canControl && ["waiting", "queued", "downloading"].includes(item.state);
     const canRetry = canControl && ["failed", "cancelled", "evicted"].includes(item.state);
     const networkFacts = item.provider === "torrent"
       ? `<div class="fact"><span>Peers</span><strong>${transfer?.activePeers || 0} / ${transfer?.peers || 0}</strong></div><div class="fact"><span>Connected seeds</span><strong>${transfer?.connectedSeeders || 0}</strong></div>`
-      : `<div class="fact fact-wide"><span>Soulseek peer</span><strong title="${escapeHTML(item.sourceId || "Unknown")}">${escapeHTML(item.sourceId || "Unknown")}</strong></div>`;
-    return `<article class="transfer-card download-card ${item.state === "downloading" || item.state === "queued" ? "active" : ""}">
+      : item.provider === "transcode"
+        ? `<div class="fact fact-wide"><span>Output</span><strong>Reusable MP3 cache</strong></div>`
+        : `<div class="fact fact-wide"><span>Soulseek peer</span><strong title="${escapeHTML(item.sourceId || "Unknown")}">${escapeHTML(item.sourceId || "Unknown")}</strong></div>`;
+    const indeterminate = active && !item.totalBytes;
+    return `<article class="transfer-card download-card ${active ? "active" : ""}">
       <div class="card-title"><div><h3>${escapeHTML(item.name || item.trackId)}</h3><p class="download-provider">${escapeHTML(item.provider || "unknown provider")}</p></div><span class="status ${item.state === "failed" || item.state === "cancelled" ? "failed" : ""}">${escapeHTML(stateLabel)}</span></div>
-      <div class="progress" aria-label="${percent}% complete"><span style="width:${percent}%"></span></div>
+      <div class="progress ${indeterminate ? "indeterminate" : ""}" aria-label="${indeterminate ? "In progress" : `${percent}% complete`}"><span style="width:${indeterminate ? 35 : percent}%"></span></div>
       <p class="download-status-detail ${sample.stalled ? "stalled" : ""}">${escapeHTML(networkSummary)}</p>
       <div class="facts download-facts">
         <div class="fact"><span>Complete</span><strong>${percent}%</strong></div>
@@ -645,7 +660,7 @@ async function refresh() {
     elements.loginError.textContent = "";
     showDashboard(true);
     const active = imports.some((item) => item.state === "fetching_metadata" || item.state === "scanning") ||
-      downloads.some((item) => item.state === "queued" || item.state === "downloading") || scanStatus.scanning;
+      downloads.some(isActiveDownload) || scanStatus.scanning;
     window.clearTimeout(state.refreshTimer);
     if (active) state.refreshTimer = window.setTimeout(refresh, 3000);
   } catch (error) {

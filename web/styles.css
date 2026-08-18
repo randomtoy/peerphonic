@@ -215,6 +215,9 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .status.failed { color: var(--danger); }
 .progress { height: 5px; overflow: hidden; border-radius: 99px; background: var(--line); }
 .progress > span { display: block; height: 100%; background: var(--accent); }
+.progress.indeterminate > span { animation: progress-slide 1.4s ease-in-out infinite; }
+@keyframes progress-slide { from { transform: translateX(-120%); } to { transform: translateX(320%); } }
+@media (prefers-reduced-motion: reduce) { .progress.indeterminate > span { animation: none; transform: translateX(90%); } }
 .download-status-detail { min-height: 18px; margin: 11px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
 .download-status-detail.stalled { color: var(--warning); }
 .download-timing { margin: 13px 0 0; color: #68716e; font-size: 9px; line-height: 1.5; }
