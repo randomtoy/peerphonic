@@ -27,6 +27,7 @@ changing the client-facing streaming flow.
 - persistent cross-client OpenSubsonic play queues;
 - authenticated live source transfer status for download, upload, peer, and seeding visibility;
 - authenticated torrent source management with persistent pause and cache pinning;
+- an optional containerized administration dashboard for cache, transfers, and torrent sources;
 - a small Peerphonic health endpoint at `/api/v1/health`.
 
 The implemented OpenSubsonic endpoints are:
@@ -230,5 +231,7 @@ go test ./...
 go vet ./...
 ```
 
-The `web/` directory is reserved for an optional Peerphonic-specific frontend.
-The backend does not depend on it. Container deployment files live in `deploy/`.
+The static administration dashboard lives in `web/`; the backend does not
+depend on it. The container deployment serves the dashboard on port `8081` and
+the OpenSubsonic backend on port `8080`. See `deploy/README.md` for startup
+instructions.

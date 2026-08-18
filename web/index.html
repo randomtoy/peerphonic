@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Peerphonic</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Peerphonic dashboard">
+      <span class="brand-mark" aria-hidden="true">P</span>
+      <span>Peerphonic</span>
+    </a>
+    <div class="topbar-actions">
+      <span id="connection-state" class="connection-state">Not connected</span>
+      <button id="refresh" class="button secondary" type="button">Refresh</button>
+      <button id="logout" class="button ghost" type="button" hidden>Log out</button>
+    </div>
+  </header>
+
+  <main>
+    <section id="login-panel" class="login-panel" aria-labelledby="login-title">
+      <div>
+        <p class="eyebrow">SELF-HOSTED MUSIC</p>
+        <h1 id="login-title">Your library, from every source.</h1>
+        <p class="lede">Connect with the same account used by your OpenSubsonic client.</p>
+      </div>
+      <form id="login-form" class="login-form">
+        <label>Username<input id="username" name="username" autocomplete="username" value="admin" required></label>
+        <label>Password<input id="password" name="password" type="password" autocomplete="current-password" required></label>
+        <button class="button primary" type="submit">Connect</button>
+        <p id="login-error" class="form-error" role="alert"></p>
+      </form>
+    </section>
+
+    <section id="dashboard" hidden>
+      <div class="hero">
+        <div><p class="eyebrow">SERVER OVERVIEW</p><h1>Library control room</h1></div>
+        <p id="updated-at" class="muted"></p>
+      </div>
+      <div id="summary" class="summary-grid" aria-live="polite"></div>
+
+      <section class="section" aria-labelledby="transfers-title">
+        <div class="section-heading"><div><p class="eyebrow">NETWORK</p><h2 id="transfers-title">Live transfers</h2></div></div>
+        <div id="transfers" class="card-grid"></div>
+      </section>
+
+      <section class="section" aria-labelledby="sources-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">SOURCES</p><h2 id="sources-title">Imported torrents</h2></div>
+          <span id="source-count" class="pill"></span>
+        </div>
+        <div id="sources" class="source-list"></div>
+      </section>
+    </section>
+  </main>
+
+  <template id="empty-template">
+    <div class="empty-state"><span class="empty-icon">◇</span><p></p></div>
+  </template>
+</body>
+</html>

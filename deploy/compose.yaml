@@ -15,3 +15,12 @@ services:
       PEERPHONIC_PASSWORD: "${PEERPHONIC_PASSWORD:?set PEERPHONIC_PASSWORD}"
       PEERPHONIC_TORRENT_PORT: "${PEERPHONIC_TORRENT_PORT:-42069}"
     restart: unless-stopped
+  web:
+    build:
+      context: ..
+      dockerfile: web/Dockerfile
+    ports:
+      - "${PEERPHONIC_WEB_PORT:-8081}:80"
+    depends_on:
+      - peerphonic
+    restart: unless-stopped

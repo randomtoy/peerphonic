@@ -1,12 +1,12 @@
 # Peerphonic Web
 
-This directory is reserved for an optional Peerphonic-specific web application.
-It will expose source availability, cache state, downloads, peer status, and
-provider configuration in later milestones.
+This directory contains the optional Peerphonic administration dashboard. It is
+a static application and has no build-time dependency on the Go backend.
 
-The backend already exposes authenticated live transfer data at
-`GET /api/v1/transfers`; a future frontend can consume it without depending on
-the concrete torrent adapter.
+The container deployment serves it at `http://localhost:8081` and proxies
+`/api/` and `/rest/` to Peerphonic. Enter the same credentials configured for
+OpenSubsonic clients.
 
-The backend remains independently usable by OpenSubsonic clients. No frontend
-toolchain or runtime dependency is introduced in the local-library milestone.
+For local frontend work, serve this directory through a web server that proxies
+the API paths to the backend. Opening `index.html` directly does not provide an
+API proxy.
