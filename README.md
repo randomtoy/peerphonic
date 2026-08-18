@@ -30,6 +30,7 @@ changing the client-facing streaming flow.
 - persistent cross-client OpenSubsonic play queues;
 - authenticated live source transfer status for download, upload, peer, and seeding visibility;
 - authenticated torrent source management with persistent pause and cache pinning;
+- optional authenticated slskd connectivity checks behind a generic provider-status port;
 - an optional containerized administration dashboard for cache, transfers, and torrent sources;
 - a small Peerphonic health endpoint at `/api/v1/health`.
 
@@ -145,6 +146,9 @@ then CLI flags.
 | `password` | `PEERPHONIC_PASSWORD` | `--password` | `admin` |
 | `scan_on_start` | `PEERPHONIC_SCAN_ON_START` | `--scan` | `true` |
 | `scan_interval_seconds` | `PEERPHONIC_SCAN_INTERVAL_SECONDS` | `--scan-interval` | `300` |
+| `slskd_url` | `PEERPHONIC_SLSKD_URL` | `--slskd-url` | disabled |
+| `slskd_api_key` | `PEERPHONIC_SLSKD_API_KEY` | — | empty |
+| `slskd_timeout_seconds` | `PEERPHONIC_SLSKD_TIMEOUT_SECONDS` | `--slskd-timeout` | `5` |
 
 Use a config file with `--config peerphonic.json` or set its path through
 `PEERPHONIC_CONFIG`. See [`backend/config.example.json`](backend/config.example.json).
@@ -172,11 +176,19 @@ curl -u admin:admin http://localhost:8080/api/v1/settings/transfers
 curl -u admin:admin -X PUT -H 'Content-Type: application/json' \
   -d '{"downloadLimitBytesPerSecond":10485760,"uploadLimitBytesPerSecond":2097152}' \
   http://localhost:8080/api/v1/settings/transfers
+curl -u admin:admin http://localhost:8080/api/v1/providers/soulseek/status
 ```
 
 Library scans started through the Peerphonic API run in the background. Their
 status includes the indexed track count and the last start, completion, or
 error; the same controls are available in the dashboard Sources workspace.
+
+To prepare Soulseek integration, configure the slskd base URL and an API key
+with read/write access. Peerphonic authenticates with the `X-API-Key` header and
+uses slskd's `/api/v0/session` endpoint for readiness checks. Prefer HTTPS or a
+private container/Kubernetes network because the API key is a long-lived
+secret. Search and on-demand downloads are implemented as later provider
+capabilities; the current integration only validates connectivity.
 
 ## Architecture
 

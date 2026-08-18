@@ -168,6 +168,25 @@
         </section>
 
         <section class="dashboard-page" data-page-panel="settings" hidden>
+          <section class="panel" aria-labelledby="soulseek-settings-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">MUSIC PROVIDER</p><h2 id="soulseek-settings-title">Soulseek via slskd</h2><p class="section-description">Peerphonic uses the slskd HTTP API as an isolated Soulseek adapter.</p></div>
+              <span id="soulseek-state" class="pill">Checking</span>
+            </div>
+            <div class="provider-status-card">
+              <div class="provider-status-copy">
+                <span id="soulseek-indicator" class="provider-indicator" aria-hidden="true"></span>
+                <div><h3>slskd connection</h3><p id="soulseek-message">Loading provider status…</p></div>
+              </div>
+              <dl class="provider-facts">
+                <div><dt>Configured</dt><dd id="soulseek-configured">—</dd></div>
+                <div><dt>Reachable</dt><dd id="soulseek-reachable">—</dd></div>
+                <div><dt>API access</dt><dd id="soulseek-authenticated">—</dd></div>
+              </dl>
+            </div>
+            <p class="integration-hint">Configure <code>PEERPHONIC_SLSKD_URL</code> and <code>PEERPHONIC_SLSKD_API_KEY</code>, then restart Peerphonic. The API key is never returned to the browser.</p>
+          </section>
+
           <section class="panel" aria-labelledby="transfer-settings-title">
             <div class="section-heading">
               <div><p class="eyebrow">TORRENT NETWORK</p><h2 id="transfer-settings-title">Bandwidth limits</h2><p class="section-description">Limit total torrent traffic across all active sources. Changes apply immediately and persist across restarts.</p></div>

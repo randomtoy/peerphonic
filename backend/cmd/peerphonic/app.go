@@ -13,11 +13,13 @@ import (
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/blob/filesystem"
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/metadata"
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/providers/local"
+	soulseekprovider "github.com/randomtoy/peerphonic/backend/internal/adapters/providers/soulseek"
 	torrentprovider "github.com/randomtoy/peerphonic/backend/internal/adapters/providers/torrent"
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/storage/sqlite"
 	"github.com/randomtoy/peerphonic/backend/internal/api/opensubsonic"
 	"github.com/randomtoy/peerphonic/backend/internal/api/peerphonic"
 	"github.com/randomtoy/peerphonic/backend/internal/config"
+	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
 	"github.com/randomtoy/peerphonic/backend/internal/core/services"
 	"github.com/randomtoy/peerphonic/backend/internal/scanner"
 	torrentscanner "github.com/randomtoy/peerphonic/backend/internal/scanner/torrents"
@@ -76,6 +78,15 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	transferSettings := services.NewTransferSettingsService(catalog, torrentProvider)
 	if err := transferSettings.Initialize(ctx); err != nil {
 		return fail(fmt.Errorf("initialize transfer settings: %w", err))
+	}
+	var soulseekMonitor ports.ProviderStatusMonitor
+	if cfg.SlskdURL != "" {
+		soulseekMonitor, err = soulseekprovider.NewSlskd(
+			cfg.SlskdURL, cfg.SlskdAPIKey, time.Duration(cfg.SlskdTimeoutSeconds)*time.Second,
+		)
+		if err != nil {
+			return fail(fmt.Errorf("initialize slskd client: %w", err))
+		}
 	}
 	blobs, err := filesystem.New(cfg.CacheDir)
 	if err != nil {
@@ -139,7 +150,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	))
 	mux.Handle("/", peerphonic.NewHandlerWithAuthenticator(
 		cacheStatus, torrentImporter, magnetImporter, torrentManager, torrentProvider, torrentProvider,
-		userService, userService, transferSettings, scanManager,
+		userService, userService, soulseekMonitor, transferSettings, scanManager,
 	))
 	return &application{
 		handler: mux, catalog: catalog, torrentProvider: torrentProvider, magnetImporter: magnetImporter,

@@ -33,6 +33,8 @@ type transferSettingsManagerStub struct {
 	limits domain.TransferLimits
 }
 
+type providerStatusMonitorStub struct{ status domain.ProviderStatus }
+
 type uriImporterStub struct {
 	uri   string
 	items []domain.SourceImport
@@ -104,6 +106,10 @@ func (s *transferSettingsManagerStub) UpdateLimits(
 ) (domain.TransferLimits, error) {
 	s.limits = limits
 	return limits, nil
+}
+
+func (s providerStatusMonitorStub) ProviderStatus(context.Context) domain.ProviderStatus {
+	return s.status
 }
 
 func (s *uriImporterStub) ImportURI(_ context.Context, uri string) (domain.SourceImport, error) {
@@ -240,7 +246,7 @@ func TestTransferSettingsRequireAuthenticationAndUpdate(t *testing.T) {
 	}}
 	handler := newHandler(
 		nil, nil, nil, nil, nil, nil,
-		fixedAuthenticator{username: "alice", password: "secret"}, nil, settings, nil,
+		fixedAuthenticator{username: "alice", password: "secret"}, nil, nil, settings, nil,
 	)
 	unauthorized := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/v1/settings/transfers", nil))
@@ -266,6 +272,38 @@ func TestTransferSettingsRequireAuthenticationAndUpdate(t *testing.T) {
 	if putResponse.Code != http.StatusOK || settings.limits.UploadBytesPerSecond != 4096 ||
 		settings.limits.DownloadBytesPerSecond != 8192 {
 		t.Fatalf("status = %d, limits = %#v, body = %s", putResponse.Code, settings.limits, putResponse.Body.String())
+	}
+}
+
+func TestSoulseekProviderStatus(t *testing.T) {
+	t.Parallel()
+
+	monitor := providerStatusMonitorStub{status: domain.ProviderStatus{
+		Provider: "soulseek", Configured: true, Reachable: true, Authenticated: true,
+		Message: "slskd API is ready",
+	}}
+	handler := newHandler(
+		nil, nil, nil, nil, nil, nil,
+		fixedAuthenticator{username: "alice", password: "secret"}, nil, monitor, nil, nil,
+	)
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/providers/soulseek/status", nil)
+	request.SetBasicAuth("alice", "secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK ||
+		!strings.Contains(response.Body.String(), `"configured":true`) ||
+		!strings.Contains(response.Body.String(), `"authenticated":true`) {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	disabled := NewHandler(nil, nil, nil, nil, nil, nil, "alice", "secret")
+	disabledRequest := httptest.NewRequest(http.MethodGet, "/api/v1/providers/soulseek/status", nil)
+	disabledRequest.SetBasicAuth("alice", "secret")
+	disabledResponse := httptest.NewRecorder()
+	disabled.ServeHTTP(disabledResponse, disabledRequest)
+	if disabledResponse.Code != http.StatusOK ||
+		!strings.Contains(disabledResponse.Body.String(), `"configured":false`) {
+		t.Fatalf("disabled status = %d, body = %s", disabledResponse.Code, disabledResponse.Body.String())
 	}
 }
 

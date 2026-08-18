@@ -14,7 +14,9 @@ separates overview, source management, live activity, and user access into
 permission-aware navigation areas. Users with source-management access can also
 start a background library scan and follow its last result from the Sources
 workspace. The Settings workspace changes aggregate torrent upload and download
-limits at runtime and persists them in the metadata database.
+limits at runtime and persists them in the metadata database. It also reports
+whether an optional slskd API is configured, reachable, and authenticated
+without exposing the API key to the browser.
 
 For local frontend work, serve this directory through a web server that proxies
 the API paths to the backend. Opening `index.html` directly does not provide an

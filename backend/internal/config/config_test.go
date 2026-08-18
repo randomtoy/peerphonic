@@ -23,6 +23,9 @@ func TestLoadPrecedence(t *testing.T) {
 		"PEERPHONIC_TORRENT_UPLOAD_LIMIT_BYTES_PER_SECOND":   "1024",
 		"PEERPHONIC_TORRENT_DOWNLOAD_LIMIT_BYTES_PER_SECOND": "2048",
 		"PEERPHONIC_SCAN_INTERVAL_SECONDS":                   "60",
+		"PEERPHONIC_SLSKD_URL":                               "http://slskd-env:5030",
+		"PEERPHONIC_SLSKD_API_KEY":                           "0123456789abcdef",
+		"PEERPHONIC_SLSKD_TIMEOUT_SECONDS":                   "7",
 	}
 	lookup := func(key string) (string, bool) { value, ok := env[key]; return value, ok }
 
@@ -36,6 +39,8 @@ func TestLoadPrecedence(t *testing.T) {
 		"--torrent-upload-limit", "4096",
 		"--torrent-download-limit", "8192",
 		"--scan-interval", "120",
+		"--slskd-url", "http://slskd-flag:5030",
+		"--slskd-timeout", "9",
 	}, lookup)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -63,6 +68,9 @@ func TestLoadPrecedence(t *testing.T) {
 	}
 	if cfg.ScanIntervalSeconds != 120 {
 		t.Errorf("ScanIntervalSeconds = %d, want 120", cfg.ScanIntervalSeconds)
+	}
+	if cfg.SlskdURL != "http://slskd-flag:5030" || cfg.SlskdAPIKey != "0123456789abcdef" || cfg.SlskdTimeoutSeconds != 9 {
+		t.Errorf("slskd settings = URL %q, key %q, timeout %d", cfg.SlskdURL, cfg.SlskdAPIKey, cfg.SlskdTimeoutSeconds)
 	}
 }
 
@@ -128,5 +136,16 @@ func TestLoadRejectsNegativeTorrentTransferLimit(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("Load() error = nil, want invalid torrent transfer limit error")
+	}
+}
+
+func TestLoadRejectsInvalidSlskdTimeout(t *testing.T) {
+	t.Parallel()
+
+	_, err := Load([]string{"--music", t.TempDir(), "--slskd-timeout", "0"}, func(string) (string, bool) {
+		return "", false
+	})
+	if err == nil {
+		t.Fatal("Load() error = nil, want invalid slskd timeout error")
 	}
 }

@@ -136,6 +136,14 @@ type transferSettingsResponse struct {
 	DownloadLimitBytesPerSecond int64 `json:"downloadLimitBytesPerSecond"`
 }
 
+type providerStatusResponse struct {
+	Provider      string `json:"provider"`
+	Configured    bool   `json:"configured"`
+	Reachable     bool   `json:"reachable"`
+	Authenticated bool   `json:"authenticated"`
+	Message       string `json:"message"`
+}
+
 func NewHandler(
 	cache cacheStatus,
 	torrentImporter ports.SourceImporter,
@@ -152,7 +160,7 @@ func NewHandler(
 	}
 	return newHandler(
 		cache, torrentImporter, uriImporter, sources, transfers, downloads,
-		fixedAuthenticator{username: username, password: password}, nil, nil, scan,
+		fixedAuthenticator{username: username, password: password}, nil, nil, nil, scan,
 	)
 }
 
@@ -165,6 +173,7 @@ func NewHandlerWithAuthenticator(
 	downloads ports.TrackDownloadMonitor,
 	authenticator ports.Authenticator,
 	users ports.UserManager,
+	providerStatus ports.ProviderStatusMonitor,
 	settings ports.TransferSettingsManager,
 	scans ...scanController,
 ) http.Handler {
@@ -172,7 +181,10 @@ func NewHandlerWithAuthenticator(
 	if len(scans) > 0 {
 		scan = scans[0]
 	}
-	return newHandler(cache, torrentImporter, uriImporter, sources, transfers, downloads, authenticator, users, settings, scan)
+	return newHandler(
+		cache, torrentImporter, uriImporter, sources, transfers, downloads,
+		authenticator, users, providerStatus, settings, scan,
+	)
 }
 
 func newHandler(
@@ -184,6 +196,7 @@ func newHandler(
 	downloads ports.TrackDownloadMonitor,
 	authenticator ports.Authenticator,
 	users ports.UserManager,
+	providerStatus ports.ProviderStatusMonitor,
 	settings ports.TransferSettingsManager,
 	scans scanController,
 ) http.Handler {
@@ -261,6 +274,21 @@ func newHandler(
 			writeJSON(writer, http.StatusOK, newTransferSettingsResponse(limits))
 		})
 	}
+	mux.HandleFunc("GET /api/v1/providers/soulseek/status", func(writer http.ResponseWriter, request *http.Request) {
+		if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
+			return
+		}
+		status := domain.ProviderStatus{
+			Provider: "soulseek", Message: "slskd is not configured",
+		}
+		if providerStatus != nil {
+			status = providerStatus.ProviderStatus(request.Context())
+		}
+		writeJSON(writer, http.StatusOK, providerStatusResponse{
+			Provider: status.Provider, Configured: status.Configured, Reachable: status.Reachable,
+			Authenticated: status.Authenticated, Message: status.Message,
+		})
+	})
 	if cache != nil {
 		mux.HandleFunc("GET /api/v1/cache/status", func(writer http.ResponseWriter, request *http.Request) {
 			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionMonitoringView); !ok {

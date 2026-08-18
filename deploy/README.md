@@ -18,3 +18,8 @@ The compose service publishes the BitTorrent listen port over both TCP and UDP.
 It defaults to `42069`; override `PEERPHONIC_TORRENT_PORT` before startup when
 the host port is already occupied. Forward the same TCP/UDP port on the router
 for inbound peers when automatic port forwarding is disabled.
+
+An existing slskd instance can be connected by setting
+`PEERPHONIC_SLSKD_URL` and `PEERPHONIC_SLSKD_API_KEY` before starting Compose.
+When both services run in the same Compose or Kubernetes network, use the
+internal service URL rather than publishing the slskd API to the internet.

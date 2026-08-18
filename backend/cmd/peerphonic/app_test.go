@@ -126,6 +126,13 @@ func TestLocalFileToOpenSubsonicStream(t *testing.T) {
 	if listenerSettings.Code != http.StatusForbidden {
 		t.Fatalf("undelegated settings status = %d, want %d", listenerSettings.Code, http.StatusForbidden)
 	}
+	listenerSoulseekRequest := httptest.NewRequest(http.MethodGet, "/api/v1/providers/soulseek/status", nil)
+	listenerSoulseekRequest.SetBasicAuth("listener", "listener-password")
+	listenerSoulseek := httptest.NewRecorder()
+	app.handler.ServeHTTP(listenerSoulseek, listenerSoulseekRequest)
+	if listenerSoulseek.Code != http.StatusForbidden {
+		t.Fatalf("undelegated soulseek status = %d, want %d", listenerSoulseek.Code, http.StatusForbidden)
+	}
 	cacheResponse := httptest.NewRecorder()
 	cacheRequest := httptest.NewRequest(http.MethodGet, "/api/v1/cache/status", nil)
 	cacheRequest.SetBasicAuth("admin", "secret")

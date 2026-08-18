@@ -42,6 +42,12 @@ const elements = {
   uploadLimit: document.querySelector("#upload-limit"),
   transferSettingsSummary: document.querySelector("#transfer-settings-summary"),
   transferSettingsMessage: document.querySelector("#transfer-settings-message"),
+  soulseekState: document.querySelector("#soulseek-state"),
+  soulseekIndicator: document.querySelector("#soulseek-indicator"),
+  soulseekMessage: document.querySelector("#soulseek-message"),
+  soulseekConfigured: document.querySelector("#soulseek-configured"),
+  soulseekReachable: document.querySelector("#soulseek-reachable"),
+  soulseekAuthenticated: document.querySelector("#soulseek-authenticated"),
   updatedAt: document.querySelector("#updated-at"),
   addSourceSection: document.querySelector("#add-source-section"),
   downloadsSection: document.querySelector("#downloads-section"),
@@ -358,6 +364,18 @@ function renderTransferSettings(settings) {
   elements.transferSettingsSummary.textContent = `Download ${describe(download)} · Upload ${describe(upload)}`;
 }
 
+function renderSoulseekStatus(status) {
+  const connected = Boolean(status.configured && status.reachable && status.authenticated);
+  const failed = Boolean(status.configured && !connected);
+  elements.soulseekState.className = `pill${connected ? " active" : failed ? " failed" : ""}`;
+  elements.soulseekState.textContent = connected ? "Connected" : failed ? "Needs attention" : "Not configured";
+  elements.soulseekIndicator.className = `provider-indicator${connected ? " online" : failed ? " failed" : ""}`;
+  elements.soulseekMessage.textContent = status.message || "slskd status is unavailable.";
+  elements.soulseekConfigured.textContent = status.configured ? "Yes" : "No";
+  elements.soulseekReachable.textContent = status.reachable ? "Yes" : "No";
+  elements.soulseekAuthenticated.textContent = status.authenticated ? "Granted" : "No";
+}
+
 async function refresh() {
   if (!state.authorization) return;
   elements.refresh.disabled = true;
@@ -367,7 +385,7 @@ async function refresh() {
     const canMonitor = allowed.has(permissions.monitoring);
     const canManageSources = allowed.has(permissions.sources);
     const canManageUsers = allowed.has(permissions.users);
-    const [cache, importPayload, downloadPayload, transferPayload, sourcePayload, userPayload, scanStatus, transferSettings] = await Promise.all([
+    const [cache, importPayload, downloadPayload, transferPayload, sourcePayload, userPayload, scanStatus, transferSettings, soulseekStatus] = await Promise.all([
       canMonitor ? api("/api/v1/cache/status") : Promise.resolve({}),
       canManageSources ? api("/api/v1/imports") : Promise.resolve({ imports: [] }),
       canMonitor ? api("/api/v1/downloads") : Promise.resolve({ downloads: [] }),
@@ -376,6 +394,7 @@ async function refresh() {
       canManageUsers ? api("/api/v1/users") : Promise.resolve({ users: [] }),
       canManageSources ? api("/api/v1/library/scan") : Promise.resolve({}),
       canManageSources ? api("/api/v1/settings/transfers") : Promise.resolve({}),
+      canManageSources ? api("/api/v1/providers/soulseek/status") : Promise.resolve({}),
     ]);
     const imports = importPayload.imports || [];
     const downloads = downloadPayload.downloads || [];
@@ -396,6 +415,7 @@ async function refresh() {
     renderUsers(users, session);
     if (canManageSources) renderLibraryScan(scanStatus);
     if (canManageSources) renderTransferSettings(transferSettings);
+    if (canManageSources) renderSoulseekStatus(soulseekStatus);
     elements.updatedAt.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
     elements.loginError.textContent = "";
     showDashboard(true);
