@@ -21,7 +21,10 @@ import (
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
 )
 
-const downloadPollInterval = 500 * time.Millisecond
+const (
+	downloadPollInterval = 500 * time.Millisecond
+	initialDataWait      = 1500 * time.Millisecond
+)
 
 var (
 	driveRootPattern      = regexp.MustCompile(`^[a-zA-Z]:[/\\]?`)
@@ -140,7 +143,7 @@ func newDownloadCoordinator(
 	return coordinator, nil
 }
 
-func (c *Client) Resolve(ctx context.Context, ref domain.SourceRef) (ports.ResolvedSource, error) {
+func (c *Client) Resolve(ctx context.Context, trackID string, ref domain.SourceRef) (ports.ResolvedSource, error) {
 	if ref.Provider != Name {
 		return ports.ResolvedSource{}, fmt.Errorf("unexpected provider %q", ref.Provider)
 	}
@@ -151,7 +154,7 @@ func (c *Client) Resolve(ctx context.Context, ref domain.SourceRef) (ports.Resol
 	if err != nil {
 		return ports.ResolvedSource{}, err
 	}
-	return c.downloads.resolve(ctx, ref.Key, remote)
+	return c.downloads.resolve(ctx, ref.Key, trackID, remote)
 }
 
 func decodeRemoteFileRef(key string) (remoteFileRef, error) {
@@ -172,9 +175,11 @@ func decodeRemoteFileRef(key string) (remoteFileRef, error) {
 }
 
 func (c *downloadCoordinator) resolve(
-	ctx context.Context, key string, remote remoteFileRef,
+	ctx context.Context, key, trackID string, remote remoteFileRef,
 ) (ports.ResolvedSource, error) {
-	trackID := domain.StableID(Name, remote.Peer, remote.Path, strconv.FormatInt(remote.Size, 10))
+	if strings.TrimSpace(trackID) == "" {
+		trackID = domain.StableID(Name, remote.Peer, remote.Path, strconv.FormatInt(remote.Size, 10))
+	}
 	name := sanitizedFilename(remote.Path)
 	finalPath := filepath.Join(c.downloadsDir, trackID, name)
 	c.cacheMu.Lock()
@@ -204,8 +209,35 @@ func (c *downloadCoordinator) resolve(
 		c.endRead(key)
 		return ports.ResolvedSource{}, err
 	}
+	if err := waitForInitialData(ctx, job, initialDataWait); err != nil {
+		c.endRead(key)
+		return ports.ResolvedSource{}, fmt.Errorf("%w: %v", ports.ErrSourceUnavailable, err)
+	}
 	reader := newGrowingFile(job, remote.Size)
 	return resolvedRemoteSource(c.trackReader(key, reader), name, remote.Size, time.Now()), nil
+}
+
+func waitForInitialData(ctx context.Context, job *downloadJob, timeout time.Duration) error {
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	ticker := time.NewTicker(50 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		for _, path := range []string{job.finalPath, job.incompletePath} {
+			if info, err := os.Stat(path); err == nil && info.Size() > 0 {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-job.done:
+			return job.result()
+		case <-deadline.C:
+			return nil
+		case <-ticker.C:
+		}
+	}
 }
 
 func resolvedRemoteSource(

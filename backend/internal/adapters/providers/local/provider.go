@@ -32,7 +32,7 @@ func (p *Provider) Search(context.Context, domain.SearchQuery) ([]domain.TrackSo
 	return nil, nil
 }
 
-func (p *Provider) Resolve(_ context.Context, ref domain.SourceRef) (ports.ResolvedSource, error) {
+func (p *Provider) Resolve(_ context.Context, _ string, ref domain.SourceRef) (ports.ResolvedSource, error) {
 	if ref.Provider != Name {
 		return ports.ResolvedSource{}, fmt.Errorf("cannot resolve provider %q", ref.Provider)
 	}

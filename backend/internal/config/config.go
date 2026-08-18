@@ -48,7 +48,7 @@ func Defaults() Config {
 		Password:            "admin",
 		Scan:                true,
 		ScanIntervalSeconds: 300,
-		SlskdTimeoutSeconds: 5,
+		SlskdTimeoutSeconds: 15,
 	}
 }
 

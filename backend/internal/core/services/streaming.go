@@ -44,7 +44,7 @@ func (s *StreamingService) Open(ctx context.Context, trackID string) (ports.Reso
 				fmt.Errorf("source provider %q is not registered", source.Provider))
 			continue
 		}
-		stream, err := provider.Resolve(ctx, source)
+		stream, err := provider.Resolve(ctx, trackID, source)
 		if err == nil {
 			return stream, nil
 		}

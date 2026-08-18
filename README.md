@@ -152,7 +152,7 @@ then CLI flags.
 | `scan_interval_seconds` | `PEERPHONIC_SCAN_INTERVAL_SECONDS` | `--scan-interval` | `300` |
 | `slskd_url` | `PEERPHONIC_SLSKD_URL` | `--slskd-url` | disabled |
 | `slskd_api_key` | `PEERPHONIC_SLSKD_API_KEY` | — | empty |
-| `slskd_timeout_seconds` | `PEERPHONIC_SLSKD_TIMEOUT_SECONDS` | `--slskd-timeout` | `5` |
+| `slskd_timeout_seconds` | `PEERPHONIC_SLSKD_TIMEOUT_SECONDS` | `--slskd-timeout` | `15` |
 | `slskd_downloads_dir` | `PEERPHONIC_SLSKD_DOWNLOADS_DIR` | `--slskd-downloads` | `<cache>/soulseek/downloads` |
 | `slskd_incomplete_dir` | `PEERPHONIC_SLSKD_INCOMPLETE_DIR` | `--slskd-incomplete` | `<cache>/soulseek/incomplete` |
 
@@ -222,11 +222,15 @@ Users granted `soulseek.client-search` receive local catalog matches first in
 OpenSubsonic `search2` and `search3` responses. Soulseek fills any remaining song
 slots, and duplicate artist/album/title matches are removed. These remote matches
 remain temporary and do not appear in the shared library until the user starts
-playback. The first `stream` request persists the selected source and then follows
-the normal buffered Soulseek download and cache path. A Soulseek outage does not
-make local OpenSubsonic search fail. `sources.manage` retains the dashboard search
-and add capabilities for compatibility, but it does not implicitly enable network
-searches from music clients.
+playback. The first `stream` request performs a focused artist/title lookup,
+persists up to eight ranked physical copies of the selected recording, and then
+follows the normal buffered Soulseek download and cache path. A rejected, stale,
+or size-mismatched copy is detected before the HTTP stream opens so playback can
+fall back to the next peer. Persisted tracks can refresh their sources after a
+later failure as well. A Soulseek outage does not make local OpenSubsonic search
+fail. `sources.manage` retains the dashboard search and add capabilities for
+compatibility, but it does not implicitly enable network searches from music
+clients.
 
 When a Soulseek file completes, Peerphonic extracts its audio tags and embedded
 artwork through the same metadata boundary used for completed torrent tracks.

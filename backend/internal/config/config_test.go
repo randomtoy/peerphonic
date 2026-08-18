@@ -95,6 +95,9 @@ func TestLoadDerivesSlskdDirectoriesFromCache(t *testing.T) {
 		cfg.SlskdIncompleteDir != filepath.Join(cache, "soulseek", "incomplete") {
 		t.Fatalf("slskd directories = downloads %q, incomplete %q", cfg.SlskdDownloadsDir, cfg.SlskdIncompleteDir)
 	}
+	if cfg.SlskdTimeoutSeconds != 15 {
+		t.Fatalf("default slskd timeout = %d, want 15", cfg.SlskdTimeoutSeconds)
+	}
 }
 
 func TestLoadRejectsInvalidCacheSize(t *testing.T) {

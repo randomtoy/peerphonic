@@ -105,6 +105,7 @@ func (a permissionAuthenticator) AuthenticateToken(
 type discoveryProviderStub struct {
 	results []domain.TrackSource
 	media   []byte
+	resolve func(domain.SourceRef) (ports.ResolvedSource, error)
 }
 
 func (p *discoveryProviderStub) Name() string { return "soulseek" }
@@ -116,12 +117,71 @@ func (p *discoveryProviderStub) Search(
 }
 
 func (p *discoveryProviderStub) Resolve(
-	context.Context, domain.SourceRef,
+	_ context.Context, _ string, ref domain.SourceRef,
 ) (ports.ResolvedSource, error) {
+	if p.resolve != nil {
+		return p.resolve(ref)
+	}
 	return ports.ResolvedSource{
 		Content: &memoryReadSeekCloser{Reader: bytes.NewReader(p.media)},
 		Name:    "remote.flac", ContentType: "audio/flac", Size: int64(len(p.media)),
 	}, nil
+}
+
+func TestStreamRefreshesUnavailableDiscoveredSources(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	catalog, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { catalog.Close() })
+	track := domain.Track{
+		ID: "soulseek-track", Artist: "System of a Down", ArtistID: "artist-system",
+		Album: "Toxicity", AlbumID: "album-toxicity", AlbumArtist: "System of a Down",
+		Title: "01 - Prison Song", Suffix: "mp3", ContentType: "audio/mpeg", Size: 10,
+	}
+	stale := domain.TrackSource{
+		Track: track, Ref: domain.SourceRef{Provider: "soulseek", Key: "stale-peer"},
+		DiscoveredAt: time.Now().Add(-time.Hour),
+	}
+	if err := catalog.SaveTrackSource(ctx, stale); err != nil {
+		t.Fatal(err)
+	}
+	fresh := domain.TrackSource{
+		Track:        domain.Track{Artist: "System Of A Down", Title: "Prison Song", Suffix: "mp3"},
+		Ref:          domain.SourceRef{Provider: "soulseek", Key: "fresh-peer"},
+		DisplayPath:  "System Of A Down/Toxicity/01 Prison Song.mp3",
+		Availability: domain.SourceAvailability{FreeUploadSlot: true},
+	}
+	provider := &discoveryProviderStub{results: []domain.TrackSource{fresh}}
+	provider.resolve = func(ref domain.SourceRef) (ports.ResolvedSource, error) {
+		if ref.Key == "stale-peer" {
+			return ports.ResolvedSource{}, fmt.Errorf("%w: File not shared", ports.ErrSourceUnavailable)
+		}
+		return ports.ResolvedSource{
+			Content: &memoryReadSeekCloser{Reader: bytes.NewReader([]byte("fresh-media"))},
+			Name:    "fresh.mp3", ContentType: "audio/mpeg", Size: 11,
+		}, nil
+	}
+	discovery := services.NewDiscoveryService(provider, catalog)
+	streams := services.NewStreamingService(catalog, provider)
+	handler := NewHandlerWithAuthenticatorAndDiscovery(
+		catalog, streams, nil, permissionAuthenticator{user: domain.User{
+			Role: domain.UserRoleUser, Permissions: []domain.Permission{domain.PermissionSoulseekClient},
+		}}, discovery,
+	)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+		"/rest/stream?u=listener&p=secret&id="+track.ID, nil))
+	if response.Code != http.StatusOK || response.Body.String() != "fresh-media" {
+		t.Fatalf("stream status = %d, body = %q", response.Code, response.Body.String())
+	}
+	sources, err := catalog.Sources(ctx, track.ID)
+	if err != nil || len(sources) != 2 || sources[0] != fresh.Ref {
+		t.Fatalf("refreshed sources = %#v, %v", sources, err)
+	}
 }
 
 type memoryReadSeekCloser struct{ *bytes.Reader }

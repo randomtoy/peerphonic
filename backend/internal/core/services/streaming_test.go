@@ -62,7 +62,7 @@ func (p *providerStub) Name() string { return p.providerName }
 func (p *providerStub) Search(context.Context, domain.SearchQuery) ([]domain.TrackSource, error) {
 	return nil, nil
 }
-func (p *providerStub) Resolve(_ context.Context, ref domain.SourceRef) (ports.ResolvedSource, error) {
+func (p *providerStub) Resolve(_ context.Context, _ string, ref domain.SourceRef) (ports.ResolvedSource, error) {
 	p.calls++
 	p.resolved = ref
 	if p.err != nil {

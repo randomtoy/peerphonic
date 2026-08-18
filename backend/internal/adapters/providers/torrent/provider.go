@@ -189,7 +189,7 @@ func (*Provider) Search(context.Context, domain.SearchQuery) ([]domain.TrackSour
 	return nil, nil
 }
 
-func (p *Provider) Resolve(ctx context.Context, ref domain.SourceRef) (ports.ResolvedSource, error) {
+func (p *Provider) Resolve(ctx context.Context, _ string, ref domain.SourceRef) (ports.ResolvedSource, error) {
 	if ref.Provider != Name {
 		return ports.ResolvedSource{}, fmt.Errorf("cannot resolve provider %q", ref.Provider)
 	}

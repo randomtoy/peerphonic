@@ -256,7 +256,7 @@ func TestProvisionalArtistAlbumSupportsCollectionAndArtistRoots(t *testing.T) {
 func TestResolveReportsMetadataOnlySourceAsUnavailable(t *testing.T) {
 	t.Parallel()
 
-	_, err := New().Resolve(context.Background(), domain.SourceRef{
+	_, err := New().Resolve(context.Background(), "", domain.SourceRef{
 		Provider: Name, Key: strings.Repeat("0", 40) + "/Album/song.mp3",
 	})
 	if !errors.Is(err, ports.ErrSourceUnavailable) {
@@ -289,7 +289,7 @@ func TestPlaybackQueuesPersistentBackgroundTrackDownload(t *testing.T) {
 	provider.completionMu.Lock()
 	provider.trackIDs = make(map[string]string)
 	provider.completionMu.Unlock()
-	resolved, err := provider.Resolve(context.Background(), catalog.Tracks[0].Ref)
+	resolved, err := provider.Resolve(context.Background(), "", catalog.Tracks[0].Ref)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -503,7 +503,7 @@ func TestResolveRejectsCorruptLegacyCachePieces(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(metadataRoot, catalog.InfoHash+".torrent"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := provider.Resolve(context.Background(), catalog.Tracks[0].Ref)
+	resolved, err := provider.Resolve(context.Background(), "", catalog.Tracks[0].Ref)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -552,7 +552,7 @@ func TestStreamingProviderReusesVerifiedCacheAfterRestart(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	resolved, err := provider.Resolve(ctx, catalog.Tracks[0].Ref)
+	resolved, err := provider.Resolve(ctx, "", catalog.Tracks[0].Ref)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -570,7 +570,7 @@ func TestStreamingProviderReusesVerifiedCacheAfterRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer reopened.Close()
-	resolved, err = reopened.Resolve(ctx, catalog.Tracks[0].Ref)
+	resolved, err = reopened.Resolve(ctx, "", catalog.Tracks[0].Ref)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -618,7 +618,7 @@ func TestResolvePrefersWorkingPartialCacheOverStaleCompleteFile(t *testing.T) {
 	if err := os.WriteFile(completePath+".part", media, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := provider.Resolve(context.Background(), catalog.Tracks[0].Ref)
+	resolved, err := provider.Resolve(context.Background(), "", catalog.Tracks[0].Ref)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -751,7 +751,7 @@ func TestManagedSourcesPersistPausePinAndRemove(t *testing.T) {
 	if err := provider.PauseSource(context.Background(), catalog.InfoHash); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := provider.Resolve(context.Background(), catalog.Tracks[0].Ref); !errors.Is(err, ports.ErrSourceUnavailable) {
+	if _, err := provider.Resolve(context.Background(), "", catalog.Tracks[0].Ref); !errors.Is(err, ports.ErrSourceUnavailable) {
 		t.Fatalf("Resolve() paused error = %v, want ErrSourceUnavailable", err)
 	}
 	if err := provider.ResumeSource(context.Background(), catalog.InfoHash); err != nil {
@@ -855,7 +855,7 @@ func TestStreamingProviderReadsPersistedTorrentFileAndArtwork(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	resolved, err := provider.Resolve(ctx, catalog.Tracks[0].Ref)
+	resolved, err := provider.Resolve(ctx, "", catalog.Tracks[0].Ref)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -892,7 +892,7 @@ func TestStreamingProviderReadsPersistedTorrentFileAndArtwork(t *testing.T) {
 		downloads[0].CompletedBytes != downloads[0].TotalBytes {
 		t.Fatalf("completed TrackDownloads() = %#v, %v", downloads, err)
 	}
-	ranged, err := provider.Resolve(ctx, catalog.Tracks[0].Ref)
+	ranged, err := provider.Resolve(ctx, "", catalog.Tracks[0].Ref)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -935,7 +935,7 @@ func TestStreamingProviderReadsPersistedTorrentFileAndArtwork(t *testing.T) {
 	if _, ok := provider.client.Torrent(hash); ok {
 		t.Fatal("torrent remained attached after cache eviction")
 	}
-	reopened, err := provider.Resolve(ctx, catalog.Tracks[0].Ref)
+	reopened, err := provider.Resolve(ctx, "", catalog.Tracks[0].Ref)
 	if err != nil {
 		t.Fatalf("Resolve() after eviction error = %v", err)
 	}

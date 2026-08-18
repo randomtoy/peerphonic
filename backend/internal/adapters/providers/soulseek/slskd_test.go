@@ -235,6 +235,24 @@ func TestSlskdSearchValidatesQueryAndReportsUnavailableProvider(t *testing.T) {
 	}
 }
 
+func TestSlskdServerErrorsReportUnavailableProvider(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		http.Error(writer, "The wait timed out after 5000 milliseconds", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+	client, err := NewSlskd(server.URL, "key", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	err = client.doJSON(context.Background(), http.MethodGet, "/api/v0/session", nil, nil)
+	if !errors.Is(err, ports.ErrSourceUnavailable) || !strings.Contains(err.Error(), "HTTP 500") {
+		t.Fatalf("doJSON() error = %v", err)
+	}
+}
+
 func TestSoulseekSearchAcceptsCommonAudioFormats(t *testing.T) {
 	t.Parallel()
 
@@ -388,7 +406,7 @@ func TestSlskdResolveStreamsGrowingFileAndReusesCompletedDownload(t *testing.T) 
 	remote := remoteFileRef{
 		Peer: "peer-one", Path: `@@abcde\Massive Attack\Mezzanine\01 Angel.mp3`, Size: 10,
 	}
-	trackID := domain.StableID(Name, remote.Peer, remote.Path, strconv.FormatInt(remote.Size, 10))
+	trackID := "catalog-track"
 	incompletePath := filepath.Join(
 		incompleteDir, "peer-one", "Massive Attack", "Mezzanine", "01 Angel.mp3",
 	)
@@ -462,11 +480,11 @@ func TestSlskdResolveStreamsGrowingFileAndReusesCompletedDownload(t *testing.T) 
 	client.SetCompletedHandler(func(file CompletedFile) { completed <- file })
 	encoded, _ := json.Marshal(remote)
 	ref := domain.SourceRef{Provider: Name, Key: base64.RawURLEncoding.EncodeToString(encoded)}
-	resolved, err := client.Resolve(context.Background(), ref)
+	resolved, err := client.Resolve(context.Background(), trackID, ref)
 	if err != nil {
 		t.Fatal(err)
 	}
-	second, err := client.Resolve(context.Background(), ref)
+	second, err := client.Resolve(context.Background(), trackID, ref)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -494,7 +512,7 @@ func TestSlskdResolveStreamsGrowingFileAndReusesCompletedDownload(t *testing.T) 
 		t.Fatal("completed file callback was not invoked")
 	}
 
-	cached, err := client.Resolve(context.Background(), ref)
+	cached, err := client.Resolve(context.Background(), trackID, ref)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -505,7 +523,7 @@ func TestSlskdResolveStreamsGrowingFileAndReusesCompletedDownload(t *testing.T) 
 	}
 	downloads, err := client.TrackDownloads(context.Background())
 	if err != nil || len(downloads) != 1 || downloads[0].State != domain.DownloadStateCached ||
-		downloads[0].CompletedBytes != remote.Size || downloads[0].Provider != Name {
+		downloads[0].CompletedBytes != remote.Size || downloads[0].Provider != Name || downloads[0].TrackID != trackID {
 		t.Fatalf("TrackDownloads() = %#v, %v", downloads, err)
 	}
 	usage, err := client.CacheUsage(context.Background())
@@ -551,7 +569,7 @@ func TestSlskdDownloadCanBeCancelledAndRetried(t *testing.T) {
 	remote := remoteFileRef{Peer: "peer-one", Path: `Album\song.mp3`, Size: 10}
 	encoded, _ := json.Marshal(remote)
 	ref := domain.SourceRef{Provider: Name, Key: base64.RawURLEncoding.EncodeToString(encoded)}
-	resolved, err := client.Resolve(context.Background(), ref)
+	resolved, err := client.Resolve(context.Background(), "", ref)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -593,6 +611,40 @@ func TestSlskdDownloadCanBeCancelledAndRetried(t *testing.T) {
 	}
 }
 
+func TestSlskdResolveRejectsFailedTransferBeforeOpeningStream(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v0/transfers/downloads/batches":
+			_, _ = writer.Write([]byte(`{"batch":{"id":"batch-1","transfers":[{"id":"transfer-1","state":"Queued, Locally"}]},"failures":[]}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v0/transfers/downloads/batches/batch-1":
+			_, _ = writer.Write([]byte(`{"id":"batch-1","transfers":[{"id":"transfer-1","state":"Completed, Rejected, Remotely","exception":"File not shared."}]}`))
+		default:
+			http.Error(writer, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewSlskd(server.URL, "key", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.SetMediaDirectories(t.TempDir(), t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	remote := remoteFileRef{Peer: "stale-peer", Path: `Album\song.mp3`, Size: 10}
+	encoded, _ := json.Marshal(remote)
+	_, err = client.Resolve(context.Background(), "", domain.SourceRef{
+		Provider: Name, Key: base64.RawURLEncoding.EncodeToString(encoded),
+	})
+	if !errors.Is(err, ports.ErrSourceUnavailable) || !strings.Contains(err.Error(), "File not shared") {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+}
+
 func TestSlskdCacheEvictionUsesLRUAndProtectsActiveStreams(t *testing.T) {
 	t.Parallel()
 
@@ -629,7 +681,7 @@ func TestSlskdCacheEvictionUsesLRUAndProtectsActiveStreams(t *testing.T) {
 		if err := os.WriteFile(path, []byte(contents), 0o640); err != nil {
 			t.Fatal(err)
 		}
-		resolved, err := client.Resolve(context.Background(), domain.SourceRef{Provider: Name, Key: key})
+		resolved, err := client.Resolve(context.Background(), "", domain.SourceRef{Provider: Name, Key: key})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -758,7 +810,7 @@ func TestSlskdDownloadResumesMonitoringAfterClientRestart(t *testing.T) {
 	if err := first.SetMediaDirectories(downloadsDir, incompleteDir); err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := first.Resolve(context.Background(), ref)
+	resolved, err := first.Resolve(context.Background(), "", ref)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -809,14 +861,14 @@ func TestSlskdResolveRequiresMediaDirectoriesAndValidReference(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = client.Resolve(context.Background(), domain.SourceRef{Provider: Name, Key: "invalid"})
+	_, err = client.Resolve(context.Background(), "", domain.SourceRef{Provider: Name, Key: "invalid"})
 	if !errors.Is(err, ports.ErrSourceUnavailable) {
 		t.Fatalf("unconfigured Resolve() error = %v", err)
 	}
 	if err := client.SetMediaDirectories(t.TempDir(), t.TempDir()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := client.Resolve(context.Background(), domain.SourceRef{Provider: Name, Key: "invalid"}); err == nil {
+	if _, err := client.Resolve(context.Background(), "", domain.SourceRef{Provider: Name, Key: "invalid"}); err == nil {
 		t.Fatal("invalid Resolve() error = nil")
 	}
 }

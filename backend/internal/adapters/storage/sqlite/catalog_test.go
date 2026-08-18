@@ -172,6 +172,36 @@ func TestCatalogSavesTrackSourceBatchAtomically(t *testing.T) {
 	}
 }
 
+func TestCatalogPrefersRecentlyDiscoveredSources(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	catalog, err := Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close()
+	track := domain.Track{ID: "remote-1", Title: "Song", Artist: "Artist"}
+	old := domain.TrackSource{
+		Track: track, Ref: domain.SourceRef{Provider: "remote", Key: "old-peer"},
+		DiscoveredAt: time.Now().Add(-time.Hour),
+	}
+	fresh := domain.TrackSource{
+		Track: track, Ref: domain.SourceRef{Provider: "remote", Key: "fresh-peer"},
+		DiscoveredAt: time.Now(),
+	}
+	if err := catalog.SaveTrackSources(ctx, []domain.TrackSource{old, fresh}); err != nil {
+		t.Fatal(err)
+	}
+	sources, err := catalog.Sources(ctx, track.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 2 || sources[0] != fresh.Ref || sources[1] != old.Ref {
+		t.Fatalf("Sources() = %#v", sources)
+	}
+}
+
 func TestCatalogAlbumListOrderingAndYearRanges(t *testing.T) {
 	t.Parallel()
 

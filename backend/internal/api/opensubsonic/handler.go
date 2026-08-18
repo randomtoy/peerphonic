@@ -55,6 +55,7 @@ type scanController interface {
 type sourceDiscovery interface {
 	Search(ctx context.Context, query domain.SearchQuery) ([]domain.TrackSource, error)
 	Add(ctx context.Context, id string) (domain.Track, error)
+	Refresh(ctx context.Context, track domain.Track) error
 	Result(id string) (domain.TrackSource, bool)
 }
 
@@ -87,12 +88,16 @@ func NewHandlerWithAuthenticatorAndDiscovery(
 	streams *services.StreamingService,
 	artwork *services.ArtworkService,
 	authenticator ports.Authenticator,
-	discovery sourceDiscovery,
+	discovery *services.DiscoveryService,
 	scans ...scanController,
 ) http.Handler {
+	var source sourceDiscovery
+	if discovery != nil {
+		source = discovery
+	}
 	handler := &Handler{
 		catalog: catalog, streams: streams, artwork: artwork,
-		playlists: services.NewPlaylistService(catalog), auth: authenticator, discovery: discovery,
+		playlists: services.NewPlaylistService(catalog), auth: authenticator, discovery: source,
 	}
 	if store, ok := catalog.(ports.MediaAnnotationStore); ok {
 		handler.annotations = services.NewAnnotationService(catalog, store)
@@ -804,7 +809,22 @@ func (h *Handler) stream(writer http.ResponseWriter, request *http.Request) {
 		h.writeError(writer, request, http.StatusBadRequest, 10, "Required parameter id is missing")
 		return
 	}
+	if h.canUseClientDiscovery(request) {
+		if _, ok := h.discovery.Result(id); ok {
+			if _, err := h.discovery.Add(request.Context(), id); err != nil {
+				h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to prepare the discovered song")
+				return
+			}
+		}
+	}
 	resolved, err := h.streams.Open(request.Context(), id)
+	if errors.Is(err, ports.ErrSourceUnavailable) && h.canUseClientDiscovery(request) {
+		if track, trackErr := h.catalog.Track(request.Context(), id); trackErr == nil {
+			if refreshErr := h.discovery.Refresh(request.Context(), track); refreshErr == nil {
+				resolved, err = h.streams.Open(request.Context(), id)
+			}
+		}
+	}
 	if errors.Is(err, ports.ErrNotFound) && h.canUseClientDiscovery(request) {
 		if _, addErr := h.discovery.Add(request.Context(), id); addErr == nil {
 			resolved, err = h.streams.Open(request.Context(), id)

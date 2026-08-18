@@ -586,7 +586,14 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload, targe
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		message, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
-		return fmt.Errorf("slskd returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(message)))
+		responseErr := fmt.Errorf(
+			"slskd returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(message)),
+		)
+		if response.StatusCode == http.StatusRequestTimeout || response.StatusCode == http.StatusTooManyRequests ||
+			response.StatusCode >= 500 {
+			return fmt.Errorf("%w: %v", ports.ErrSourceUnavailable, responseErr)
+		}
+		return responseErr
 	}
 	if target == nil || response.StatusCode == http.StatusNoContent {
 		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))

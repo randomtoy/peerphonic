@@ -25,7 +25,7 @@ func TestResolveLocalTrack(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := provider.Resolve(context.Background(), domain.SourceRef{Provider: Name, Key: "Artist/song.mp3"})
+	resolved, err := provider.Resolve(context.Background(), "", domain.SourceRef{Provider: Name, Key: "Artist/song.mp3"})
 	if err != nil {
 		t.Fatalf("Resolve() error = %v", err)
 	}
@@ -43,7 +43,7 @@ func TestResolveRejectsTraversal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = provider.Resolve(context.Background(), domain.SourceRef{Provider: Name, Key: "../secret"})
+	_, err = provider.Resolve(context.Background(), "", domain.SourceRef{Provider: Name, Key: "../secret"})
 	if err == nil {
 		t.Fatal("Resolve() error = nil, want traversal error")
 	}

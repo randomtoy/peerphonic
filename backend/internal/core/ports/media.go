@@ -38,7 +38,7 @@ type SourceCollectionBrowser interface {
 
 type SourceProvider interface {
 	SourceSearcher
-	Resolve(ctx context.Context, ref domain.SourceRef) (ResolvedSource, error)
+	Resolve(ctx context.Context, trackID string, ref domain.SourceRef) (ResolvedSource, error)
 }
 
 // BlobStore is binary storage for cached media and artwork. It is intentionally

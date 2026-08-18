@@ -280,7 +280,7 @@ func (c *Catalog) Track(ctx context.Context, id string) (domain.Track, error) {
 
 func (c *Catalog) Sources(ctx context.Context, trackID string) ([]domain.SourceRef, error) {
 	rows, err := c.db.QueryContext(ctx, `SELECT provider, source_key FROM track_sources
-		WHERE track_id = ? ORDER BY provider, source_key`, trackID)
+		WHERE track_id = ? ORDER BY provider, discovered_at DESC, source_key`, trackID)
 	if err != nil {
 		return nil, fmt.Errorf("query track sources: %w", err)
 	}

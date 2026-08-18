@@ -14,13 +14,15 @@ type discoveryProviderStub struct {
 	collection  domain.SourceCollection
 	err         error
 	browseCalls *int
+	search      func(domain.SearchQuery) ([]domain.TrackSource, error)
 }
 
 func (s discoveryProviderStub) Name() string { return "remote" }
 
-func (s discoveryProviderStub) Search(
-	_ context.Context, _ domain.SearchQuery,
-) ([]domain.TrackSource, error) {
+func (s discoveryProviderStub) Search(_ context.Context, query domain.SearchQuery) ([]domain.TrackSource, error) {
+	if s.search != nil {
+		return s.search(query)
+	}
 	return s.results, s.err
 }
 
@@ -97,6 +99,71 @@ func TestDiscoveryServiceRejectsUnknownAndPropagatesStorageErrors(t *testing.T) 
 	}
 	if _, err := service.Add(context.Background(), result.Track.ID); err == nil || errors.Is(err, ErrDiscoveryResultNotFound) {
 		t.Fatalf("Add() error = %v", err)
+	}
+}
+
+func TestDiscoveryServiceAddsRankedAlternativeSourcesForPlayback(t *testing.T) {
+	t.Parallel()
+
+	selected := domain.TrackSource{
+		Track: domain.Track{
+			ID: "track-1", Artist: "System of a Down", Title: "01 - Prison Song",
+			Suffix: "mp3", Duration: 3 * time.Minute,
+		},
+		Ref:          domain.SourceRef{Provider: "remote", Key: "stale-peer"},
+		DiscoveredAt: time.Now().Add(-time.Minute).UTC(),
+	}
+	fast := domain.TrackSource{
+		Track: domain.Track{Artist: "System Of A Down", Title: "Prison Song", Suffix: "mp3", Duration: 181 * time.Second},
+		Ref:   domain.SourceRef{Provider: "remote", Key: "fast-peer"}, DisplayPath: "System Of A Down/Toxicity/01 Prison Song.mp3",
+		Availability: domain.SourceAvailability{FreeUploadSlot: true, UploadSpeed: 2_000_000},
+	}
+	queued := domain.TrackSource{
+		Track: domain.Track{Artist: "System Of A Down", Title: "Prison Song", Suffix: "mp3", Duration: 179 * time.Second},
+		Ref:   domain.SourceRef{Provider: "remote", Key: "queued-peer"}, DisplayPath: "System Of A Down/Toxicity/Prison Song.mp3",
+		Availability: domain.SourceAvailability{QueueLength: 12, UploadSpeed: 5_000_000},
+	}
+	wrong := domain.TrackSource{
+		Track: domain.Track{Artist: "The Outsiders", Title: "Prison Song", Suffix: "mp3"},
+		Ref:   domain.SourceRef{Provider: "remote", Key: "wrong-song"}, DisplayPath: "The Outsiders/Prison Song.mp3",
+	}
+	locked := fast
+	locked.Ref.Key = "locked-peer"
+	locked.Availability.RequiresApproval = true
+	live := fast
+	live.Track.Title = "Prison Song (Live)"
+	live.Ref.Key = "live-peer"
+	live.DisplayPath = "System Of A Down/Live/Prison Song (Live).mp3"
+
+	var queries []domain.SearchQuery
+	provider := discoveryProviderStub{search: func(query domain.SearchQuery) ([]domain.TrackSource, error) {
+		queries = append(queries, query)
+		if len(queries) == 1 {
+			return []domain.TrackSource{selected}, nil
+		}
+		return []domain.TrackSource{queued, wrong, locked, live, fast}, nil
+	}}
+	writer := &trackSourceWriterStub{}
+	service := NewDiscoveryService(provider, writer)
+	if _, err := service.Search(context.Background(), domain.SearchQuery{Text: "system of a down"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.Add(context.Background(), selected.Track.ID); err != nil {
+		t.Fatal(err)
+	}
+	if len(queries) != 2 || queries[1].Text != "system prison song" || queries[1].Limit != 100 {
+		t.Fatalf("alternative query = %#v", queries)
+	}
+	if len(writer.saved) != 3 {
+		t.Fatalf("saved alternatives = %#v", writer.saved)
+	}
+	if writer.saved[0].Ref != fast.Ref || writer.saved[1].Ref != queued.Ref || writer.saved[2].Ref != selected.Ref {
+		t.Fatalf("ranked sources = %#v", writer.saved)
+	}
+	for _, source := range writer.saved {
+		if source.Track != selected.Track {
+			t.Fatalf("alternative track identity = %#v, want %#v", source.Track, selected.Track)
+		}
 	}
 }
 
