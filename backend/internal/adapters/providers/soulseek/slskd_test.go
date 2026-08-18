@@ -128,6 +128,8 @@ func TestSlskdSearchMapsAudioResultsAndCleansUp(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	client.cleanupDelay = 10 * time.Millisecond
+	defer client.Close()
 	results, err := client.Search(context.Background(), domain.SearchQuery{Text: " Massive Attack ", Limit: 3})
 	if err != nil {
 		t.Fatal(err)
@@ -147,8 +149,73 @@ func TestSlskdSearchMapsAudioResultsAndCleansUp(t *testing.T) {
 	if !results[1].Availability.RequiresApproval {
 		t.Fatalf("locked result = %#v", results[1])
 	}
+	deadline := time.Now().Add(time.Second)
+	for !deleted.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
 	if !deleted.Load() {
-		t.Fatal("completed slskd search was not deleted")
+		t.Fatal("completed slskd search was not deleted after cleanup delay")
+	}
+}
+
+func TestSlskdSearchFallsBackToLongestTermAndFiltersResults(t *testing.T) {
+	t.Parallel()
+
+	var searches atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v0/searches":
+			var payload struct {
+				SearchText string `json:"searchText"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Error(err)
+			}
+			call := searches.Add(1)
+			if call == 1 {
+				if payload.SearchText != "linkin park" {
+					t.Errorf("first search text = %q", payload.SearchText)
+				}
+				_, _ = writer.Write([]byte(`{"id":"exact","isComplete":false}`))
+				return
+			}
+			if payload.SearchText != "linkin" {
+				t.Errorf("fallback search text = %q", payload.SearchText)
+			}
+			_, _ = writer.Write([]byte(`{"id":"fallback","isComplete":false}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v0/searches/exact":
+			_, _ = writer.Write([]byte(`{"id":"exact","isComplete":true,"responses":[]}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v0/searches/fallback":
+			_, _ = writer.Write([]byte(`{
+				"id":"fallback","isComplete":true,
+				"responses":[{"username":"peer","files":[
+					{"filename":"Linkin Park\\Hybrid Theory\\01 Papercut.flac","extension":"flac","size":1200},
+					{"filename":"Linkin Avenue\\Other Album\\01 Song.mp3","extension":"mp3","size":800}
+				]}]
+			}`))
+		case request.Method == http.MethodDelete:
+			writer.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(writer, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewSlskd(server.URL, "key", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	results, err := client.Search(context.Background(), domain.SearchQuery{Text: "linkin park", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if searches.Load() != 2 {
+		t.Fatalf("search requests = %d, want 2", searches.Load())
+	}
+	if len(results) != 1 || results[0].Track.Artist != "Linkin Park" || results[0].Track.Title != "01 Papercut" {
+		t.Fatalf("results = %#v", results)
 	}
 }
 

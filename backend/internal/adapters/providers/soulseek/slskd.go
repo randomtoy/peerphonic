@@ -30,6 +30,7 @@ const (
 	searchTimeoutMilliseconds = 5_000
 	searchMaxLimit            = 200
 	searchMaxWait             = 8 * time.Second
+	searchCleanupDelay        = time.Minute
 	pollInterval              = 250 * time.Millisecond
 	maxResponse               = 8 << 20
 )
@@ -46,6 +47,12 @@ type Client struct {
 
 	completedMu      sync.RWMutex
 	completedHandler func(CompletedFile)
+	searchCleanupCtx context.Context
+	searchCleanupEnd context.CancelFunc
+	searchCleanupMu  sync.Mutex
+	searchClosed     bool
+	searchCleanupWG  sync.WaitGroup
+	cleanupDelay     time.Duration
 
 	artworkMu   sync.Mutex
 	artworkJobs map[string]*artworkDownload
@@ -72,8 +79,10 @@ func NewSlskd(endpoint, apiKey string, timeout time.Duration) (*Client, error) {
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
+	cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
 	return &Client{
 		endpoint: parsed, apiKey: strings.TrimSpace(apiKey), httpClient: &http.Client{Timeout: timeout},
+		searchCleanupCtx: cleanupCtx, searchCleanupEnd: cleanupCancel, cleanupDelay: searchCleanupDelay,
 	}, nil
 }
 
@@ -107,6 +116,11 @@ func (c *Client) SetMediaDirectories(downloadsDir, incompleteDir string) error {
 }
 
 func (c *Client) Close() error {
+	c.searchCleanupMu.Lock()
+	c.searchClosed = true
+	c.searchCleanupEnd()
+	c.searchCleanupMu.Unlock()
+	c.searchCleanupWG.Wait()
 	if c.downloads != nil {
 		c.downloads.close()
 	}
@@ -158,14 +172,31 @@ func (c *Client) Search(ctx context.Context, query domain.SearchQuery) ([]domain
 		query.Limit = searchMaxLimit
 	}
 
+	results, err := c.searchOnce(ctx, query.Text, query.Limit)
+	if err != nil || len(results) > 0 {
+		return results, err
+	}
+	fallback := searchFallbackTerm(query.Text)
+	if fallback == "" {
+		return results, nil
+	}
+	fallbackLimit := min(max(query.Limit*4, 50), searchMaxLimit)
+	fallbackResults, err := c.searchOnce(ctx, fallback, fallbackLimit)
+	if err != nil {
+		return nil, err
+	}
+	return filterSearchResults(fallbackResults, query.Text, query.Limit), nil
+}
+
+func (c *Client) searchOnce(ctx context.Context, text string, limit int) ([]domain.TrackSource, error) {
 	payload := struct {
 		SearchText    string `json:"searchText"`
 		SearchTimeout int    `json:"searchTimeout"`
 		ResponseLimit int    `json:"responseLimit"`
 		FileLimit     int    `json:"fileLimit"`
 	}{
-		SearchText: query.Text, SearchTimeout: searchTimeoutMilliseconds,
-		ResponseLimit: query.Limit, FileLimit: query.Limit * 4,
+		SearchText: text, SearchTimeout: searchTimeoutMilliseconds,
+		ResponseLimit: limit, FileLimit: limit * 4,
 	}
 	var search slskdSearch
 	if err := c.doJSON(ctx, http.MethodPost, "/api/v0/searches", payload, &search); err != nil {
@@ -174,7 +205,7 @@ func (c *Client) Search(ctx context.Context, query domain.SearchQuery) ([]domain
 	if search.ID == "" {
 		return nil, errors.New("start slskd search: response did not include an id")
 	}
-	defer c.deleteSearch(search.ID)
+	defer c.scheduleDeleteSearch(search.ID)
 
 	deadline := time.NewTimer(searchMaxWait)
 	defer deadline.Stop()
@@ -182,7 +213,7 @@ func (c *Client) Search(ctx context.Context, query domain.SearchQuery) ([]domain
 	defer ticker.Stop()
 	for {
 		if search.IsComplete {
-			return mapSearchResults(search.Responses, query.Limit), nil
+			return mapSearchResults(search.Responses, limit), nil
 		}
 		if err := c.doJSON(ctx, http.MethodGet,
 			"/api/v0/searches/"+url.PathEscape(search.ID)+"?includeResponses=true", nil, &search,
@@ -190,16 +221,54 @@ func (c *Client) Search(ctx context.Context, query domain.SearchQuery) ([]domain
 			return nil, fmt.Errorf("poll slskd search: %w", err)
 		}
 		if search.IsComplete {
-			return mapSearchResults(search.Responses, query.Limit), nil
+			return mapSearchResults(search.Responses, limit), nil
 		}
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
 		case <-deadline.C:
-			return mapSearchResults(search.Responses, query.Limit), nil
+			return mapSearchResults(search.Responses, limit), nil
 		case <-ticker.C:
 		}
 	}
+}
+
+func searchFallbackTerm(query string) string {
+	terms := strings.Fields(strings.ToLower(query))
+	if len(terms) < 2 {
+		return ""
+	}
+	longest := terms[0]
+	for _, term := range terms[1:] {
+		if len([]rune(term)) > len([]rune(longest)) {
+			longest = term
+		}
+	}
+	return longest
+}
+
+func filterSearchResults(results []domain.TrackSource, query string, limit int) []domain.TrackSource {
+	terms := strings.Fields(strings.ToLower(query))
+	filtered := make([]domain.TrackSource, 0, min(limit, len(results)))
+	for _, result := range results {
+		haystack := strings.ToLower(strings.Join([]string{
+			result.Track.Artist, result.Track.Album, result.Track.Title, result.DisplayPath,
+		}, " "))
+		matched := true
+		for _, term := range terms {
+			if !strings.Contains(haystack, term) {
+				matched = false
+				break
+			}
+		}
+		if matched {
+			filtered = append(filtered, result)
+			if len(filtered) == limit {
+				break
+			}
+		}
+	}
+	return filtered
 }
 
 type slskdSearch struct {
@@ -511,6 +580,27 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload, targe
 		return fmt.Errorf("decode slskd response: %w", err)
 	}
 	return nil
+}
+
+func (c *Client) scheduleDeleteSearch(id string) {
+	c.searchCleanupMu.Lock()
+	if c.searchClosed {
+		c.searchCleanupMu.Unlock()
+		return
+	}
+	c.searchCleanupWG.Add(1)
+	c.searchCleanupMu.Unlock()
+	go func() {
+		defer c.searchCleanupWG.Done()
+		timer := time.NewTimer(c.cleanupDelay)
+		defer timer.Stop()
+		select {
+		case <-c.searchCleanupCtx.Done():
+			return
+		case <-timer.C:
+		}
+		c.deleteSearch(id)
+	}()
 }
 
 func (c *Client) deleteSearch(id string) {
