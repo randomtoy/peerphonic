@@ -13,6 +13,8 @@ Catalog and cache data are stored in `deploy/data/`. The music directory
 is mounted read-only at `/music`. OpenSubsonic remains available on port `8080`;
 the optional administration dashboard is served at `http://localhost:8081`.
 Set `PEERPHONIC_WEB_PORT` to publish the dashboard on another host port.
+Compose waits for the backend readiness endpoint, including its SQLite check,
+before starting the dashboard container.
 
 The compose service publishes the BitTorrent listen port over both TCP and UDP.
 It defaults to `42069`; override `PEERPHONIC_TORRENT_PORT` before startup when

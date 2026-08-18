@@ -33,7 +33,8 @@ changing the client-facing streaming flow.
 - authenticated torrent source management with persistent pause and cache pinning;
 - optional authenticated Soulseek search, catalog selection, buffered single-file downloads, and cache reuse through slskd;
 - an optional containerized administration dashboard for cache, transfers, torrent sources, and Soulseek jobs;
-- a small Peerphonic health endpoint at `/api/v1/health`.
+- separate process health and metadata readiness endpoints at `/api/v1/health`
+  and `/api/v1/ready`.
 
 The implemented OpenSubsonic endpoints are:
 

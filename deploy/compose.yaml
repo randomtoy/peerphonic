@@ -18,6 +18,12 @@ services:
       PEERPHONIC_SLSKD_API_KEY: "${PEERPHONIC_SLSKD_API_KEY:-}"
       PEERPHONIC_SLSKD_DOWNLOADS_DIR: "/data/cache/soulseek/downloads"
       PEERPHONIC_SLSKD_INCOMPLETE_DIR: "/data/cache/soulseek/incomplete"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/api/v1/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
     restart: unless-stopped
   web:
     build:
@@ -26,5 +32,6 @@ services:
     ports:
       - "${PEERPHONIC_WEB_PORT:-8081}:8080"
     depends_on:
-      - peerphonic
+      peerphonic:
+        condition: service_healthy
     restart: unless-stopped

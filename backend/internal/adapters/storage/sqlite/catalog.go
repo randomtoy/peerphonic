@@ -43,6 +43,13 @@ func (c *Catalog) Close() error {
 	return c.db.Close()
 }
 
+func (c *Catalog) Ping(ctx context.Context) error {
+	if err := c.db.PingContext(ctx); err != nil {
+		return fmt.Errorf("ping sqlite database: %w", err)
+	}
+	return nil
+}
+
 func (c *Catalog) configure(ctx context.Context) error {
 	for _, statement := range []string{
 		"PRAGMA foreign_keys = ON",

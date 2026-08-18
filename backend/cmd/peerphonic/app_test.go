@@ -52,6 +52,11 @@ func TestLocalFileToOpenSubsonicStream(t *testing.T) {
 	if rootResponse.Code != http.StatusOK {
 		t.Fatalf("root status = %d, body = %s", rootResponse.Code, rootResponse.Body.String())
 	}
+	readyResponse := httptest.NewRecorder()
+	app.handler.ServeHTTP(readyResponse, httptest.NewRequest(http.MethodGet, "/api/v1/ready", nil))
+	if readyResponse.Code != http.StatusOK || !strings.Contains(readyResponse.Body.String(), `"status":"ready"`) {
+		t.Fatalf("ready status = %d, body = %s", readyResponse.Code, readyResponse.Body.String())
+	}
 	createUser := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(
 		`{"username":"listener","password":"listener-password","role":"user"}`,
 	))

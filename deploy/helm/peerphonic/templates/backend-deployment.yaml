@@ -108,7 +108,7 @@ spec:
               protocol: UDP
           readinessProbe:
             httpGet:
-              path: /api/v1/health
+              path: /api/v1/ready
               port: http
             initialDelaySeconds: 2
             periodSeconds: 5

@@ -27,5 +27,5 @@ spec:
         - wget -qO- http://{{ include "peerphonic.fullname" . }}-web:{{ .Values.web.service.port }}/ >/dev/null;
           wget -qO- http://{{ include "peerphonic.fullname" . }}-web:{{ .Values.web.service.port }}/api/v1/health;
         {{- else }}
-        - wget -qO- http://{{ include "peerphonic.fullname" . }}:{{ .Values.peerphonic.service.port }}/api/v1/health;
+        - wget -qO- http://{{ include "peerphonic.fullname" . }}:{{ .Values.peerphonic.service.port }}/api/v1/ready;
         {{- end }}

@@ -201,6 +201,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	streaming := services.NewStreamingService(catalog, streamingProviders...)
 	downloadService := services.NewDownloadService(downloadMonitors...)
 	mux := http.NewServeMux()
+	mux.Handle("/api/v1/ready", peerphonic.NewReadinessHandler(catalog))
 	mux.Handle("/rest/", opensubsonic.NewHandlerWithAuthenticatorAndDiscovery(
 		catalog, streaming, artwork, userService, soulseekDiscovery, scanManager,
 	))
