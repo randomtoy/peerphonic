@@ -425,6 +425,7 @@ function renderSoulseekResults(items) {
         <div><dt>Upload</dt><dd>${formatBytes(item.uploadSpeedBytesPerSecond)}/s</dd></div>
         <div><dt>Queue</dt><dd>${Number(item.queueLength) || 0}</dd></div>
       </dl>
+      <button class="button secondary search-add" type="button" data-add-soulseek="${escapeHTML(item.id)}" ${item.requiresApproval ? "disabled" : ""}>${item.requiresApproval ? "Locked" : "Add to library"}</button>
     </article>`;
   }).join("");
 }
@@ -573,6 +574,26 @@ elements.soulseekSearchForm.addEventListener("submit", async (event) => {
   } finally {
     button.disabled = false;
     button.textContent = "Search";
+  }
+});
+elements.soulseekSearchResults.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-add-soulseek]");
+  if (!button || button.disabled) return;
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = "Adding…";
+  elements.soulseekSearchMessage.className = "form-message";
+  try {
+    const track = await api(`/api/v1/providers/soulseek/tracks/${encodeURIComponent(button.dataset.addSoulseek)}`, {
+      method: "POST",
+    });
+    button.textContent = "Added";
+    elements.soulseekSearchMessage.textContent = `Added “${track.title}” to ${track.album || "the library"}. Play it from any OpenSubsonic client to start downloading.`;
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = original;
+    elements.soulseekSearchMessage.className = "form-message error";
+    elements.soulseekSearchMessage.textContent = error.message;
   }
 });
 elements.navigation.addEventListener("click", (event) => {

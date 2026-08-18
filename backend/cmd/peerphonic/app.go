@@ -89,7 +89,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 			return fail(fmt.Errorf("initialize slskd client: %w", clientErr))
 		}
 		soulseekMonitor = soulseekClient
-		soulseekSearch = soulseekClient
+		soulseekSearch = services.NewDiscoveryService(soulseekClient, catalog)
 	}
 	blobs, err := filesystem.New(cfg.CacheDir)
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
+	"github.com/randomtoy/peerphonic/backend/internal/core/services"
 	"github.com/randomtoy/peerphonic/backend/internal/scanner"
 )
 
@@ -39,6 +40,9 @@ type sourceSearcherStub struct {
 	query   domain.SearchQuery
 	results []domain.TrackSource
 	err     error
+	addedID string
+	added   domain.Track
+	addErr  error
 }
 
 type uriImporterStub struct {
@@ -125,6 +129,11 @@ func (s *sourceSearcherStub) Search(
 ) ([]domain.TrackSource, error) {
 	s.query = query
 	return s.results, s.err
+}
+
+func (s *sourceSearcherStub) Add(_ context.Context, id string) (domain.Track, error) {
+	s.addedID = id
+	return s.added, s.addErr
 }
 
 func (s *uriImporterStub) ImportURI(_ context.Context, uri string) (domain.SourceImport, error) {
@@ -392,6 +401,54 @@ func TestSoulseekSearchValidatesRequestAndRequiresConfiguredProvider(t *testing.
 	configured.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("invalid status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestSoulseekTrackAddRequiresPermissionAndPersistsSelectedResult(t *testing.T) {
+	t.Parallel()
+
+	searcher := &sourceSearcherStub{added: domain.Track{
+		ID: "soulseek_opaque", Title: "Angel", Artist: "Massive Attack", Album: "Mezzanine",
+	}}
+	handler := newHandler(
+		nil, nil, nil, nil, nil, nil,
+		fixedAuthenticator{username: "alice", password: "secret"}, nil, nil, searcher, nil, nil,
+	)
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(
+		http.MethodPost, "/api/v1/providers/soulseek/tracks/soulseek_opaque", nil,
+	))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d", unauthorized.Code)
+	}
+
+	request := httptest.NewRequest(
+		http.MethodPost, "/api/v1/providers/soulseek/tracks/soulseek_opaque", nil,
+	)
+	request.SetBasicAuth("alice", "secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || searcher.addedID != "soulseek_opaque" ||
+		!strings.Contains(response.Body.String(), `"artist":"Massive Attack"`) ||
+		!strings.Contains(response.Body.String(), `"album":"Mezzanine"`) {
+		t.Fatalf("status = %d, added = %q, body = %s", response.Code, searcher.addedID, response.Body.String())
+	}
+}
+
+func TestSoulseekTrackAddReportsExpiredResult(t *testing.T) {
+	t.Parallel()
+
+	searcher := &sourceSearcherStub{addErr: services.ErrDiscoveryResultNotFound}
+	handler := newHandler(
+		nil, nil, nil, nil, nil, nil,
+		fixedAuthenticator{username: "alice", password: "secret"}, nil, nil, searcher, nil, nil,
+	)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/providers/soulseek/tracks/missing", nil)
+	request.SetBasicAuth("alice", "secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
 

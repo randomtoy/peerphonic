@@ -169,6 +169,17 @@ type sourceSearchResponse struct {
 	Results []sourceSearchResultResponse `json:"results"`
 }
 
+type sourceAdder interface {
+	Add(ctx context.Context, id string) (domain.Track, error)
+}
+
+type sourceAddResponse struct {
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Artist string `json:"artist"`
+	Album  string `json:"album"`
+}
+
 func NewHandler(
 	cache cacheStatus,
 	torrentImporter ports.SourceImporter,
@@ -369,6 +380,33 @@ func newHandler(
 			})
 		}
 		writeJSON(writer, http.StatusOK, response)
+	})
+	mux.HandleFunc("POST /api/v1/providers/soulseek/tracks/{id}", func(writer http.ResponseWriter, request *http.Request) {
+		if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
+			return
+		}
+		adder, ok := providerSearch.(sourceAdder)
+		if !ok {
+			http.Error(writer, "Soulseek provider is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		id := strings.TrimSpace(request.PathValue("id"))
+		if id == "" {
+			http.Error(writer, "track ID is required", http.StatusBadRequest)
+			return
+		}
+		track, err := adder.Add(request.Context(), id)
+		if err != nil {
+			if errors.Is(err, services.ErrDiscoveryResultNotFound) {
+				http.Error(writer, "search result expired; search again", http.StatusNotFound)
+				return
+			}
+			http.Error(writer, "add Soulseek track to library", http.StatusInternalServerError)
+			return
+		}
+		writeJSON(writer, http.StatusCreated, sourceAddResponse{
+			ID: track.ID, Title: track.Title, Artist: track.Artist, Album: track.Album,
+		})
 	})
 	if cache != nil {
 		mux.HandleFunc("GET /api/v1/cache/status", func(writer http.ResponseWriter, request *http.Request) {
