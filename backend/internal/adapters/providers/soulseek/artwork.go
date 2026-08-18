@@ -125,7 +125,9 @@ func (c *Client) ensureArtworkDownload(
 	payload.Options.ExternalID = destination
 
 	var response slskdDownloadBatchResponse
-	if err := c.doJSON(ctx, http.MethodPost, "/api/v0/transfers/downloads/batches", payload, &response); err != nil {
+	if err := c.doPeerJSON(ctx, remote.Peer, http.MethodPost,
+		"/api/v0/transfers/downloads/batches", payload, &response,
+	); err != nil {
 		err = fmt.Errorf("enqueue Soulseek artwork: %w", err)
 		c.finishArtworkDownload(destination, job, err)
 		return nil, err

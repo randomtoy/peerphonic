@@ -33,6 +33,8 @@ const (
 	searchCleanupDelay        = time.Minute
 	pollInterval              = 250 * time.Millisecond
 	maxResponse               = 8 << 20
+	peerBusyRetryAttempts     = 4
+	peerBusyRetryDelay        = 150 * time.Millisecond
 )
 
 var artworkExtensions = map[string]struct{}{
@@ -54,6 +56,8 @@ type Client struct {
 	searchClosed     bool
 	searchCleanupWG  sync.WaitGroup
 	cleanupDelay     time.Duration
+	peerOperationsMu sync.Mutex
+	peerOperations   map[string]*peerOperationGate
 
 	artworkMu   sync.Mutex
 	artworkJobs map[string]*artworkDownload
@@ -63,6 +67,7 @@ type Client struct {
 type CompletedFile struct {
 	TrackID string
 	Path    string
+	Size    int64
 }
 
 func NewSlskd(endpoint, apiKey string, timeout time.Duration) (*Client, error) {
@@ -84,6 +89,7 @@ func NewSlskd(endpoint, apiKey string, timeout time.Duration) (*Client, error) {
 	return &Client{
 		endpoint: parsed, apiKey: strings.TrimSpace(apiKey), httpClient: &http.Client{Timeout: timeout},
 		searchCleanupCtx: cleanupCtx, searchCleanupEnd: cleanupCancel, cleanupDelay: searchCleanupDelay,
+		peerOperations: make(map[string]*peerOperationGate),
 	}, nil
 }
 
@@ -411,7 +417,7 @@ func (c *Client) BrowseCollection(
 		return domain.SourceCollection{}, errors.New("Soulseek result does not belong to a directory")
 	}
 	var directories []slskdDirectory
-	if err := c.doJSON(ctx, http.MethodPost,
+	if err := c.doPeerJSON(ctx, remote.Peer, http.MethodPost,
 		"/api/v0/users/"+url.PathEscape(remote.Peer)+"/directory",
 		struct {
 			Directory string `json:"directory"`
@@ -586,12 +592,12 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload, targe
 	}
 	if response.StatusCode < 200 || response.StatusCode >= 300 {
 		message, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
-		responseErr := fmt.Errorf(
-			"slskd returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(message)),
-		)
+		responseErr := &slskdHTTPError{
+			statusCode: response.StatusCode, message: strings.TrimSpace(string(message)),
+		}
 		if response.StatusCode == http.StatusRequestTimeout || response.StatusCode == http.StatusTooManyRequests ||
 			response.StatusCode >= 500 {
-			return fmt.Errorf("%w: %v", ports.ErrSourceUnavailable, responseErr)
+			return fmt.Errorf("%w: %w", ports.ErrSourceUnavailable, responseErr)
 		}
 		return responseErr
 	}
@@ -604,6 +610,90 @@ func (c *Client) doJSON(ctx context.Context, method, path string, payload, targe
 		return fmt.Errorf("decode slskd response: %w", err)
 	}
 	return nil
+}
+
+type slskdHTTPError struct {
+	statusCode int
+	message    string
+}
+
+type peerOperationGate struct {
+	semaphore chan struct{}
+	users     int
+}
+
+func (e *slskdHTTPError) Error() string {
+	return fmt.Sprintf("slskd returned HTTP %d: %s", e.statusCode, e.message)
+}
+
+func isSlskdHTTPStatus(err error, status int) bool {
+	var responseErr *slskdHTTPError
+	return errors.As(err, &responseErr) && responseErr.statusCode == status
+}
+
+// doPeerJSON serializes slskd operations that may need the same remote user's
+// address or directory. Soulseek.NET permits only one such operation per peer;
+// concurrent album prefetches would otherwise be rejected with HTTP 429.
+func (c *Client) doPeerJSON(
+	ctx context.Context, peer, method, path string, payload, target any,
+) error {
+	release, err := c.acquirePeerOperation(ctx, peer)
+	if err != nil {
+		return err
+	}
+	defer release()
+
+	var operationErr error
+	for attempt := 0; attempt < peerBusyRetryAttempts; attempt++ {
+		operationErr = c.doJSON(ctx, method, path, payload, target)
+		if !isSlskdHTTPStatus(operationErr, http.StatusTooManyRequests) {
+			return operationErr
+		}
+		if attempt == peerBusyRetryAttempts-1 {
+			return operationErr
+		}
+		delay := time.Duration(attempt+1) * peerBusyRetryDelay
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("%w: wait to retry slskd peer operation: %v", ports.ErrSourceUnavailable, ctx.Err())
+		case <-timer.C:
+		}
+	}
+	return operationErr
+}
+
+func (c *Client) acquirePeerOperation(ctx context.Context, peer string) (func(), error) {
+	key := strings.ToLower(strings.TrimSpace(peer))
+	c.peerOperationsMu.Lock()
+	gate := c.peerOperations[key]
+	if gate == nil {
+		gate = &peerOperationGate{semaphore: make(chan struct{}, 1)}
+		c.peerOperations[key] = gate
+	}
+	gate.users++
+	c.peerOperationsMu.Unlock()
+
+	select {
+	case gate.semaphore <- struct{}{}:
+		return func() {
+			<-gate.semaphore
+			c.releasePeerOperation(key, gate)
+		}, nil
+	case <-ctx.Done():
+		c.releasePeerOperation(key, gate)
+		return nil, fmt.Errorf("%w: wait for slskd peer operation: %v", ports.ErrSourceUnavailable, ctx.Err())
+	}
+}
+
+func (c *Client) releasePeerOperation(key string, gate *peerOperationGate) {
+	c.peerOperationsMu.Lock()
+	gate.users--
+	if gate.users == 0 && c.peerOperations[key] == gate {
+		delete(c.peerOperations, key)
+	}
+	c.peerOperationsMu.Unlock()
 }
 
 func (c *Client) scheduleDeleteSearch(id string) {

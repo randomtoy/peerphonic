@@ -123,7 +123,9 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	})
 	if soulseekClient != nil {
 		soulseekClient.SetCompletedHandler(func(file soulseekprovider.CompletedFile) {
-			if err := completedEnricher.Enrich(context.WithoutCancel(ctx), file.TrackID, file.Path); err != nil {
+			if err := completedEnricher.EnrichWithExpectedSize(
+				context.WithoutCancel(ctx), file.TrackID, file.Path, file.Size,
+			); err != nil {
 				logger.Warn("Soulseek metadata enrichment failed", "track", file.TrackID, "error", err)
 				return
 			}

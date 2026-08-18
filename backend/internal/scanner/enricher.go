@@ -26,9 +26,21 @@ func NewEnricher(catalog enrichmentCatalog, extractor Extractor, artwork Artwork
 }
 
 func (e *Enricher) Enrich(ctx context.Context, trackID, mediaPath string) error {
+	return e.EnrichWithExpectedSize(ctx, trackID, mediaPath, 0)
+}
+
+// EnrichWithExpectedSize accepts the size of the physical source that actually
+// completed. Equivalent remote copies may use a different encoding and size
+// than the provisional source first shown in the catalog.
+func (e *Enricher) EnrichWithExpectedSize(
+	ctx context.Context, trackID, mediaPath string, expectedSize int64,
+) error {
 	track, err := e.catalog.Track(ctx, trackID)
 	if err != nil {
 		return fmt.Errorf("find completed track: %w", err)
+	}
+	if expectedSize > 0 {
+		track.Size = expectedSize
 	}
 	if err := EnrichTrack(ctx, &track, mediaPath, e.extractor, e.artwork); err != nil {
 		return err

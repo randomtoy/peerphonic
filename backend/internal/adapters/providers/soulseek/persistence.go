@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -85,12 +84,9 @@ func readPersistedJob(path string) (persistedDownloadJob, error) {
 	if err := json.Unmarshal(contents, &record); err != nil {
 		return persistedDownloadJob{}, fmt.Errorf("decode Soulseek download job %q: %w", filepath.Base(path), err)
 	}
-	expectedTrackID := domain.StableID(
-		Name, record.Remote.Peer, record.Remote.Path, strconv.FormatInt(record.Remote.Size, 10),
-	)
 	expectedDownloadID := domain.StableID("download", Name, record.Key)
 	if record.Download.ID != expectedDownloadID || record.Download.Provider != Name ||
-		record.Download.TrackID != expectedTrackID || record.TrackID != expectedTrackID ||
+		record.Download.TrackID != record.TrackID || strings.TrimSpace(record.TrackID) == "" ||
 		record.Remote.Peer == "" || record.Remote.Path == "" || record.Remote.Size <= 0 ||
 		strings.TrimSpace(record.Key) == "" {
 		return persistedDownloadJob{}, fmt.Errorf("invalid Soulseek download job %q", filepath.Base(path))
@@ -112,11 +108,17 @@ func (c *downloadCoordinator) restoreJob(record persistedDownloadJob) (*download
 			c.incompleteDir, sanitizedPathSegment(record.Remote.Peer),
 			sanitizedRemoteDirectory(record.Remote.Path), name,
 		),
-		done: make(chan struct{}), download: record.Download,
+		done: make(chan struct{}), ready: make(chan struct{}), download: record.Download,
 	}
+	job.markEnqueued()
 	if info, err := os.Stat(job.finalPath); err == nil {
 		if info.Size() != record.Remote.Size {
-			return nil, fmt.Errorf("cached file has size %d, want %d", info.Size(), record.Remote.Size)
+			job.download.State = domain.DownloadStateEvicted
+			job.download.CompletedBytes = 0
+			job.download.Error = ""
+			job.finished = true
+			close(job.done)
+			return job, nil
 		}
 		job.download.State = domain.DownloadStateCached
 		job.download.CompletedBytes = record.Remote.Size

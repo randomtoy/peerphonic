@@ -65,6 +65,8 @@ type downloadJob struct {
 	finalPath      string
 	incompletePath string
 	done           chan struct{}
+	ready          chan struct{}
+	readyOnce      sync.Once
 
 	mu          sync.Mutex
 	download    domain.TrackDownload
@@ -257,6 +259,9 @@ func (c *downloadCoordinator) ensureDownload(
 	c.mu.Lock()
 	if job := c.jobs[key]; job != nil {
 		c.mu.Unlock()
+		if err := job.waitUntilEnqueued(ctx); err != nil {
+			return nil, err
+		}
 		return job, nil
 	}
 	now := time.Now().UTC()
@@ -268,7 +273,7 @@ func (c *downloadCoordinator) ensureDownload(
 			c.incompleteDir, sanitizedPathSegment(remote.Peer),
 			sanitizedRemoteDirectory(remote.Path), name,
 		),
-		done: make(chan struct{}),
+		done: make(chan struct{}), ready: make(chan struct{}),
 		download: domain.TrackDownload{
 			ID: downloadID, Provider: Name, SourceID: remote.Peer, TrackID: trackID,
 			Name: name, State: domain.DownloadStateQueued, TotalBytes: remote.Size,
@@ -302,7 +307,9 @@ func (c *downloadCoordinator) ensureDownload(
 	payload.Options.ExternalID = trackID
 
 	var response slskdDownloadBatchResponse
-	if err := c.client.doJSON(ctx, http.MethodPost, "/api/v0/transfers/downloads/batches", payload, &response); err != nil {
+	if err := c.client.doPeerJSON(ctx, remote.Peer, http.MethodPost,
+		"/api/v0/transfers/downloads/batches", payload, &response,
+	); err != nil {
 		err = fmt.Errorf("enqueue Soulseek download: %w", err)
 		c.finishJob(key, job, domain.DownloadStateFailed, err)
 		return nil, err
@@ -324,6 +331,7 @@ func (c *downloadCoordinator) ensureDownload(
 		c.finishJob(key, job, domain.DownloadStateFailed, err)
 		return nil, err
 	}
+	job.markEnqueued()
 	c.startMonitor(key, job, response.Batch.ID)
 	return job, nil
 }
@@ -384,7 +392,9 @@ func (c *downloadCoordinator) monitorDownload(key string, job *downloadJob, batc
 					return
 				}
 				c.finishJob(key, job, domain.DownloadStateCached, nil)
-				c.client.notifyCompleted(CompletedFile{TrackID: job.trackID, Path: job.finalPath})
+				c.client.notifyCompleted(CompletedFile{
+					TrackID: job.trackID, Path: job.finalPath, Size: job.remote.Size,
+				})
 				return
 			}
 			if transferFailed(transfer.State) {
@@ -468,8 +478,24 @@ func (c *downloadCoordinator) finishJob(
 	}
 	close(job.done)
 	job.mu.Unlock()
+	job.markEnqueued()
 	_ = c.persistJob(job)
 	c.removeJob(key, job)
+}
+
+func (j *downloadJob) markEnqueued() {
+	j.readyOnce.Do(func() { close(j.ready) })
+}
+
+func (j *downloadJob) waitUntilEnqueued(ctx context.Context) error {
+	select {
+	case <-j.ready:
+		j.mu.Lock()
+		defer j.mu.Unlock()
+		return j.err
+	case <-ctx.Done():
+		return fmt.Errorf("%w: wait for Soulseek download enqueue: %v", ports.ErrSourceUnavailable, ctx.Err())
+	}
 }
 
 func (c *downloadCoordinator) removeJob(key string, job *downloadJob) {
@@ -562,6 +588,7 @@ func (c *downloadCoordinator) rememberCached(
 	job := &downloadJob{
 		key: key, trackID: trackID, remote: remote,
 		finalPath: filepath.Join(c.downloadsDir, trackID, name),
+		done:      make(chan struct{}), ready: make(chan struct{}),
 		download: domain.TrackDownload{
 			ID: id, Provider: Name, SourceID: remote.Peer, TrackID: trackID,
 			Name: name, State: domain.DownloadStateCached,
@@ -570,6 +597,8 @@ func (c *downloadCoordinator) rememberCached(
 		},
 		finished: true,
 	}
+	close(job.done)
+	job.markEnqueued()
 	c.records[id] = job
 	_ = c.persistJob(job)
 }

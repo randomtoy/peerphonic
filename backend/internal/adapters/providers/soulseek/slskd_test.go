@@ -505,7 +505,7 @@ func TestSlskdResolveStreamsGrowingFileAndReusesCompletedDownload(t *testing.T) 
 	}
 	select {
 	case file := <-completed:
-		if file.TrackID != trackID || file.Path != finalPath {
+		if file.TrackID != trackID || file.Path != finalPath || file.Size != remote.Size {
 			t.Fatalf("completed file = %#v", file)
 		}
 	case <-time.After(time.Second):
@@ -529,6 +529,159 @@ func TestSlskdResolveStreamsGrowingFileAndReusesCompletedDownload(t *testing.T) 
 	usage, err := client.CacheUsage(context.Background())
 	if err != nil || usage.Name != Name || usage.Entries != 1 || usage.Size != remote.Size || usage.PartialEntries != 0 {
 		t.Fatalf("CacheUsage() = %#v, %v", usage, err)
+	}
+}
+
+func TestSlskdSerializesConcurrentEnqueuesForSamePeer(t *testing.T) {
+	t.Parallel()
+
+	var active atomic.Int32
+	var maximum atomic.Int32
+	var enqueueCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v0/transfers/downloads/batches":
+			current := active.Add(1)
+			defer active.Add(-1)
+			for current > maximum.Load() && !maximum.CompareAndSwap(maximum.Load(), current) {
+			}
+			if current > 1 {
+				http.Error(writer, "Only one concurrent operation is permitted", http.StatusTooManyRequests)
+				return
+			}
+			time.Sleep(25 * time.Millisecond)
+			call := enqueueCalls.Add(1)
+			_, _ = writer.Write([]byte(fmt.Sprintf(
+				`{"batch":{"id":"batch-%d","transfers":[{"id":"transfer-%d","state":"Queued, Locally"}]},"failures":[]}`,
+				call, call,
+			)))
+		case request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/api/v0/transfers/downloads/batches/"):
+			id := strings.TrimPrefix(request.URL.Path, "/api/v0/transfers/downloads/batches/")
+			_, _ = writer.Write([]byte(fmt.Sprintf(
+				`{"id":%q,"transfers":[{"id":"transfer","state":"Queued, Locally"}]}`, id,
+			)))
+		default:
+			http.Error(writer, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewSlskd(server.URL, "key", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetMediaDirectories(t.TempDir(), t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+
+	const jobs = 4
+	errors := make(chan error, jobs)
+	var wait sync.WaitGroup
+	for index := range jobs {
+		wait.Add(1)
+		go func() {
+			defer wait.Done()
+			name := fmt.Sprintf("song-%d.mp3", index)
+			remote := remoteFileRef{Peer: "same-peer", Path: `Album\` + name, Size: 10}
+			_, enqueueErr := client.downloads.ensureDownload(
+				context.Background(), fmt.Sprintf("key-%d", index), fmt.Sprintf("track-%d", index), name, remote,
+			)
+			errors <- enqueueErr
+		}()
+	}
+	wait.Wait()
+	close(errors)
+	for enqueueErr := range errors {
+		if enqueueErr != nil {
+			t.Fatal(enqueueErr)
+		}
+	}
+	if enqueueCalls.Load() != jobs || maximum.Load() != 1 {
+		t.Fatalf("enqueue calls = %d, maximum concurrency = %d", enqueueCalls.Load(), maximum.Load())
+	}
+}
+
+func TestSlskdDuplicateResolveWaitsForEnqueueResult(t *testing.T) {
+	t.Parallel()
+
+	started := make(chan struct{})
+	var startedOnce sync.Once
+	var enqueueCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/api/v0/transfers/downloads/batches" {
+			http.Error(writer, "unexpected request", http.StatusNotFound)
+			return
+		}
+		enqueueCalls.Add(1)
+		startedOnce.Do(func() { close(started) })
+		time.Sleep(1700 * time.Millisecond)
+		http.Error(writer, "peer lookup failed", http.StatusInternalServerError)
+	}))
+	defer server.Close()
+
+	client, err := NewSlskd(server.URL, "key", 3*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetMediaDirectories(t.TempDir(), t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	remote := remoteFileRef{Peer: "peer-one", Path: `Album\song.mp3`, Size: 10}
+	encoded, _ := json.Marshal(remote)
+	ref := domain.SourceRef{Provider: Name, Key: base64.RawURLEncoding.EncodeToString(encoded)}
+
+	firstResult := make(chan error, 1)
+	go func() {
+		_, resolveErr := client.Resolve(context.Background(), "logical-track", ref)
+		firstResult <- resolveErr
+	}()
+	<-started
+	if _, err := client.Resolve(context.Background(), "logical-track", ref); !errors.Is(err, ports.ErrSourceUnavailable) {
+		t.Fatalf("duplicate Resolve() error = %v", err)
+	}
+	if err := <-firstResult; !errors.Is(err, ports.ErrSourceUnavailable) {
+		t.Fatalf("first Resolve() error = %v", err)
+	}
+	if enqueueCalls.Load() != 1 {
+		t.Fatalf("enqueue calls = %d, want 1", enqueueCalls.Load())
+	}
+}
+
+func TestSlskdRetriesBusyPeerOperation(t *testing.T) {
+	t.Parallel()
+
+	var calls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost {
+			http.Error(writer, "unexpected request", http.StatusNotFound)
+			return
+		}
+		if calls.Add(1) == 1 {
+			http.Error(writer, "Only one concurrent operation is permitted", http.StatusTooManyRequests)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"ok":true}`))
+	}))
+	defer server.Close()
+
+	client, err := NewSlskd(server.URL, "key", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var response struct {
+		OK bool `json:"ok"`
+	}
+	if err := client.doPeerJSON(
+		context.Background(), "peer-one", http.MethodPost, "/operation", nil, &response,
+	); err != nil {
+		t.Fatal(err)
+	}
+	if !response.OK || calls.Load() != 2 {
+		t.Fatalf("response = %#v, calls = %d", response, calls.Load())
 	}
 }
 
@@ -770,7 +923,7 @@ func TestSlskdDownloadResumesMonitoringAfterClientRestart(t *testing.T) {
 	downloadsDir := filepath.Join(root, "downloads")
 	incompleteDir := filepath.Join(root, "incomplete")
 	remote := remoteFileRef{Peer: "peer-one", Path: `Album\song.mp3`, Size: 10}
-	trackID := domain.StableID(Name, remote.Peer, remote.Path, strconv.FormatInt(remote.Size, 10))
+	trackID := "logical-track"
 	finalPath := filepath.Join(downloadsDir, trackID, "song.mp3")
 	var enqueueCalls atomic.Int32
 	var complete atomic.Bool
@@ -810,7 +963,7 @@ func TestSlskdDownloadResumesMonitoringAfterClientRestart(t *testing.T) {
 	if err := first.SetMediaDirectories(downloadsDir, incompleteDir); err != nil {
 		t.Fatal(err)
 	}
-	resolved, err := first.Resolve(context.Background(), "", ref)
+	resolved, err := first.Resolve(context.Background(), trackID, ref)
 	if err != nil {
 		t.Fatal(err)
 	}

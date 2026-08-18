@@ -83,3 +83,43 @@ func TestEnricherUpdatesCompletedTrackWithoutChangingItsSource(t *testing.T) {
 		t.Fatalf("TracksByAlbum(old) = %#v, %v", aliasTracks, err)
 	}
 }
+
+func TestEnricherAcceptsCompletedAlternativeSourceSize(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	catalog, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close()
+	media := []byte("alternative encoding")
+	mediaPath := filepath.Join(t.TempDir(), "song.mp3")
+	if err := os.WriteFile(mediaPath, media, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	track := domain.Track{
+		ID: "logical-track", Title: "Song", Artist: "Artist", ArtistID: "artist",
+		Album: "Album", AlbumID: "album", AlbumArtist: "Artist",
+		Size: 1234, Suffix: "mp3", ContentType: "audio/mpeg",
+	}
+	if err := catalog.ReplaceProviderTracks(ctx, "soulseek", []domain.TrackSource{{
+		Track: track, Ref: domain.SourceRef{Provider: "soulseek", Key: "alternative"},
+	}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	enricher := NewEnricher(catalog, enrichmentExtractor{metadata: scanner.Metadata{
+		Title: "Tagged Song", Artist: "Artist", Album: "Album", AlbumArtist: "Artist",
+		Size: int64(len(media)), Suffix: "mp3", ContentType: "audio/mpeg",
+	}}, nil)
+	if err := enricher.EnrichWithExpectedSize(ctx, track.ID, mediaPath, int64(len(media))); err != nil {
+		t.Fatal(err)
+	}
+	updated, err := catalog.Track(ctx, track.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Title != "Tagged Song" || updated.Size != int64(len(media)) {
+		t.Fatalf("updated track = %#v", updated)
+	}
+}

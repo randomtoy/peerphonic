@@ -41,7 +41,9 @@ func (c *downloadCoordinator) resume(ctx context.Context) error {
 	for _, job := range records {
 		download, _ := job.snapshot()
 		if download.State == domain.DownloadStateCached {
-			c.client.notifyCompleted(CompletedFile{TrackID: download.TrackID, Path: job.finalPath})
+			c.client.notifyCompleted(CompletedFile{
+				TrackID: download.TrackID, Path: job.finalPath, Size: job.remote.Size,
+			})
 		}
 	}
 	for _, job := range jobs {
