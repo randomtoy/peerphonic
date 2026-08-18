@@ -66,8 +66,16 @@ type Provider struct {
 	completionMu sync.Mutex
 	completionWG sync.WaitGroup
 	trackIDs     map[string]string
+	completed    map[string]bool
 	onCompleted  func(CompletedFile)
 	closing      bool
+
+	downloadMu      sync.Mutex
+	downloads       map[string]downloadRecord
+	activeDownloads map[string]*torrentclient.File
+	downloadCtx     context.Context
+	downloadCancel  context.CancelFunc
+	downloadWG      sync.WaitGroup
 }
 
 type StreamingOptions struct {
@@ -110,13 +118,19 @@ type evictionCandidate struct {
 }
 
 func New() *Provider {
+	downloadCtx, downloadCancel := context.WithCancel(context.Background())
 	return &Provider{
-		artworks:     make(map[string]domain.SourceRef),
-		trackIDs:     make(map[string]string),
-		cacheFiles:   make(map[string]cacheFile),
-		active:       make(map[string]int),
-		streams:      make(map[string]int),
-		lastAccessed: make(map[string]time.Time),
+		artworks:        make(map[string]domain.SourceRef),
+		trackIDs:        make(map[string]string),
+		completed:       make(map[string]bool),
+		cacheFiles:      make(map[string]cacheFile),
+		active:          make(map[string]int),
+		streams:         make(map[string]int),
+		lastAccessed:    make(map[string]time.Time),
+		downloads:       make(map[string]downloadRecord),
+		activeDownloads: make(map[string]*torrentclient.File),
+		downloadCtx:     downloadCtx,
+		downloadCancel:  downloadCancel,
 	}
 }
 
@@ -337,8 +351,11 @@ func (p *Provider) PauseSource(_ context.Context, id string) error {
 	return p.setSourcePaused(id, true)
 }
 
-func (p *Provider) ResumeSource(_ context.Context, id string) error {
-	return p.setSourcePaused(id, false)
+func (p *Provider) ResumeSource(ctx context.Context, id string) error {
+	if err := p.setSourcePaused(id, false); err != nil {
+		return err
+	}
+	return p.ResumeTrackDownloads(ctx)
 }
 
 func (p *Provider) PinSource(_ context.Context, id string, pinned bool) error {
@@ -376,6 +393,9 @@ func (p *Provider) RemoveSource(ctx context.Context, id string, deleteData bool)
 		if err := os.Remove(p.sourceMarkerPath(id, state)); err != nil && !os.IsNotExist(err) {
 			return fmt.Errorf("remove torrent %s marker: %w", state, err)
 		}
+	}
+	if err := p.removeDownloadsForSource(id); err != nil {
+		return err
 	}
 	if deleteData {
 		if err := os.RemoveAll(filepath.Join(p.dataRoot, id)); err != nil {
@@ -425,6 +445,7 @@ func (p *Provider) Evict(ctx context.Context, bytes int64) (int64, error) {
 			return freed, fmt.Errorf("remove cached torrent file %q: %w", candidate.path, err)
 		}
 		freed += candidate.size
+		p.markDownloadEvicted(candidate.key)
 		p.cacheMu.Lock()
 		delete(p.lastAccessed, candidate.key)
 		p.cacheMu.Unlock()
@@ -439,21 +460,25 @@ func (p *Provider) Close() error {
 	p.cacheMu.Lock()
 	p.onCacheChanged = nil
 	p.cacheMu.Unlock()
-	p.operation.Lock()
-	defer p.operation.Unlock()
 	p.completionMu.Lock()
 	p.closing = true
 	p.completionMu.Unlock()
+	p.downloadCancel()
+	p.downloadWG.Wait()
+	p.operation.Lock()
 	p.clientMu.Lock()
 	client := p.client
 	p.client = nil
 	p.clientMu.Unlock()
+	var err error
+	if client != nil {
+		err = errors.Join(client.Close()...)
+	}
+	p.operation.Unlock()
+	p.completionWG.Wait()
 	if client == nil {
-		p.completionWG.Wait()
 		return nil
 	}
-	err := errors.Join(client.Close()...)
-	p.completionWG.Wait()
 	return err
 }
 
@@ -578,6 +603,7 @@ func (p *Provider) open(ctx context.Context, ref domain.SourceRef) (ports.Resolv
 				}
 			}
 		}
+		p.queueTrackDownload(ref, infoHash, logicalPath, file)
 		reader := file.NewReader()
 		reader.SetContext(ctx)
 		reader.SetReadahead(streamReadahead)
@@ -871,10 +897,11 @@ func (p *Provider) notifyCompleted(ref domain.SourceRef, logicalPath string) {
 	p.completionMu.Lock()
 	trackID := p.trackIDs[ref.Key]
 	handler := p.onCompleted
-	if trackID == "" || handler == nil || p.closing {
+	if trackID == "" || handler == nil || p.closing || p.completed[ref.Key] {
 		p.completionMu.Unlock()
 		return
 	}
+	p.completed[ref.Key] = true
 	p.completionWG.Add(1)
 	p.completionMu.Unlock()
 	p.retain(infoHash, ref.Key)

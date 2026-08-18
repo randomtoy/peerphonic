@@ -201,6 +201,76 @@ func TestResolveReportsMetadataOnlySourceAsUnavailable(t *testing.T) {
 	}
 }
 
+func TestPlaybackQueuesPersistentBackgroundTrackDownload(t *testing.T) {
+	t.Parallel()
+
+	metadataRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	data := torrentBytes(t, metainfo.Info{
+		Name: "Artist - Background Album", PieceLength: 16 * 1024, Pieces: make([]byte, 20),
+		Files: []metainfo.FileInfo{{Length: 4096, Path: []string{"01 Rare Song.mp3"}}},
+	})
+	provider, err := NewStreaming(metadataRoot, dataRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := provider.ReadCatalog(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(metadataRoot, catalog.InfoHash+".torrent"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a process started with --scan=false: the database still has the
+	// stable track ID, but this provider has not rebuilt its in-memory mapping.
+	provider.completionMu.Lock()
+	provider.trackIDs = make(map[string]string)
+	provider.completionMu.Unlock()
+	resolved, err := provider.Resolve(context.Background(), catalog.Tracks[0].Ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := resolved.Content.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	downloads, err := provider.TrackDownloads(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(downloads) != 1 || downloads[0].State != domain.DownloadStateDownloading ||
+		downloads[0].TrackID != catalog.Tracks[0].Track.ID || downloads[0].TotalBytes != 4096 {
+		t.Fatalf("TrackDownloads() = %#v", downloads)
+	}
+	hash := metainfo.NewHashFromHex(catalog.InfoHash)
+	attached, ok := provider.client.Torrent(hash)
+	if !ok || len(attached.Files()) != 1 || attached.Files()[0].Priority() == torrentclient.PiecePriorityNone {
+		t.Fatalf("background torrent file was not kept requested")
+	}
+	if _, err := os.Stat(provider.downloadRecordPath(downloads[0].ID)); err != nil {
+		t.Fatalf("download record stat error = %v", err)
+	}
+	if err := provider.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	reopened, err := NewStreaming(metadataRoot, dataRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	if err := reopened.ResumeTrackDownloads(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	downloads, err = reopened.TrackDownloads(context.Background())
+	if err != nil || len(downloads) != 1 || downloads[0].State != domain.DownloadStateDownloading {
+		t.Fatalf("resumed TrackDownloads() = %#v, %v", downloads, err)
+	}
+	if reopened.client == nil {
+		t.Fatal("torrent client was not started for persisted download")
+	}
+}
+
 func TestCacheUsageIncludesCompletePartialAndStateFiles(t *testing.T) {
 	t.Parallel()
 
@@ -718,6 +788,11 @@ func TestStreamingProviderReadsPersistedTorrentFileAndArtwork(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("completed file callback was not called")
+	}
+	downloads, err := provider.TrackDownloads(ctx)
+	if err != nil || len(downloads) != 1 || downloads[0].State != domain.DownloadStateCached ||
+		downloads[0].CompletedBytes != downloads[0].TotalBytes {
+		t.Fatalf("completed TrackDownloads() = %#v, %v", downloads, err)
 	}
 	ranged, err := provider.Resolve(ctx, catalog.Tracks[0].Ref)
 	if err != nil {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"net/http"
 	"strconv"
+	"time"
 
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
@@ -36,6 +37,24 @@ type transferResponse struct {
 
 type transfersResponse struct {
 	Transfers []transferResponse `json:"transfers"`
+}
+
+type trackDownloadResponse struct {
+	ID             string               `json:"id"`
+	Provider       string               `json:"provider"`
+	SourceID       string               `json:"sourceId"`
+	TrackID        string               `json:"trackId,omitempty"`
+	Name           string               `json:"name"`
+	State          domain.DownloadState `json:"state"`
+	CompletedBytes int64                `json:"completedBytes"`
+	TotalBytes     int64                `json:"totalBytes"`
+	Error          string               `json:"error,omitempty"`
+	StartedAt      string               `json:"startedAt"`
+	UpdatedAt      string               `json:"updatedAt"`
+}
+
+type trackDownloadsResponse struct {
+	Downloads []trackDownloadResponse `json:"downloads"`
 }
 
 type managedSourceResponse struct {
@@ -73,6 +92,7 @@ func NewHandler(
 	torrentImporter ports.SourceImporter,
 	sources ports.SourceManager,
 	transfers ports.SourceTransferMonitor,
+	downloads ports.TrackDownloadMonitor,
 	username, password string,
 ) http.Handler {
 	mux := http.NewServeMux()
@@ -222,6 +242,29 @@ func NewHandler(
 					ConnectedSeeders: item.ConnectedSeeders,
 					ActiveStreams:    item.ActiveStreams,
 					Seeding:          item.Seeding,
+				})
+			}
+			writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+			_ = json.NewEncoder(writer).Encode(response)
+		})
+	}
+	if downloads != nil {
+		mux.HandleFunc("GET /api/v1/downloads", func(writer http.ResponseWriter, request *http.Request) {
+			if !requireBasicAuthentication(writer, request, username, password) {
+				return
+			}
+			items, err := downloads.TrackDownloads(request.Context())
+			if err != nil {
+				http.Error(writer, "read track download status", http.StatusInternalServerError)
+				return
+			}
+			response := trackDownloadsResponse{Downloads: make([]trackDownloadResponse, 0, len(items))}
+			for _, item := range items {
+				response.Downloads = append(response.Downloads, trackDownloadResponse{
+					ID: item.ID, Provider: item.Provider, SourceID: item.SourceID, TrackID: item.TrackID,
+					Name: item.Name, State: item.State, CompletedBytes: item.CompletedBytes,
+					TotalBytes: item.TotalBytes, Error: item.Error,
+					StartedAt: item.StartedAt.Format(time.RFC3339), UpdatedAt: item.UpdatedAt.Format(time.RFC3339),
 				})
 			}
 			writer.Header().Set("Content-Type", "application/json; charset=utf-8")

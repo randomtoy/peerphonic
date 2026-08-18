@@ -21,6 +21,7 @@ changing the client-facing streaming flow.
 - cached OpenSubsonic artwork resizing for mobile clients;
 - shared media cache with a size limit, LRU eviction, and pinned entries;
 - `.torrent` catalog import with on-demand, seekable track streaming;
+- persistent background completion of a selected torrent track after its first playback request;
 - on-demand album artwork from image files included in torrents;
 - background tag enrichment after a torrent track has been streamed completely;
 - persistent favorites, ratings, and playback history per OpenSubsonic user;
@@ -181,6 +182,19 @@ curl -u admin:admin http://localhost:8080/api/v1/transfers
 The response reports persistent completed bytes and current-process download
 and upload counters, peers, active streams, and seeding state for each attached
 source. An empty list means no source has been opened since server startup.
+
+The first playback request for a torrent track also creates a persistent
+single-track cache job. It continues after the OpenSubsonic HTTP stream closes,
+does not request other files in the torrent, and is resumed after a server
+restart. Per-track progress and cached/failed/evicted state are available at:
+
+```bash
+curl -u admin:admin http://localhost:8080/api/v1/downloads
+```
+
+These jobs are also shown in the administration dashboard. Completed pieces
+remain available for upload while the torrent is attached and seeding is
+enabled.
 
 Torrent cache cleanup never removes data from an actively streamed torrent.
 Before removing inactive torrent files, Peerphonic detaches that torrent from

@@ -5,7 +5,8 @@ a static application and has no build-time dependency on the Go backend.
 
 The container deployment serves it at `http://localhost:8081` and proxies
 `/api/` and `/rest/` to Peerphonic. Enter the same credentials configured for
-OpenSubsonic clients.
+OpenSubsonic clients. The dashboard shows persistent selected-track downloads,
+live provider transfers, cache usage, and torrent source controls.
 
 For local frontend work, serve this directory through a web server that proxies
 the API paths to the backend. Opening `index.html` directly does not provide an

@@ -13,6 +13,8 @@ const elements = {
   refresh: document.querySelector("#refresh"),
   logout: document.querySelector("#logout"),
   summary: document.querySelector("#summary"),
+  downloads: document.querySelector("#downloads"),
+  downloadCount: document.querySelector("#download-count"),
   transfers: document.querySelector("#transfers"),
   sources: document.querySelector("#sources"),
   sourceCount: document.querySelector("#source-count"),
@@ -65,19 +67,44 @@ function showDashboard(visible) {
   elements.connection.classList.toggle("online", visible);
 }
 
-function renderSummary(cache, transfers, sources) {
+function renderSummary(cache, downloads, transfers, sources) {
   const capacity = cache.capacityBytes || 0;
   const utilization = capacity ? Math.round((cache.sizeBytes / capacity) * 100) : 0;
   const activeStreams = transfers.reduce((total, item) => total + (item.activeStreams || 0), 0);
+  const activeDownloads = downloads.filter((item) => item.state === "downloading").length;
   const metrics = [
     ["Cache used", formatBytes(cache.sizeBytes), "accent"],
     ["Utilization", `${utilization}%`, ""],
     ["Active streams", activeStreams, ""],
+    ["Downloads", activeDownloads, ""],
     ["Torrent sources", sources.length, ""],
   ];
   elements.summary.innerHTML = metrics.map(([label, value, kind]) =>
     `<article class="metric ${kind}"><span class="metric-label">${label}</span><strong class="metric-value">${value}</strong></article>`
   ).join("");
+}
+
+function renderDownloads(items) {
+  elements.downloadCount.textContent = `${items.length} total`;
+  elements.downloads.replaceChildren();
+  if (!items.length) {
+    elements.downloads.append(empty("Play a torrent track to start caching it in the background."));
+    return;
+  }
+  elements.downloads.innerHTML = items.map((item) => {
+    const percent = item.totalBytes ? Math.min(100, Math.round((item.completedBytes / item.totalBytes) * 100)) : 0;
+    const stateLabel = item.state.charAt(0).toUpperCase() + item.state.slice(1);
+    return `<article class="transfer-card">
+      <div class="card-title"><h3>${escapeHTML(item.name || item.trackId)}</h3><span class="status">${escapeHTML(stateLabel)}</span></div>
+      <div class="progress" aria-label="${percent}% complete"><span style="width:${percent}%"></span></div>
+      <div class="facts">
+        <div class="fact"><span>Complete</span><strong>${percent}%</strong></div>
+        <div class="fact"><span>Cached</span><strong>${formatBytes(item.completedBytes)}</strong></div>
+        <div class="fact"><span>Total</span><strong>${formatBytes(item.totalBytes)}</strong></div>
+      </div>
+      ${item.error ? `<p class="form-error">${escapeHTML(item.error)}</p>` : ""}
+    </article>`;
+  }).join("");
 }
 
 function renderTransfers(items) {
@@ -129,14 +156,17 @@ async function refresh() {
   if (!state.authorization) return;
   elements.refresh.disabled = true;
   try {
-    const [cache, transferPayload, sourcePayload] = await Promise.all([
+    const [cache, downloadPayload, transferPayload, sourcePayload] = await Promise.all([
       api("/api/v1/cache/status"),
+      api("/api/v1/downloads"),
       api("/api/v1/transfers"),
       api("/api/v1/torrents"),
     ]);
+    const downloads = downloadPayload.downloads || [];
     const transfers = transferPayload.transfers || [];
     const sources = sourcePayload.sources || [];
-    renderSummary(cache, transfers, sources);
+    renderSummary(cache, downloads, transfers, sources);
+    renderDownloads(downloads);
     renderTransfers(transfers);
     renderSources(sources);
     elements.updatedAt.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;

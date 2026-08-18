@@ -106,11 +106,17 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		}
 	}
 	scanManager.StartPeriodic(time.Duration(cfg.ScanIntervalSeconds) * time.Second)
+	if err := torrentProvider.ResumeTrackDownloads(ctx); err != nil {
+		logger.Warn("some torrent track downloads could not be resumed", "error", err)
+	}
 
 	streaming := services.NewStreamingService(catalog, provider, torrentProvider)
 	mux := http.NewServeMux()
 	mux.Handle("/rest/", opensubsonic.NewHandler(catalog, streaming, artwork, cfg.Username, cfg.Password, scanManager))
-	mux.Handle("/", peerphonic.NewHandler(cacheStatus, torrentImporter, torrentManager, torrentProvider, cfg.Username, cfg.Password))
+	mux.Handle("/", peerphonic.NewHandler(
+		cacheStatus, torrentImporter, torrentManager, torrentProvider, torrentProvider,
+		cfg.Username, cfg.Password,
+	))
 	return &application{handler: mux, catalog: catalog, torrentProvider: torrentProvider}, nil
 }
 
