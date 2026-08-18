@@ -157,12 +157,18 @@ then CLI flags.
 | `slskd_timeout_seconds` | `PEERPHONIC_SLSKD_TIMEOUT_SECONDS` | `--slskd-timeout` | `15` |
 | `slskd_downloads_dir` | `PEERPHONIC_SLSKD_DOWNLOADS_DIR` | `--slskd-downloads` | `<cache>/soulseek/downloads` |
 | `slskd_incomplete_dir` | `PEERPHONIC_SLSKD_INCOMPLETE_DIR` | `--slskd-incomplete` | `<cache>/soulseek/incomplete` |
+| `ffmpeg_path` | `PEERPHONIC_FFMPEG_PATH` | `--ffmpeg` | `ffmpeg` |
 
 Use a config file with `--config peerphonic.json` or set its path through
 `PEERPHONIC_CONFIG`. See [`backend/config.example.json`](backend/config.example.json).
 The periodic scan runs independently of `scan_on_start`; set
 `scan_interval_seconds` to `0` when only manual OpenSubsonic `startScan` calls
 should update the catalog.
+
+When FFmpeg is available, OpenSubsonic `stream` requests with `format=mp3` are
+transcoded while streaming. This is the default offline-cache format used by
+Amperfy. Set `ffmpeg_path` to an empty string to disable transcoding; Peerphonic
+then returns the original audio format.
 
 Create a consistent metadata and credential backup without stopping the server:
 

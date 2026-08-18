@@ -28,6 +28,7 @@ func TestLoadPrecedence(t *testing.T) {
 		"PEERPHONIC_SLSKD_TIMEOUT_SECONDS":                   "7",
 		"PEERPHONIC_SLSKD_DOWNLOADS_DIR":                     filepath.Join(dir, "env-downloads"),
 		"PEERPHONIC_SLSKD_INCOMPLETE_DIR":                    filepath.Join(dir, "env-incomplete"),
+		"PEERPHONIC_FFMPEG_PATH":                             "ffmpeg-env",
 	}
 	lookup := func(key string) (string, bool) { value, ok := env[key]; return value, ok }
 
@@ -44,6 +45,7 @@ func TestLoadPrecedence(t *testing.T) {
 		"--slskd-url", "http://slskd-flag:5030",
 		"--slskd-timeout", "9",
 		"--slskd-downloads", filepath.Join(dir, "flag-downloads"),
+		"--ffmpeg", "ffmpeg-flag",
 	}, lookup)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -78,6 +80,9 @@ func TestLoadPrecedence(t *testing.T) {
 	if cfg.SlskdDownloadsDir != filepath.Join(dir, "flag-downloads") ||
 		cfg.SlskdIncompleteDir != filepath.Join(dir, "env-incomplete") {
 		t.Errorf("slskd directories = downloads %q, incomplete %q", cfg.SlskdDownloadsDir, cfg.SlskdIncompleteDir)
+	}
+	if cfg.FFmpegPath != "ffmpeg-flag" {
+		t.Errorf("FFmpegPath = %q, want ffmpeg-flag", cfg.FFmpegPath)
 	}
 }
 

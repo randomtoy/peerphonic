@@ -33,6 +33,7 @@ type Config struct {
 	SlskdTimeoutSeconds   int    `json:"slskd_timeout_seconds"`
 	SlskdDownloadsDir     string `json:"slskd_downloads_dir"`
 	SlskdIncompleteDir    string `json:"slskd_incomplete_dir"`
+	FFmpegPath            string `json:"ffmpeg_path"`
 }
 
 func Defaults() Config {
@@ -49,6 +50,7 @@ func Defaults() Config {
 		Scan:                true,
 		ScanIntervalSeconds: 300,
 		SlskdTimeoutSeconds: 15,
+		FFmpegPath:          "ffmpeg",
 	}
 }
 
@@ -93,6 +95,7 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	flags.IntVar(&cfg.SlskdTimeoutSeconds, "slskd-timeout", cfg.SlskdTimeoutSeconds, "slskd API timeout in seconds")
 	flags.StringVar(&cfg.SlskdDownloadsDir, "slskd-downloads", cfg.SlskdDownloadsDir, "shared slskd completed downloads directory")
 	flags.StringVar(&cfg.SlskdIncompleteDir, "slskd-incomplete", cfg.SlskdIncompleteDir, "shared slskd incomplete downloads directory")
+	flags.StringVar(&cfg.FFmpegPath, "ffmpeg", cfg.FFmpegPath, "FFmpeg executable for OpenSubsonic transcoding (empty disables it)")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -187,6 +190,7 @@ func applyEnv(cfg *Config, lookup func(string) (string, bool)) error {
 		"PEERPHONIC_SLSKD_API_KEY":        &cfg.SlskdAPIKey,
 		"PEERPHONIC_SLSKD_DOWNLOADS_DIR":  &cfg.SlskdDownloadsDir,
 		"PEERPHONIC_SLSKD_INCOMPLETE_DIR": &cfg.SlskdIncompleteDir,
+		"PEERPHONIC_FFMPEG_PATH":          &cfg.FFmpegPath,
 	} {
 		if value, ok := lookup(key); ok {
 			*target = value

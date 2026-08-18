@@ -25,6 +25,23 @@ type ResolvedSource struct {
 	ModTime     time.Time
 }
 
+type AudioTranscodeOptions struct {
+	Format  string
+	BitRate int
+}
+
+type TranscodedSource struct {
+	Content     io.ReadCloser
+	Name        string
+	ContentType string
+}
+
+// AudioTranscoder converts a resolved source while it is being read. The
+// implementation owns and closes source.Content after Transcode succeeds.
+type AudioTranscoder interface {
+	Transcode(ctx context.Context, source ResolvedSource, options AudioTranscodeOptions) (TranscodedSource, error)
+}
+
 type SourceSearcher interface {
 	Name() string
 	Search(ctx context.Context, query domain.SearchQuery) ([]domain.TrackSource, error)

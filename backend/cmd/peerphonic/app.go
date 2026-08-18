@@ -24,6 +24,7 @@ import (
 	"github.com/randomtoy/peerphonic/backend/internal/observability"
 	"github.com/randomtoy/peerphonic/backend/internal/scanner"
 	torrentscanner "github.com/randomtoy/peerphonic/backend/internal/scanner/torrents"
+	streamingadapter "github.com/randomtoy/peerphonic/backend/internal/streaming"
 )
 
 type application struct {
@@ -200,13 +201,22 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		downloadMonitors = append(downloadMonitors, soulseekClient)
 	}
 	streaming := services.NewStreamingService(catalog, streamingProviders...)
+	var transcoder ports.AudioTranscoder
+	if cfg.FFmpegPath != "" {
+		ffmpeg, ffmpegErr := streamingadapter.NewFFmpeg(cfg.FFmpegPath)
+		if ffmpegErr != nil {
+			logger.Warn("audio transcoding is unavailable", "error", ffmpegErr)
+		} else {
+			transcoder = ffmpeg
+		}
+	}
 	downloadService := services.NewDownloadService(downloadMonitors...)
 	httpMetrics := observability.NewHTTPMetrics()
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/ready", peerphonic.NewReadinessHandler(catalog))
 	mux.Handle("/api/v1/metrics", peerphonic.NewMetricsHandler(httpMetrics, userService))
-	mux.Handle("/rest/", opensubsonic.NewHandlerWithAuthenticatorAndDiscovery(
-		catalog, streaming, artwork, userService, soulseekDiscovery, scanManager,
+	mux.Handle("/rest/", opensubsonic.NewHandlerWithAuthenticatorDiscoveryAndTranscoder(
+		catalog, streaming, artwork, userService, soulseekDiscovery, transcoder, scanManager,
 	))
 	mux.Handle("/", peerphonic.NewHandlerWithAuthenticator(
 		cacheStatus, torrentImporter, magnetImporter, torrentManager, torrentProvider, downloadService,

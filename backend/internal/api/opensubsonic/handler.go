@@ -9,9 +9,11 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"io"
 	"mime"
 	"net/http"
 	"path"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -39,6 +41,7 @@ type Handler struct {
 	auth        ports.Authenticator
 	discovery   sourceDiscovery
 	scans       scanController
+	transcoder  ports.AudioTranscoder
 }
 
 type authenticatedUserKey struct{}
@@ -92,6 +95,20 @@ func NewHandlerWithAuthenticatorAndDiscovery(
 	discovery *services.DiscoveryService,
 	scans ...scanController,
 ) http.Handler {
+	return NewHandlerWithAuthenticatorDiscoveryAndTranscoder(
+		catalog, streams, artwork, authenticator, discovery, nil, scans...,
+	)
+}
+
+func NewHandlerWithAuthenticatorDiscoveryAndTranscoder(
+	catalog ports.Catalog,
+	streams *services.StreamingService,
+	artwork *services.ArtworkService,
+	authenticator ports.Authenticator,
+	discovery *services.DiscoveryService,
+	transcoder ports.AudioTranscoder,
+	scans ...scanController,
+) http.Handler {
 	var source sourceDiscovery
 	if discovery != nil {
 		source = discovery
@@ -99,6 +116,7 @@ func NewHandlerWithAuthenticatorAndDiscovery(
 	handler := &Handler{
 		catalog: catalog, streams: streams, artwork: artwork,
 		playlists: services.NewPlaylistService(catalog), auth: authenticator, discovery: source,
+		transcoder: transcoder,
 	}
 	if store, ok := catalog.(ports.MediaAnnotationStore); ok {
 		handler.annotations = services.NewAnnotationService(catalog, store)
@@ -848,6 +866,10 @@ func (h *Handler) serveTrack(writer http.ResponseWriter, request *http.Request, 
 		h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to open the song")
 		return
 	}
+	if h.shouldTranscode(request, resolved) {
+		h.serveTranscodedTrack(writer, request, resolved, download)
+		return
+	}
 	defer resolved.Content.Close()
 	if resolved.ContentType != "" {
 		writer.Header().Set("Content-Type", resolved.ContentType)
@@ -858,6 +880,49 @@ func (h *Handler) serveTrack(writer http.ResponseWriter, request *http.Request, 
 		}))
 	}
 	http.ServeContent(writer, request, resolved.Name, resolved.ModTime, resolved.Content)
+}
+
+func (h *Handler) shouldTranscode(request *http.Request, resolved ports.ResolvedSource) bool {
+	if h.transcoder == nil || !strings.EqualFold(strings.TrimSpace(request.Form.Get("format")), "mp3") {
+		return false
+	}
+	extension := strings.TrimPrefix(strings.ToLower(filepath.Ext(resolved.Name)), ".")
+	return extension != "mp3" && !strings.EqualFold(resolved.ContentType, "audio/mpeg")
+}
+
+func (h *Handler) serveTranscodedTrack(
+	writer http.ResponseWriter, request *http.Request, resolved ports.ResolvedSource, download bool,
+) {
+	bitRate := 0
+	if value := strings.TrimSpace(request.Form.Get("maxBitRate")); value != "" {
+		var err error
+		bitRate, err = strconv.Atoi(value)
+		if err != nil || bitRate < 32 || bitRate > 320 {
+			_ = resolved.Content.Close()
+			h.writeError(writer, request, http.StatusBadRequest, 10,
+				"Parameter maxBitRate must be between 32 and 320")
+			return
+		}
+	}
+	transcoded, err := h.transcoder.Transcode(request.Context(), resolved, ports.AudioTranscodeOptions{
+		Format: "mp3", BitRate: bitRate,
+	})
+	if err != nil {
+		_ = resolved.Content.Close()
+		h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to transcode the song")
+		return
+	}
+	defer transcoded.Content.Close()
+	writer.Header().Set("Content-Type", transcoded.ContentType)
+	if download {
+		writer.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{
+			"filename": transcoded.Name,
+		}))
+	}
+	writer.WriteHeader(http.StatusOK)
+	if request.Method != http.MethodHead {
+		_, _ = io.Copy(writer, transcoded.Content)
+	}
 }
 
 func (h *Handler) authenticate(request *http.Request) (domain.User, error) {

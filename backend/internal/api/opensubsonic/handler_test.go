@@ -10,6 +10,7 @@ import (
 	"image"
 	"image/color"
 	"image/png"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -187,6 +188,23 @@ func TestStreamRefreshesUnavailableDiscoveredSources(t *testing.T) {
 type memoryReadSeekCloser struct{ *bytes.Reader }
 
 func (*memoryReadSeekCloser) Close() error { return nil }
+
+type transcoderStub struct {
+	options ports.AudioTranscodeOptions
+	calls   int
+}
+
+func (s *transcoderStub) Transcode(
+	_ context.Context, source ports.ResolvedSource, options ports.AudioTranscodeOptions,
+) (ports.TranscodedSource, error) {
+	s.calls++
+	s.options = options
+	_ = source.Content.Close()
+	return ports.TranscodedSource{
+		Content: io.NopCloser(strings.NewReader("transcoded-mp3")),
+		Name:    "remote.mp3", ContentType: "audio/mpeg",
+	}, nil
+}
 
 func (s *scanControllerStub) Start() bool {
 	s.started = true
@@ -431,6 +449,45 @@ func TestStreamDoesNotForceAttachmentDisposition(t *testing.T) {
 
 	if got := response.Header().Get("Content-Disposition"); got != "" {
 		t.Fatalf("Content-Disposition = %q", got)
+	}
+}
+
+func TestStreamTranscodesRequestedMP3ForAmperfyDownload(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	catalog, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { catalog.Close() })
+	track := domain.Track{
+		ID: "remote-flac", Title: "Remote", Artist: "Artist", ArtistID: "artist",
+		Album: "Album", AlbumID: "album", AlbumArtist: "Artist",
+		Suffix: "flac", ContentType: "audio/flac", Size: 9,
+	}
+	provider := &discoveryProviderStub{media: []byte("flac-data")}
+	if err := catalog.SaveTrackSource(ctx, domain.TrackSource{
+		Track: track, Ref: domain.SourceRef{Provider: provider.Name(), Key: "remote"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	transcoder := &transcoderStub{}
+	handler := NewHandlerWithAuthenticatorDiscoveryAndTranscoder(
+		catalog, services.NewStreamingService(catalog, provider), nil,
+		permissionAuthenticator{user: domain.User{Role: domain.UserRoleUser}}, nil, transcoder,
+	)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+		"/rest/stream.view?u=listener&p=secret&id="+track.ID+"&format=mp3&maxBitRate=128", nil))
+
+	if response.Code != http.StatusOK || response.Body.String() != "transcoded-mp3" {
+		t.Fatalf("transcoded stream status = %d, body = %q", response.Code, response.Body.String())
+	}
+	if response.Header().Get("Content-Type") != "audio/mpeg" || transcoder.calls != 1 ||
+		transcoder.options.Format != "mp3" || transcoder.options.BitRate != 128 {
+		t.Fatalf("headers = %#v, calls = %d, options = %#v",
+			response.Header(), transcoder.calls, transcoder.options)
 	}
 }
 
