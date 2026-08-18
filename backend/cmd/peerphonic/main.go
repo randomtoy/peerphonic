@@ -58,11 +58,25 @@ func run(args []string, logger *slog.Logger) error {
 		}
 		return nil
 	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := server.Shutdown(shutdownCtx); err != nil {
+		forced, err := shutdownHTTPServer(server, 10*time.Second)
+		if err != nil {
 			return fmt.Errorf("shut down HTTP server: %w", err)
+		}
+		if forced {
+			logger.Warn("graceful HTTP shutdown timed out; active connections were closed")
 		}
 		return nil
 	}
+}
+
+func shutdownHTTPServer(server *http.Server, timeout time.Duration) (bool, error) {
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err == nil {
+		return false, nil
+	}
+	if err := server.Close(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return true, err
+	}
+	return true, nil
 }
