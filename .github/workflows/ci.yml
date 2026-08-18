@@ -67,6 +67,13 @@ jobs:
           --set persistence.existingClaim=peerphonic-data
           --set music.existingClaim=music-library
           > /tmp/peerphonic-minimal.yaml
+      - name: Render scheduled-backup chart
+        run: >-
+          helm template peerphonic deploy/helm/peerphonic
+          --namespace peerphonic
+          --set auth.existingSecret=peerphonic-auth
+          --set backup.enabled=true
+          > /tmp/peerphonic-backup.yaml
 
   containers:
     name: Container (${{ matrix.name }})

@@ -118,6 +118,14 @@ initContainer:
     tag: "1.37"
     pullPolicy: IfNotPresent
 
+backup:
+  enabled: false
+  schedule: "0 3 * * *"
+  activeDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  resources: {}
+
 ingress:
   enabled: false
   className: ""

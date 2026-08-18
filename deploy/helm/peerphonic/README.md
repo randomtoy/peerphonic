@@ -69,6 +69,23 @@ git tag v0.1.0
 git push origin v0.1.0
 ```
 
+## Metadata backups
+
+Enable a scheduled, consistent SQLite and credential-key backup on the data PVC:
+
+```yaml
+backup:
+  enabled: true
+  schedule: "0 3 * * *"
+```
+
+Each run writes a protected, timestamped archive under `/data/backups`. The job
+does not stop Peerphonic and uses pod affinity to stay on the backend node for
+`ReadWriteOnce` volumes. `concurrencyPolicy: Forbid` prevents overlapping runs.
+The chart does not delete old archives automatically; apply retention through
+the storage platform or a separate reviewed cleanup policy. These archives cover
+SQLite metadata and the credential key, not music, cache, or `.torrent` files.
+
 Instead of placing credentials in a values file, create a Secret and set
 `auth.existingSecret`. Its key names are configurable under `auth.keys`.
 

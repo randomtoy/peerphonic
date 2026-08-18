@@ -1,0 +1,74 @@
+{{- if and .Values.backup.enabled (not .Values.persistence.enabled) }}
+{{- fail "backup.enabled requires persistence.enabled" }}
+{{- end }}
+{{- if .Values.backup.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "peerphonic.fullname" . }}-backup
+  labels:
+    {{- include "peerphonic.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ .Values.backup.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.backup.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: {{ .Values.backup.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "peerphonic.labels" . | nindent 12 }}
+            app.kubernetes.io/component: backup
+        spec:
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          {{- with .Values.peerphonic.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.peerphonic.podSecurityContext | nindent 12 }}
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels:
+                      {{- include "peerphonic.selectorLabels" . | nindent 22 }}
+                  topologyKey: kubernetes.io/hostname
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: backup
+              image: "{{ .Values.peerphonic.image.repository }}:{{ default .Chart.AppVersion .Values.peerphonic.image.tag }}"
+              imagePullPolicy: {{ .Values.peerphonic.image.pullPolicy }}
+              command: ["/peerphonic"]
+              args:
+                - backup
+                - --database
+                - /data/peerphonic.db
+                - --output-dir
+                - /data/backups
+              securityContext:
+                {{- toYaml .Values.peerphonic.securityContext | nindent 16 }}
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+          volumes:
+            - name: data
+              {{- if .Values.persistence.enabled }}
+              persistentVolumeClaim:
+                claimName: {{ include "peerphonic.dataClaimName" . }}
+              {{- else }}
+              emptyDir: {}
+              {{- end }}
+{{- end }}

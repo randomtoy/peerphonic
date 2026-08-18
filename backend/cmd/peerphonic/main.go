@@ -90,29 +90,39 @@ func runBackup(args []string, logger *slog.Logger) error {
 	if configured, ok := os.LookupEnv("PEERPHONIC_DATABASE"); ok {
 		databasePath = configured
 	}
-	var outputPath, credentialKeyPath string
+	var outputPath, outputDirectory, credentialKeyPath string
 	flags := flag.NewFlagSet("backup", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&databasePath, "database", databasePath, "SQLite database path")
 	flags.StringVar(&credentialKeyPath, "credential-key", "", "credential encryption key path")
 	flags.StringVar(&outputPath, "output", "", "backup archive path")
+	flags.StringVar(&outputDirectory, "output-dir", "", "directory for a timestamped backup archive")
 	if err := flags.Parse(args); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
 		return fmt.Errorf("unexpected arguments: %v", flags.Args())
 	}
-	if outputPath == "" {
-		return errors.New("backup output path is required (use --output)")
+	if (outputPath == "") == (outputDirectory == "") {
+		return errors.New("set exactly one of --output or --output-dir")
 	}
 	var err error
 	databasePath, err = filepath.Abs(databasePath)
 	if err != nil {
 		return fmt.Errorf("resolve database path: %w", err)
 	}
-	outputPath, err = filepath.Abs(outputPath)
-	if err != nil {
-		return fmt.Errorf("resolve backup output path: %w", err)
+	if outputPath != "" {
+		outputPath, err = filepath.Abs(outputPath)
+		if err != nil {
+			return fmt.Errorf("resolve backup output path: %w", err)
+		}
+	} else {
+		outputDirectory, err = filepath.Abs(outputDirectory)
+		if err != nil {
+			return fmt.Errorf("resolve backup output directory: %w", err)
+		}
+		name := "peerphonic-" + time.Now().UTC().Format("20060102T150405.000000000Z") + ".tar.gz"
+		outputPath = filepath.Join(outputDirectory, name)
 	}
 	if credentialKeyPath == "" {
 		credentialKeyPath = databasePath + ".auth.key"

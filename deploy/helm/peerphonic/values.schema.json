@@ -74,6 +74,16 @@
         "adminPassword": { "type": "string" }
       }
     },
+    "backup": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "schedule": { "type": "string", "minLength": 1 },
+        "activeDeadlineSeconds": { "type": "integer", "minimum": 1 },
+        "successfulJobsHistoryLimit": { "type": "integer", "minimum": 0 },
+        "failedJobsHistoryLimit": { "type": "integer", "minimum": 0 }
+      }
+    },
     "persistence": {
       "type": "object",
       "properties": {

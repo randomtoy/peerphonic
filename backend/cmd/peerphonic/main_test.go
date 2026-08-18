@@ -41,6 +41,32 @@ func TestRunBackupCreatesArchiveWhileDatabaseIsOpen(t *testing.T) {
 	}
 }
 
+func TestRunBackupCreatesTimestampedArchiveInDirectory(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	databasePath := filepath.Join(root, "peerphonic.db")
+	catalog, err := sqlite.Open(context.Background(), databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close()
+	if err := os.WriteFile(databasePath+".auth.key", make([]byte, 32), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outputDirectory := filepath.Join(root, "backups")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := run([]string{
+		"backup", "--database", databasePath, "--output-dir", outputDirectory,
+	}, logger); err != nil {
+		t.Fatalf("run(backup) error = %v", err)
+	}
+	archives, err := filepath.Glob(filepath.Join(outputDirectory, "peerphonic-*.tar.gz"))
+	if err != nil || len(archives) != 1 {
+		t.Fatalf("archives = %v, error = %v", archives, err)
+	}
+}
+
 func TestShutdownHTTPServerGracefullyStopsIdleServer(t *testing.T) {
 	t.Parallel()
 
