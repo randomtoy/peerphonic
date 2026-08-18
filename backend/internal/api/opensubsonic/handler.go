@@ -97,6 +97,8 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.getArtists(writer, request)
 	case "getArtist":
 		h.getArtist(writer, request)
+	case "getAlbumList":
+		h.getAlbumList(writer, request)
 	case "getAlbumList2":
 		h.getAlbumList2(writer, request)
 	case "getAlbum":
@@ -109,6 +111,8 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.getSong(writer, request)
 	case "getCoverArt":
 		h.getCoverArt(writer, request)
+	case "search2":
+		h.search2(writer, request)
 	case "search3":
 		h.search3(writer, request)
 	case "getPlaylists":
@@ -146,6 +150,53 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	default:
 		h.writeError(writer, request, http.StatusNotFound, 0, "Endpoint not implemented")
 	}
+}
+
+func (h *Handler) search2(writer http.ResponseWriter, request *http.Request) {
+	if !request.Form.Has("query") {
+		h.writeError(writer, request, http.StatusBadRequest, 10, "Required parameter query is missing")
+		return
+	}
+	payload := &searchResult2{Artists: []artist{}, Albums: []child{}, Songs: []child{}}
+	if folderID := request.Form.Get("musicFolderId"); folderID != "" && folderID != musicFolderID {
+		h.write(writer, request, http.StatusOK, response{SearchResult2: payload})
+		return
+	}
+
+	artistOffset, artistCount, err := searchPageParameters(request, "artist")
+	if err != nil {
+		h.writeError(writer, request, http.StatusBadRequest, 10, err.Error())
+		return
+	}
+	albumOffset, albumCount, err := searchPageParameters(request, "album")
+	if err != nil {
+		h.writeError(writer, request, http.StatusBadRequest, 10, err.Error())
+		return
+	}
+	songOffset, songCount, err := searchPageParameters(request, "song")
+	if err != nil {
+		h.writeError(writer, request, http.StatusBadRequest, 10, err.Error())
+		return
+	}
+
+	result, err := h.catalog.Search(request.Context(), ports.CatalogSearch{
+		Text: request.Form.Get("query"), ArtistOffset: artistOffset, ArtistCount: artistCount,
+		AlbumOffset: albumOffset, AlbumCount: albumCount, SongOffset: songOffset, SongCount: songCount,
+	})
+	if err != nil {
+		h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to search the music catalog")
+		return
+	}
+	for _, item := range result.Artists {
+		payload.Artists = append(payload.Artists, artist{ID: item.ID, Name: item.Name})
+	}
+	for _, item := range result.Albums {
+		payload.Albums = append(payload.Albums, albumChild(item))
+	}
+	for _, item := range result.Songs {
+		payload.Songs = append(payload.Songs, trackChild(item))
+	}
+	h.write(writer, request, http.StatusOK, response{SearchResult2: payload})
 }
 
 func (h *Handler) getCoverArt(writer http.ResponseWriter, request *http.Request) {
@@ -367,6 +418,55 @@ func (h *Handler) getAlbumList2(writer http.ResponseWriter, request *http.Reques
 		payload.Albums = append(payload.Albums, makeAlbumID3(album))
 	}
 	h.write(writer, request, http.StatusOK, response{AlbumList2: payload})
+}
+
+func (h *Handler) getAlbumList(writer http.ResponseWriter, request *http.Request) {
+	offset, limit, err := pageParameters(request)
+	if err != nil {
+		h.writeError(writer, request, http.StatusBadRequest, 10, err.Error())
+		return
+	}
+	payload := &albumList{Albums: []child{}}
+	if request.Form.Get("type") == "starred" {
+		if request.Form.Has("musicFolderId") && request.Form.Get("musicFolderId") != musicFolderID {
+			h.write(writer, request, http.StatusOK, response{AlbumList: payload})
+			return
+		}
+		if h.annotations == nil {
+			h.writeError(writer, request, http.StatusInternalServerError, 0, "Media annotations are not configured")
+			return
+		}
+		starred, err := h.annotations.Starred(request.Context(), h.username)
+		if err != nil {
+			h.writeAnnotationError(writer, request, err)
+			return
+		}
+		start := min(offset, len(starred.Albums))
+		end := min(start+limit, len(starred.Albums))
+		for _, item := range starred.Albums[start:end] {
+			payload.Albums = append(payload.Albums, albumChild(item))
+		}
+		h.write(writer, request, http.StatusOK, response{AlbumList: payload})
+		return
+	}
+	query, empty, err := albumListQuery(request, offset, limit)
+	if err != nil {
+		h.writeError(writer, request, http.StatusBadRequest, 10, err.Error())
+		return
+	}
+	if empty || (request.Form.Has("musicFolderId") && request.Form.Get("musicFolderId") != musicFolderID) {
+		h.write(writer, request, http.StatusOK, response{AlbumList: payload})
+		return
+	}
+	albums, err := h.catalog.Albums(request.Context(), query)
+	if err != nil {
+		h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to read the music catalog")
+		return
+	}
+	for _, item := range albums {
+		payload.Albums = append(payload.Albums, albumChild(item))
+	}
+	h.write(writer, request, http.StatusOK, response{AlbumList: payload})
 }
 
 func albumListQuery(request *http.Request, offset, limit int) (ports.AlbumListQuery, bool, error) {

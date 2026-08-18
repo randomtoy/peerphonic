@@ -401,6 +401,9 @@ func TestID3BrowsingEndpointsUsedByAmperfy(t *testing.T) {
 		{path: "/rest/getAlbumList2.view" + auth + "&type=alphabeticalByName&size=500&offset=0", contains: []string{
 			"<albumList2>", `<album id="album_test"`,
 		}},
+		{path: "/rest/getAlbumList.view" + auth + "&type=alphabeticalByName&size=500&offset=0", contains: []string{
+			"<albumList>", `<album id="album_test"`, `title="Album"`,
+		}},
 		{path: "/rest/getAlbum.view" + auth + "&id=album_test", contains: []string{
 			`<album id="album_test"`, `<song id="` + track.ID + `"`, `albumId="album_test"`,
 			`coverArt="` + track.CoverArtID + `"`,
@@ -419,6 +422,9 @@ func TestID3BrowsingEndpointsUsedByAmperfy(t *testing.T) {
 		}},
 		{path: "/rest/search3.view" + auth + "&query=artist&artistCount=20&albumCount=20&songCount=20", contains: []string{
 			"<searchResult3>", `<artist id="artist_test"`, `<album id="album_test"`, `<song id="` + track.ID + `"`,
+		}},
+		{path: "/rest/search2.view" + auth + "&query=artist&artistCount=20&albumCount=20&songCount=20", contains: []string{
+			"<searchResult2>", `<artist id="artist_test"`, `<album id="album_test"`, `<song id="` + track.ID + `"`,
 		}},
 		{path: "/rest/getPlaylists.view" + auth, contains: []string{"<playlists></playlists>"}},
 		{path: "/rest/getOpenSubsonicExtensions.view" + auth, contains: []string{
@@ -685,6 +691,36 @@ func TestSearch3ValidatesParameters(t *testing.T) {
 		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
 		if response.Code != http.StatusBadRequest || !strings.Contains(response.Body.String(), `"code":10`) {
 			t.Fatalf("path = %s, status = %d, body = %s", path, response.Code, response.Body.String())
+		}
+	}
+}
+
+func TestLegacyDiscoveryEndpointsUseLegacyJSONShapes(t *testing.T) {
+	t.Parallel()
+
+	handler, track := newTestHandler(t)
+	for _, test := range []struct {
+		path     string
+		contains []string
+	}{
+		{
+			path:     "/rest/getAlbumList?u=alice&p=secret&f=json&type=alphabeticalByName",
+			contains: []string{`"albumList"`, `"album":[`, `"isDir":true`, `"id":"album_test"`},
+		},
+		{
+			path:     "/rest/search2?u=alice&p=secret&f=json&query=artist",
+			contains: []string{`"searchResult2"`, `"artist":[`, `"album":[`, `"song":[`, `"id":"` + track.ID + `"`},
+		},
+	} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.path, nil))
+		if response.Code != http.StatusOK {
+			t.Fatalf("path = %s, status = %d, body = %s", test.path, response.Code, response.Body.String())
+		}
+		for _, expected := range test.contains {
+			if !strings.Contains(response.Body.String(), expected) {
+				t.Errorf("path = %s, body does not contain %q: %s", test.path, expected, response.Body.String())
+			}
 		}
 	}
 }
