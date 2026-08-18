@@ -10,6 +10,7 @@
   "torrent_port_forwarding": false,
   "torrent_upload_limit_bytes_per_second": 0,
   "torrent_download_limit_bytes_per_second": 0,
+  "torrent_max_active_downloads": 3,
   "username": "music",
   "password": "change-me",
   "scan_on_start": true,
@@ -19,5 +20,7 @@
   "slskd_timeout_seconds": 5,
   "slskd_downloads_dir": "/srv/peerphonic/cache/soulseek/downloads",
   "slskd_incomplete_dir": "/srv/peerphonic/cache/soulseek/incomplete",
+  "slskd_max_active_downloads": 2,
+  "slskd_retry_attempts": 3,
   "ffmpeg_path": "ffmpeg"
 }

@@ -39,7 +39,7 @@ func (j *downloadJob) persisted() persistedDownloadJob {
 	defer j.mu.Unlock()
 	return persistedDownloadJob{
 		Download: j.download, Key: j.key, TrackID: j.trackID, Remote: j.remote,
-		BatchID: j.batchID, TransferID: j.transferID,
+		BatchID: j.batchID, TransferID: j.transferID, RetryCount: j.retryCount,
 	}
 }
 
@@ -102,7 +102,7 @@ func (c *downloadCoordinator) restoreJob(record persistedDownloadJob) (*download
 	name := sanitizedFilename(record.Remote.Path)
 	job := &downloadJob{
 		key: record.Key, trackID: record.TrackID, remote: record.Remote,
-		batchID: record.BatchID, transferID: record.TransferID,
+		batchID: record.BatchID, transferID: record.TransferID, retryCount: record.RetryCount,
 		finalPath: filepath.Join(c.downloadsDir, record.TrackID, name),
 		incompletePath: filepath.Join(
 			c.incompleteDir, sanitizedPathSegment(record.Remote.Peer),
@@ -110,7 +110,6 @@ func (c *downloadCoordinator) restoreJob(record persistedDownloadJob) (*download
 		),
 		done: make(chan struct{}), ready: make(chan struct{}), download: record.Download,
 	}
-	job.markEnqueued()
 	if info, err := os.Stat(job.finalPath); err == nil {
 		if info.Size() != record.Remote.Size {
 			job.download.State = domain.DownloadStateEvicted
@@ -118,6 +117,7 @@ func (c *downloadCoordinator) restoreJob(record persistedDownloadJob) (*download
 			job.download.Error = ""
 			job.finished = true
 			close(job.done)
+			job.markEnqueued()
 			return job, nil
 		}
 		job.download.State = domain.DownloadStateCached
@@ -125,9 +125,13 @@ func (c *downloadCoordinator) restoreJob(record persistedDownloadJob) (*download
 		job.download.Error = ""
 		job.finished = true
 		close(job.done)
+		job.markEnqueued()
 		return job, nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return nil, fmt.Errorf("inspect cached file: %w", err)
+	}
+	if record.Download.State == domain.DownloadStateWaiting && record.BatchID == "" {
+		return job, nil
 	}
 	if record.Download.State == domain.DownloadStateQueued || record.Download.State == domain.DownloadStateDownloading {
 		if record.BatchID == "" || record.TransferID == "" {
@@ -135,8 +139,10 @@ func (c *downloadCoordinator) restoreJob(record persistedDownloadJob) (*download
 			job.download.Error = "active Soulseek job is missing slskd transfer identifiers"
 			job.finished = true
 			close(job.done)
+			job.markEnqueued()
 			return job, nil
 		}
+		job.markEnqueued()
 		return job, nil
 	}
 	if record.Download.State == domain.DownloadStateCached {
@@ -145,6 +151,7 @@ func (c *downloadCoordinator) restoreJob(record persistedDownloadJob) (*download
 	}
 	job.finished = true
 	close(job.done)
+	job.markEnqueued()
 	return job, nil
 }
 

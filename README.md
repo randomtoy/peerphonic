@@ -148,6 +148,7 @@ then CLI flags.
 | `torrent_port_forwarding` | `PEERPHONIC_TORRENT_PORT_FORWARDING` | `--torrent-port-forwarding` | `false` |
 | `torrent_upload_limit_bytes_per_second` | `PEERPHONIC_TORRENT_UPLOAD_LIMIT_BYTES_PER_SECOND` | `--torrent-upload-limit` | `0` (unlimited) |
 | `torrent_download_limit_bytes_per_second` | `PEERPHONIC_TORRENT_DOWNLOAD_LIMIT_BYTES_PER_SECOND` | `--torrent-download-limit` | `0` (unlimited) |
+| `torrent_max_active_downloads` | `PEERPHONIC_TORRENT_MAX_ACTIVE_DOWNLOADS` | `--torrent-max-downloads` | `3` |
 | `username` | `PEERPHONIC_USERNAME` | `--username` | `admin` |
 | `password` | `PEERPHONIC_PASSWORD` | `--password` | `admin` |
 | `scan_on_start` | `PEERPHONIC_SCAN_ON_START` | `--scan` | `true` |
@@ -157,6 +158,8 @@ then CLI flags.
 | `slskd_timeout_seconds` | `PEERPHONIC_SLSKD_TIMEOUT_SECONDS` | `--slskd-timeout` | `15` |
 | `slskd_downloads_dir` | `PEERPHONIC_SLSKD_DOWNLOADS_DIR` | `--slskd-downloads` | `<cache>/soulseek/downloads` |
 | `slskd_incomplete_dir` | `PEERPHONIC_SLSKD_INCOMPLETE_DIR` | `--slskd-incomplete` | `<cache>/soulseek/incomplete` |
+| `slskd_max_active_downloads` | `PEERPHONIC_SLSKD_MAX_ACTIVE_DOWNLOADS` | `--slskd-max-downloads` | `2` |
+| `slskd_retry_attempts` | `PEERPHONIC_SLSKD_RETRY_ATTEMPTS` | `--slskd-retry-attempts` | `3` |
 | `ffmpeg_path` | `PEERPHONIC_FFMPEG_PATH` | `--ffmpeg` | `ffmpeg` |
 
 Use a config file with `--config peerphonic.json` or set its path through
@@ -168,7 +171,10 @@ should update the catalog.
 When FFmpeg is available, OpenSubsonic `stream` requests with `format=mp3` are
 transcoded while streaming. This is the default offline-cache format used by
 Amperfy. Set `ffmpeg_path` to an empty string to disable transcoding; Peerphonic
-then returns the original audio format.
+then returns the original audio format. A completely read transcoded variant is
+stored in the shared LRU media cache. Later requests reuse it with normal HTTP
+range and content-length support, while concurrent requests for the same
+variant share one FFmpeg operation.
 
 Create a consistent metadata and credential backup without stopping the server:
 
@@ -336,6 +342,13 @@ curl -u admin:admin http://localhost:8080/api/v1/downloads
 These jobs are also shown in the administration dashboard. Completed pieces
 remain available for upload while the torrent is attached and seeding is
 enabled.
+
+Background completion is limited to three torrent tracks by default. Playback
+range reads keep their priority even when a background job is waiting for a
+slot. Soulseek uses a separate two-transfer limit and retries temporary slskd,
+timeout, disconnect, and aborted-transfer failures up to three times. Permanent
+errors such as a peer no longer sharing a file fail immediately so another
+catalog source can be tried.
 
 Soulseek single-track jobs use the same endpoint and add queued and cancelled
 states. Users with `sources.manage` can cancel an active slskd transfer or retry

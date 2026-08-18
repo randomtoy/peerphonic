@@ -22,12 +22,15 @@ func TestLoadPrecedence(t *testing.T) {
 		"PEERPHONIC_TORRENT_PORT":                            "43000",
 		"PEERPHONIC_TORRENT_UPLOAD_LIMIT_BYTES_PER_SECOND":   "1024",
 		"PEERPHONIC_TORRENT_DOWNLOAD_LIMIT_BYTES_PER_SECOND": "2048",
+		"PEERPHONIC_TORRENT_MAX_ACTIVE_DOWNLOADS":            "5",
 		"PEERPHONIC_SCAN_INTERVAL_SECONDS":                   "60",
 		"PEERPHONIC_SLSKD_URL":                               "http://slskd-env:5030",
 		"PEERPHONIC_SLSKD_API_KEY":                           "0123456789abcdef",
 		"PEERPHONIC_SLSKD_TIMEOUT_SECONDS":                   "7",
 		"PEERPHONIC_SLSKD_DOWNLOADS_DIR":                     filepath.Join(dir, "env-downloads"),
 		"PEERPHONIC_SLSKD_INCOMPLETE_DIR":                    filepath.Join(dir, "env-incomplete"),
+		"PEERPHONIC_SLSKD_MAX_ACTIVE_DOWNLOADS":              "4",
+		"PEERPHONIC_SLSKD_RETRY_ATTEMPTS":                    "6",
 		"PEERPHONIC_FFMPEG_PATH":                             "ffmpeg-env",
 	}
 	lookup := func(key string) (string, bool) { value, ok := env[key]; return value, ok }
@@ -41,10 +44,13 @@ func TestLoadPrecedence(t *testing.T) {
 		"--torrent-port-forwarding=true",
 		"--torrent-upload-limit", "4096",
 		"--torrent-download-limit", "8192",
+		"--torrent-max-downloads", "7",
 		"--scan-interval", "120",
 		"--slskd-url", "http://slskd-flag:5030",
 		"--slskd-timeout", "9",
 		"--slskd-downloads", filepath.Join(dir, "flag-downloads"),
+		"--slskd-max-downloads", "8",
+		"--slskd-retry-attempts", "9",
 		"--ffmpeg", "ffmpeg-flag",
 	}, lookup)
 	if err != nil {
@@ -71,6 +77,9 @@ func TestLoadPrecedence(t *testing.T) {
 	if cfg.TorrentUploadLimit != 4096 || cfg.TorrentDownloadLimit != 8192 {
 		t.Errorf("torrent limits = upload %d, download %d", cfg.TorrentUploadLimit, cfg.TorrentDownloadLimit)
 	}
+	if cfg.TorrentMaxDownloads != 7 {
+		t.Errorf("TorrentMaxDownloads = %d, want 7", cfg.TorrentMaxDownloads)
+	}
 	if cfg.ScanIntervalSeconds != 120 {
 		t.Errorf("ScanIntervalSeconds = %d, want 120", cfg.ScanIntervalSeconds)
 	}
@@ -80,6 +89,9 @@ func TestLoadPrecedence(t *testing.T) {
 	if cfg.SlskdDownloadsDir != filepath.Join(dir, "flag-downloads") ||
 		cfg.SlskdIncompleteDir != filepath.Join(dir, "env-incomplete") {
 		t.Errorf("slskd directories = downloads %q, incomplete %q", cfg.SlskdDownloadsDir, cfg.SlskdIncompleteDir)
+	}
+	if cfg.SlskdMaxDownloads != 8 || cfg.SlskdRetryAttempts != 9 {
+		t.Errorf("slskd download policy = max %d, retries %d", cfg.SlskdMaxDownloads, cfg.SlskdRetryAttempts)
 	}
 	if cfg.FFmpegPath != "ffmpeg-flag" {
 		t.Errorf("FFmpegPath = %q, want ffmpeg-flag", cfg.FFmpegPath)
@@ -178,5 +190,19 @@ func TestLoadRejectsInvalidSlskdTimeout(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("Load() error = nil, want invalid slskd timeout error")
+	}
+}
+
+func TestLoadRejectsInvalidDownloadConcurrency(t *testing.T) {
+	t.Parallel()
+
+	for _, arguments := range [][]string{
+		{"--music", t.TempDir(), "--torrent-max-downloads", "0"},
+		{"--music", t.TempDir(), "--slskd-max-downloads", "0"},
+		{"--music", t.TempDir(), "--slskd-retry-attempts", "0"},
+	} {
+		if _, err := Load(arguments, func(string) (string, bool) { return "", false }); err == nil {
+			t.Fatalf("Load(%v) error = nil", arguments)
+		}
 	}
 }

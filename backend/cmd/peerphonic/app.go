@@ -72,11 +72,12 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	torrentProvider, err = torrentprovider.NewStreaming(
 		cfg.TorrentDir, filepath.Join(cfg.CacheDir, "torrents"),
 		torrentprovider.StreamingOptions{
-			Seed:           cfg.TorrentSeed,
-			ListenPort:     cfg.TorrentPort,
-			PortForwarding: cfg.TorrentPortForwarding,
-			UploadLimit:    cfg.TorrentUploadLimit,
-			DownloadLimit:  cfg.TorrentDownloadLimit,
+			Seed:               cfg.TorrentSeed,
+			ListenPort:         cfg.TorrentPort,
+			PortForwarding:     cfg.TorrentPortForwarding,
+			UploadLimit:        cfg.TorrentUploadLimit,
+			DownloadLimit:      cfg.TorrentDownloadLimit,
+			MaxActiveDownloads: cfg.TorrentMaxDownloads,
 		},
 	)
 	if err != nil {
@@ -93,6 +94,9 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		var clientErr error
 		soulseekClient, clientErr = soulseekprovider.NewSlskd(
 			cfg.SlskdURL, cfg.SlskdAPIKey, time.Duration(cfg.SlskdTimeoutSeconds)*time.Second,
+			soulseekprovider.DownloadPolicy{
+				MaxActive: cfg.SlskdMaxDownloads, RetryAttempts: cfg.SlskdRetryAttempts,
+			},
 		)
 		if clientErr != nil {
 			return fail(fmt.Errorf("initialize slskd client: %w", clientErr))

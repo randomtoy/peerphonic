@@ -24,6 +24,7 @@ type Config struct {
 	TorrentPortForwarding bool   `json:"torrent_port_forwarding"`
 	TorrentUploadLimit    int64  `json:"torrent_upload_limit_bytes_per_second"`
 	TorrentDownloadLimit  int64  `json:"torrent_download_limit_bytes_per_second"`
+	TorrentMaxDownloads   int    `json:"torrent_max_active_downloads"`
 	Username              string `json:"username"`
 	Password              string `json:"password"`
 	Scan                  bool   `json:"scan_on_start"`
@@ -33,6 +34,8 @@ type Config struct {
 	SlskdTimeoutSeconds   int    `json:"slskd_timeout_seconds"`
 	SlskdDownloadsDir     string `json:"slskd_downloads_dir"`
 	SlskdIncompleteDir    string `json:"slskd_incomplete_dir"`
+	SlskdMaxDownloads     int    `json:"slskd_max_active_downloads"`
+	SlskdRetryAttempts    int    `json:"slskd_retry_attempts"`
 	FFmpegPath            string `json:"ffmpeg_path"`
 }
 
@@ -45,11 +48,14 @@ func Defaults() Config {
 		TorrentDir:          "torrents",
 		TorrentSeed:         true,
 		TorrentPort:         42069,
+		TorrentMaxDownloads: 3,
 		Username:            "admin",
 		Password:            "admin",
 		Scan:                true,
 		ScanIntervalSeconds: 300,
 		SlskdTimeoutSeconds: 15,
+		SlskdMaxDownloads:   2,
+		SlskdRetryAttempts:  3,
 		FFmpegPath:          "ffmpeg",
 	}
 }
@@ -87,6 +93,7 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	flags.BoolVar(&cfg.TorrentPortForwarding, "torrent-port-forwarding", cfg.TorrentPortForwarding, "enable UPnP/NAT-PMP torrent port forwarding")
 	flags.Int64Var(&cfg.TorrentUploadLimit, "torrent-upload-limit", cfg.TorrentUploadLimit, "torrent upload limit in bytes per second (0 is unlimited)")
 	flags.Int64Var(&cfg.TorrentDownloadLimit, "torrent-download-limit", cfg.TorrentDownloadLimit, "torrent download limit in bytes per second (0 is unlimited)")
+	flags.IntVar(&cfg.TorrentMaxDownloads, "torrent-max-downloads", cfg.TorrentMaxDownloads, "maximum concurrent background torrent track downloads")
 	flags.StringVar(&cfg.Username, "username", cfg.Username, "OpenSubsonic username")
 	flags.StringVar(&cfg.Password, "password", cfg.Password, "OpenSubsonic password")
 	flags.BoolVar(&cfg.Scan, "scan", cfg.Scan, "scan music directory on startup")
@@ -95,6 +102,8 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	flags.IntVar(&cfg.SlskdTimeoutSeconds, "slskd-timeout", cfg.SlskdTimeoutSeconds, "slskd API timeout in seconds")
 	flags.StringVar(&cfg.SlskdDownloadsDir, "slskd-downloads", cfg.SlskdDownloadsDir, "shared slskd completed downloads directory")
 	flags.StringVar(&cfg.SlskdIncompleteDir, "slskd-incomplete", cfg.SlskdIncompleteDir, "shared slskd incomplete downloads directory")
+	flags.IntVar(&cfg.SlskdMaxDownloads, "slskd-max-downloads", cfg.SlskdMaxDownloads, "maximum concurrent Soulseek track downloads")
+	flags.IntVar(&cfg.SlskdRetryAttempts, "slskd-retry-attempts", cfg.SlskdRetryAttempts, "attempts for temporary Soulseek enqueue failures")
 	flags.StringVar(&cfg.FFmpegPath, "ffmpeg", cfg.FFmpegPath, "FFmpeg executable for OpenSubsonic transcoding (empty disables it)")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
@@ -114,11 +123,17 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	if cfg.TorrentUploadLimit < 0 || cfg.TorrentDownloadLimit < 0 {
 		return Config{}, errors.New("torrent transfer limits must be non-negative")
 	}
+	if cfg.TorrentMaxDownloads <= 0 {
+		return Config{}, errors.New("torrent maximum active downloads must be positive")
+	}
 	if cfg.ScanIntervalSeconds < 0 {
 		return Config{}, errors.New("scan interval must be non-negative")
 	}
 	if cfg.SlskdTimeoutSeconds <= 0 {
 		return Config{}, errors.New("slskd timeout must be positive")
+	}
+	if cfg.SlskdMaxDownloads <= 0 || cfg.SlskdRetryAttempts <= 0 {
+		return Config{}, errors.New("slskd download concurrency and retry attempts must be positive")
 	}
 
 	var err error
@@ -258,6 +273,19 @@ func applyEnv(cfg *Config, lookup func(string) (string, bool)) error {
 			return fmt.Errorf("parse PEERPHONIC_TORRENT_DOWNLOAD_LIMIT_BYTES_PER_SECOND: %w", err)
 		}
 		cfg.TorrentDownloadLimit = parsed
+	}
+	for key, target := range map[string]*int{
+		"PEERPHONIC_TORRENT_MAX_ACTIVE_DOWNLOADS": &cfg.TorrentMaxDownloads,
+		"PEERPHONIC_SLSKD_MAX_ACTIVE_DOWNLOADS":   &cfg.SlskdMaxDownloads,
+		"PEERPHONIC_SLSKD_RETRY_ATTEMPTS":         &cfg.SlskdRetryAttempts,
+	} {
+		if value, ok := lookup(key); ok {
+			parsed, err := strconv.Atoi(value)
+			if err != nil {
+				return fmt.Errorf("parse %s: %w", key, err)
+			}
+			*target = parsed
+		}
 	}
 	return nil
 }

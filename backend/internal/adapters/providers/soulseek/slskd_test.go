@@ -567,7 +567,9 @@ func TestSlskdSerializesConcurrentEnqueuesForSamePeer(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewSlskd(server.URL, "key", time.Second)
+	client, err := NewSlskd(server.URL, "key", time.Second, DownloadPolicy{
+		MaxActive: 4, RetryAttempts: 1,
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -621,7 +623,7 @@ func TestSlskdDuplicateResolveWaitsForEnqueueResult(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewSlskd(server.URL, "key", 3*time.Second)
+	client, err := NewSlskd(server.URL, "key", 3*time.Second, DownloadPolicy{RetryAttempts: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -650,6 +652,149 @@ func TestSlskdDuplicateResolveWaitsForEnqueueResult(t *testing.T) {
 	}
 }
 
+func TestSlskdLimitsConcurrentTrackDownloads(t *testing.T) {
+	t.Parallel()
+
+	var enqueueCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v0/transfers/downloads/batches":
+			call := enqueueCalls.Add(1)
+			_, _ = writer.Write([]byte(fmt.Sprintf(
+				`{"batch":{"id":"batch-%d","transfers":[{"id":"transfer-%d","state":"Queued, Locally"}]},"failures":[]}`,
+				call, call,
+			)))
+		case request.Method == http.MethodGet && strings.HasPrefix(request.URL.Path, "/api/v0/transfers/downloads/batches/"):
+			_, _ = writer.Write([]byte(`{"id":"batch","transfers":[{"id":"transfer","state":"Queued, Locally"}]}`))
+		default:
+			http.Error(writer, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewSlskd(server.URL, "key", time.Second, DownloadPolicy{MaxActive: 1, RetryAttempts: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetMediaDirectories(t.TempDir(), t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	first, err := client.downloads.ensureDownload(context.Background(), "first", "track-1", "one.mp3",
+		remoteFileRef{Peer: "peer-one", Path: `Album\one.mp3`, Size: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondResult := make(chan error, 1)
+	go func() {
+		_, enqueueErr := client.downloads.ensureDownload(context.Background(), "second", "track-2", "two.mp3",
+			remoteFileRef{Peer: "peer-two", Path: `Album\two.mp3`, Size: 10})
+		secondResult <- enqueueErr
+	}()
+	time.Sleep(50 * time.Millisecond)
+	if enqueueCalls.Load() != 1 {
+		t.Fatalf("enqueues before slot release = %d, want 1", enqueueCalls.Load())
+	}
+	client.downloads.finishJob("first", first, domain.DownloadStateCancelled, errors.New("test complete"))
+	select {
+	case err := <-secondResult:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("second download did not start after a slot was released")
+	}
+	if enqueueCalls.Load() != 2 {
+		t.Fatalf("enqueues after slot release = %d, want 2", enqueueCalls.Load())
+	}
+}
+
+func TestSlskdAutomaticallyRetriesTemporaryEnqueueFailure(t *testing.T) {
+	t.Parallel()
+
+	var enqueueCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost || request.URL.Path != "/api/v0/transfers/downloads/batches" {
+			http.Error(writer, "unexpected request", http.StatusNotFound)
+			return
+		}
+		if enqueueCalls.Add(1) == 1 {
+			http.Error(writer, "peer lookup timed out", http.StatusInternalServerError)
+			return
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`{"batch":{"id":"batch-2","transfers":[{"id":"transfer-2","state":"Queued, Locally"}]},"failures":[]}`))
+	}))
+	defer server.Close()
+
+	client, err := NewSlskd(server.URL, "key", time.Second, DownloadPolicy{MaxActive: 1, RetryAttempts: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetMediaDirectories(t.TempDir(), t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	_, err = client.downloads.ensureDownload(context.Background(), "retry", "track", "song.mp3",
+		remoteFileRef{Peer: "peer", Path: `Album\song.mp3`, Size: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if enqueueCalls.Load() != 2 {
+		t.Fatalf("enqueue calls = %d, want 2", enqueueCalls.Load())
+	}
+}
+
+func TestSlskdAutomaticallyRetriesAbortedTransfer(t *testing.T) {
+	t.Parallel()
+
+	var enqueueCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v0/transfers/downloads/batches":
+			call := enqueueCalls.Add(1)
+			_, _ = writer.Write([]byte(fmt.Sprintf(
+				`{"batch":{"id":"batch-%d","transfers":[{"id":"transfer-%d","state":"Queued, Locally"}]},"failures":[]}`,
+				call, call,
+			)))
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v0/transfers/downloads/batches/batch-1":
+			_, _ = writer.Write([]byte(`{"id":"batch-1","transfers":[{"id":"transfer-1","state":"Completed, Aborted, Remotely","exception":"peer disconnected"}]}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v0/transfers/downloads/batches/batch-2":
+			_, _ = writer.Write([]byte(`{"id":"batch-2","transfers":[{"id":"transfer-2","state":"Queued, Locally"}]}`))
+		default:
+			http.Error(writer, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewSlskd(server.URL, "key", time.Second, DownloadPolicy{MaxActive: 1, RetryAttempts: 2})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetMediaDirectories(t.TempDir(), t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	job, err := client.downloads.ensureDownload(context.Background(), "retry-transfer", "track", "song.mp3",
+		remoteFileRef{Peer: "peer", Path: `Album\song.mp3`, Size: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for enqueueCalls.Load() != 2 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	job.mu.Lock()
+	retryCount, batchID, state := job.retryCount, job.batchID, job.download.State
+	job.mu.Unlock()
+	if enqueueCalls.Load() != 2 || retryCount != 1 || batchID != "batch-2" || state != domain.DownloadStateQueued {
+		t.Fatalf("calls = %d, retries = %d, batch = %q, state = %q",
+			enqueueCalls.Load(), retryCount, batchID, state)
+	}
+}
+
 func TestSlskdRetriesBusyPeerOperation(t *testing.T) {
 	t.Parallel()
 
@@ -668,7 +813,7 @@ func TestSlskdRetriesBusyPeerOperation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewSlskd(server.URL, "key", time.Second)
+	client, err := NewSlskd(server.URL, "key", time.Second, DownloadPolicy{RetryAttempts: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -712,7 +857,7 @@ func TestSlskdDownloadCanBeCancelledAndRetried(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewSlskd(server.URL, "key", time.Second)
+	client, err := NewSlskd(server.URL, "key", time.Second, DownloadPolicy{RetryAttempts: 1})
 	if err != nil {
 		t.Fatal(err)
 	}

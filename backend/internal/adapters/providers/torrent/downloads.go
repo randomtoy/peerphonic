@@ -101,7 +101,8 @@ func (p *Provider) ResumeTrackDownloads(ctx context.Context) error {
 		if record.Download.TrackID != "" {
 			p.registerTrack(record.Source.Key, record.Download.TrackID)
 		}
-		if record.Download.State != domain.DownloadStateDownloading ||
+		if (record.Download.State != domain.DownloadStateWaiting &&
+			record.Download.State != domain.DownloadStateDownloading) ||
 			p.sourceMarkerExists(record.Download.SourceID, "paused") {
 			continue
 		}
@@ -143,15 +144,58 @@ func (p *Provider) queueTrackDownload(
 			record.Download.TrackID = existing.Download.TrackID
 		}
 	}
-	if p.activeDownloads[id] != nil {
+	if p.activeDownloads[id] != nil || p.pendingDownloads[id] != nil {
 		p.downloadMu.Unlock()
 		return
 	}
-	p.beginTrackDownloadLocked(record, file)
+	p.scheduleTrackDownloadLocked(record, file)
 	p.downloadMu.Unlock()
 }
 
-func (p *Provider) beginTrackDownloadLocked(record downloadRecord, file *torrentclient.File) {
+func (p *Provider) scheduleTrackDownloadLocked(record downloadRecord, file *torrentclient.File) {
+	id := record.Download.ID
+	p.retain(record.Download.SourceID, record.Source.Key)
+	select {
+	case p.downloadSlots <- struct{}{}:
+		if !p.beginTrackDownloadLocked(record, file) {
+			<-p.downloadSlots
+			p.release(record.Download.SourceID)
+		}
+	default:
+		record.Download.State = domain.DownloadStateWaiting
+		record.Download.Error = ""
+		record.Download.UpdatedAt = time.Now().UTC()
+		p.downloads[id] = record
+		p.pendingDownloads[id] = file
+		_ = p.persistDownloadLocked(record)
+		p.downloadWG.Add(1)
+		go p.waitForDownloadSlot(record, file)
+	}
+}
+
+func (p *Provider) waitForDownloadSlot(record downloadRecord, file *torrentclient.File) {
+	defer p.downloadWG.Done()
+	select {
+	case p.downloadSlots <- struct{}{}:
+	case <-p.downloadCtx.Done():
+		p.downloadMu.Lock()
+		delete(p.pendingDownloads, record.Download.ID)
+		p.downloadMu.Unlock()
+		p.release(record.Download.SourceID)
+		return
+	}
+	p.downloadMu.Lock()
+	pending := p.pendingDownloads[record.Download.ID]
+	_, exists := p.downloads[record.Download.ID]
+	delete(p.pendingDownloads, record.Download.ID)
+	if !exists || pending != file || !p.beginTrackDownloadLocked(record, file) {
+		<-p.downloadSlots
+		p.release(record.Download.SourceID)
+	}
+	p.downloadMu.Unlock()
+}
+
+func (p *Provider) beginTrackDownloadLocked(record downloadRecord, file *torrentclient.File) bool {
 	id := record.Download.ID
 	completed := min(file.BytesCompleted(), file.Length())
 	record.Download.CompletedBytes = completed
@@ -162,7 +206,7 @@ func (p *Provider) beginTrackDownloadLocked(record downloadRecord, file *torrent
 		record.Download.Error = ""
 		p.downloads[id] = record
 		_ = p.persistDownloadLocked(record)
-		return
+		return false
 	}
 	record.Download.State = domain.DownloadStateDownloading
 	record.Download.Error = ""
@@ -173,9 +217,9 @@ func (p *Provider) beginTrackDownloadLocked(record downloadRecord, file *torrent
 	p.activeDownloads[id] = file
 	_ = p.persistDownloadLocked(record)
 	file.Download()
-	p.retain(record.Download.SourceID, record.Source.Key)
 	p.downloadWG.Add(1)
 	go p.monitorTrackDownload(record.Download.ID, file)
+	return true
 }
 
 func (p *Provider) monitorTrackDownload(id string, file *torrentclient.File) {
@@ -188,6 +232,7 @@ func (p *Provider) monitorTrackDownload(id string, file *torrentclient.File) {
 		record := p.downloads[id]
 		p.downloadMu.Unlock()
 		p.release(record.Download.SourceID)
+		<-p.downloadSlots
 	}()
 	for {
 		completed := min(file.BytesCompleted(), file.Length())
@@ -248,8 +293,8 @@ func (p *Provider) resumeTrackDownload(ctx context.Context, record downloadRecor
 			continue
 		}
 		p.downloadMu.Lock()
-		if p.activeDownloads[record.Download.ID] == nil {
-			p.beginTrackDownloadLocked(record, file)
+		if p.activeDownloads[record.Download.ID] == nil && p.pendingDownloads[record.Download.ID] == nil {
+			p.scheduleTrackDownloadLocked(record, file)
 		}
 		p.downloadMu.Unlock()
 		return nil

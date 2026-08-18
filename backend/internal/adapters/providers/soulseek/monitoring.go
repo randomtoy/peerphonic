@@ -52,13 +52,22 @@ func (c *downloadCoordinator) resume(ctx context.Context) error {
 		}
 		job.mu.Lock()
 		key, batchID := job.key, job.batchID
+		state := job.download.State
 		job.mu.Unlock()
+		if state == domain.DownloadStateWaiting && batchID == "" {
+			c.startEnqueue(key, job)
+			continue
+		}
 		if batchID == "" {
 			err := errors.New("resume Soulseek download: missing slskd batch ID")
 			c.finishJob(key, job, domain.DownloadStateFailed, err)
 			resumeErrors = append(resumeErrors, err)
 			continue
 		}
+		c.slots.restore()
+		job.mu.Lock()
+		job.slotHeld = true
+		job.mu.Unlock()
 		c.startMonitor(key, job, batchID)
 	}
 	return errors.Join(resumeErrors...)
@@ -135,12 +144,17 @@ func (c *downloadCoordinator) cancel(ctx context.Context, id string) error {
 	peer := job.remote.Peer
 	transferID := job.transferID
 	key := job.key
+	cancel := job.cancel
 	job.mu.Unlock()
-	if state != domain.DownloadStateQueued && state != domain.DownloadStateDownloading {
+	if state != domain.DownloadStateWaiting && state != domain.DownloadStateQueued && state != domain.DownloadStateDownloading {
 		return fmt.Errorf("download %q is not active", id)
 	}
 	if peer == "" || transferID == "" {
-		return fmt.Errorf("download %q has not been enqueued by slskd", id)
+		if cancel != nil {
+			cancel()
+		}
+		c.finishJob(key, job, domain.DownloadStateCancelled, errors.New("Soulseek download cancelled"))
+		return nil
 	}
 	path := "/api/v0/transfers/downloads/" + url.PathEscape(peer) + "/" + url.PathEscape(transferID)
 	if err := c.client.doJSON(ctx, http.MethodDelete, path, nil, nil); err != nil {

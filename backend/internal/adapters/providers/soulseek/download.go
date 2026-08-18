@@ -54,6 +54,52 @@ type downloadCoordinator struct {
 	jobs      map[string]*downloadJob
 	records   map[string]*downloadJob
 	active    map[string]int
+	slots     *downloadGate
+}
+
+type downloadGate struct {
+	mu     sync.Mutex
+	limit  int
+	active int
+	notify chan struct{}
+}
+
+func newDownloadGate(limit int) *downloadGate {
+	return &downloadGate{limit: limit, notify: make(chan struct{})}
+}
+
+func (g *downloadGate) acquire(ctx context.Context) bool {
+	for {
+		g.mu.Lock()
+		if g.active < g.limit {
+			g.active++
+			g.mu.Unlock()
+			return true
+		}
+		notify := g.notify
+		g.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return false
+		case <-notify:
+		}
+	}
+}
+
+func (g *downloadGate) restore() {
+	g.mu.Lock()
+	g.active++
+	g.mu.Unlock()
+}
+
+func (g *downloadGate) release() {
+	g.mu.Lock()
+	if g.active > 0 {
+		g.active--
+	}
+	close(g.notify)
+	g.notify = make(chan struct{})
+	g.mu.Unlock()
 }
 
 type downloadJob struct {
@@ -74,6 +120,9 @@ type downloadJob struct {
 	finished    bool
 	monitoring  bool
 	lastPersist time.Time
+	cancel      context.CancelFunc
+	slotHeld    bool
+	retryCount  int
 }
 
 type persistedDownloadJob struct {
@@ -83,6 +132,7 @@ type persistedDownloadJob struct {
 	Remote     remoteFileRef        `json:"remote"`
 	BatchID    string               `json:"batchId,omitempty"`
 	TransferID string               `json:"transferId,omitempty"`
+	RetryCount int                  `json:"retryCount,omitempty"`
 }
 
 type slskdDownloadBatchResponse struct {
@@ -139,7 +189,7 @@ func newDownloadCoordinator(
 		client: client, downloadsDir: downloadsDir, incompleteDir: incompleteDir,
 		stateDir: stateDir, ctx: coordinatorContext, stop: cancel,
 		jobs: make(map[string]*downloadJob), records: make(map[string]*downloadJob),
-		active: make(map[string]int),
+		active: make(map[string]int), slots: newDownloadGate(client.downloadPolicy.MaxActive),
 	}
 	coordinator.loadErrors = coordinator.loadRecords()
 	return coordinator, nil
@@ -276,7 +326,7 @@ func (c *downloadCoordinator) ensureDownload(
 		done: make(chan struct{}), ready: make(chan struct{}),
 		download: domain.TrackDownload{
 			ID: downloadID, Provider: Name, SourceID: remote.Peer, TrackID: trackID,
-			Name: name, State: domain.DownloadStateQueued, TotalBytes: remote.Size,
+			Name: name, State: domain.DownloadStateWaiting, TotalBytes: remote.Size,
 			StartedAt: now, UpdatedAt: now,
 		},
 	}
@@ -287,6 +337,81 @@ func (c *downloadCoordinator) ensureDownload(
 		c.finishJob(key, job, domain.DownloadStateFailed, err)
 		return nil, err
 	}
+	c.startEnqueue(key, job)
+	if err := job.waitUntilEnqueued(ctx); err != nil {
+		return nil, err
+	}
+	return job, nil
+}
+
+func (c *downloadCoordinator) startEnqueue(key string, job *downloadJob) {
+	jobContext, cancel := context.WithCancel(c.ctx)
+	job.mu.Lock()
+	job.cancel = cancel
+	job.mu.Unlock()
+	c.monitorWG.Add(1)
+	go func() {
+		defer c.monitorWG.Done()
+		if c.slots.acquire(jobContext) {
+			job.mu.Lock()
+			if job.finished {
+				job.mu.Unlock()
+				c.slots.release()
+				return
+			}
+			job.slotHeld = true
+			job.download.State = domain.DownloadStateQueued
+			job.download.UpdatedAt = time.Now().UTC()
+			job.mu.Unlock()
+			_ = c.persistJob(job)
+		} else {
+			return
+		}
+		if err := c.enqueueWithRetry(jobContext, job); err != nil {
+			c.finishJob(key, job, domain.DownloadStateFailed, err)
+			return
+		}
+		job.mu.Lock()
+		batchID := job.batchID
+		job.mu.Unlock()
+		job.markEnqueued()
+		c.startMonitor(key, job, batchID)
+	}()
+}
+
+func (c *downloadCoordinator) enqueueWithRetry(ctx context.Context, job *downloadJob) error {
+	var lastErr error
+	for attempt := 1; attempt <= c.client.downloadPolicy.RetryAttempts; attempt++ {
+		lastErr = c.enqueue(ctx, job)
+		if lastErr == nil || !temporarySlskdError(lastErr) || attempt == c.client.downloadPolicy.RetryAttempts {
+			return lastErr
+		}
+		job.mu.Lock()
+		job.download.State = domain.DownloadStateWaiting
+		job.download.Error = fmt.Sprintf("temporary source error; retry %d of %d", attempt, c.client.downloadPolicy.RetryAttempts)
+		job.download.UpdatedAt = time.Now().UTC()
+		job.mu.Unlock()
+		_ = c.persistJob(job)
+		timer := time.NewTimer(time.Duration(attempt) * 500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return fmt.Errorf("enqueue Soulseek download: %w", ctx.Err())
+		case <-timer.C:
+		}
+		job.mu.Lock()
+		job.download.State = domain.DownloadStateQueued
+		job.download.Error = ""
+		job.download.UpdatedAt = time.Now().UTC()
+		job.mu.Unlock()
+	}
+	return lastErr
+}
+
+func (c *downloadCoordinator) enqueue(ctx context.Context, job *downloadJob) error {
+	job.mu.Lock()
+	remote, trackID := job.remote, job.trackID
+	job.mu.Unlock()
 
 	payload := struct {
 		Username string `json:"username"`
@@ -310,30 +435,26 @@ func (c *downloadCoordinator) ensureDownload(
 	if err := c.client.doPeerJSON(ctx, remote.Peer, http.MethodPost,
 		"/api/v0/transfers/downloads/batches", payload, &response,
 	); err != nil {
-		err = fmt.Errorf("enqueue Soulseek download: %w", err)
-		c.finishJob(key, job, domain.DownloadStateFailed, err)
-		return nil, err
+		return fmt.Errorf("enqueue Soulseek download: %w", err)
 	}
 	if response.Batch.ID == "" || len(response.Batch.Transfers) == 0 {
 		message := "slskd did not enqueue the file"
 		if len(response.Failures) > 0 && strings.TrimSpace(response.Failures[0].Message) != "" {
 			message = response.Failures[0].Message
 		}
-		err := fmt.Errorf("enqueue Soulseek download: %s", message)
-		c.finishJob(key, job, domain.DownloadStateFailed, err)
-		return nil, err
+		return fmt.Errorf("enqueue Soulseek download: %s", message)
 	}
 	job.mu.Lock()
 	job.batchID = response.Batch.ID
 	job.transferID = response.Batch.Transfers[0].ID
+	job.download.State = domain.DownloadStateQueued
+	job.download.Error = ""
+	job.download.UpdatedAt = time.Now().UTC()
 	job.mu.Unlock()
 	if err := c.persistJob(job); err != nil {
-		c.finishJob(key, job, domain.DownloadStateFailed, err)
-		return nil, err
+		return err
 	}
-	job.markEnqueued()
-	c.startMonitor(key, job, response.Batch.ID)
-	return job, nil
+	return nil
 }
 
 func (c *downloadCoordinator) startMonitor(key string, job *downloadJob, batchID string) {
@@ -402,6 +523,23 @@ func (c *downloadCoordinator) monitorDownload(key string, job *downloadJob, batc
 				if message == "" {
 					message = transfer.State
 				}
+				if retryableTransferFailure(transfer) && job.prepareAutomaticRetry(
+					c.client.downloadPolicy.RetryAttempts,
+					fmt.Sprintf("temporary transfer failure; retrying: %s", message),
+				) {
+					if err := c.persistJob(job); err != nil {
+						c.finishJob(key, job, domain.DownloadStateFailed, err)
+						return
+					}
+					if err := c.enqueueWithRetry(c.ctx, job); err != nil {
+						c.finishJob(key, job, domain.DownloadStateFailed, err)
+						return
+					}
+					job.mu.Lock()
+					batchID = job.batchID
+					job.mu.Unlock()
+					continue
+				}
 				state := domain.DownloadStateFailed
 				if stateContains(transfer.State, "Cancelled") {
 					state = domain.DownloadStateCancelled
@@ -428,6 +566,22 @@ func transferFailed(state string) bool {
 	}
 	for _, terminal := range []string{"Errored", "Rejected", "Cancelled", "TimedOut", "Aborted"} {
 		if stateContains(state, terminal) {
+			return true
+		}
+	}
+	return false
+}
+
+func retryableTransferFailure(transfer slskdDownloadTransfer) bool {
+	if stateContains(transfer.State, "TimedOut") || stateContains(transfer.State, "Aborted") {
+		return true
+	}
+	if !stateContains(transfer.State, "Errored") {
+		return false
+	}
+	message := strings.ToLower(transfer.Exception)
+	for _, fragment := range []string{"timeout", "timed out", "disconnect", "temporarily unavailable", "connection reset"} {
+		if strings.Contains(message, fragment) {
 			return true
 		}
 	}
@@ -477,7 +631,17 @@ func (c *downloadCoordinator) finishJob(
 		job.download.Error = err.Error()
 	}
 	close(job.done)
+	cancel := job.cancel
+	job.cancel = nil
+	releaseSlot := job.slotHeld
+	job.slotHeld = false
 	job.mu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+	if releaseSlot {
+		c.slots.release()
+	}
 	job.markEnqueued()
 	_ = c.persistJob(job)
 	c.removeJob(key, job)
@@ -559,6 +723,21 @@ func (j *downloadJob) updateTransfer(transfer slskdDownloadTransfer) bool {
 		j.download.UpdatedAt = time.Now().UTC()
 	}
 	return changed
+}
+
+func (j *downloadJob) prepareAutomaticRetry(limit int, message string) bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.finished || j.retryCount >= limit-1 {
+		return false
+	}
+	j.retryCount++
+	j.batchID = ""
+	j.transferID = ""
+	j.download.State = domain.DownloadStateWaiting
+	j.download.Error = message
+	j.download.UpdatedAt = time.Now().UTC()
+	return true
 }
 
 func (j *downloadJob) persistDue(interval time.Duration) bool {

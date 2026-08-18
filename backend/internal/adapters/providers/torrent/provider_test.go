@@ -334,6 +334,53 @@ func TestPlaybackQueuesPersistentBackgroundTrackDownload(t *testing.T) {
 	}
 }
 
+func TestBackgroundTrackDownloadsRespectConcurrencyLimit(t *testing.T) {
+	t.Parallel()
+
+	metadataRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	data := torrentBytes(t, metainfo.Info{
+		Name: "Limited Album", PieceLength: 16 * 1024, Pieces: make([]byte, 20),
+		Files: []metainfo.FileInfo{
+			{Length: 4096, Path: []string{"01 One.mp3"}},
+			{Length: 4096, Path: []string{"02 Two.mp3"}},
+		},
+	})
+	provider, err := NewStreaming(metadataRoot, dataRoot, StreamingOptions{MaxActiveDownloads: 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	catalog, err := provider.ReadCatalog(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(metadataRoot, catalog.InfoHash+".torrent"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, track := range catalog.Tracks {
+		resolved, err := provider.Resolve(context.Background(), track.Track.ID, track.Ref)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := resolved.Content.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	downloads, err := provider.TrackDownloads(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := map[domain.DownloadState]int{}
+	for _, download := range downloads {
+		states[download.State]++
+	}
+	if len(downloads) != 2 || states[domain.DownloadStateDownloading] != 1 ||
+		states[domain.DownloadStateWaiting] != 1 {
+		t.Fatalf("limited downloads = %#v", downloads)
+	}
+}
+
 func TestCacheUsageIncludesCompletePartialAndStateFiles(t *testing.T) {
 	t.Parallel()
 

@@ -35,6 +35,8 @@ const (
 	maxResponse               = 8 << 20
 	peerBusyRetryAttempts     = 4
 	peerBusyRetryDelay        = 150 * time.Millisecond
+	defaultMaxDownloads       = 2
+	defaultDownloadRetries    = 3
 )
 
 var artworkExtensions = map[string]struct{}{
@@ -42,10 +44,11 @@ var artworkExtensions = map[string]struct{}{
 }
 
 type Client struct {
-	endpoint   *url.URL
-	apiKey     string
-	httpClient *http.Client
-	downloads  *downloadCoordinator
+	endpoint       *url.URL
+	apiKey         string
+	httpClient     *http.Client
+	downloads      *downloadCoordinator
+	downloadPolicy DownloadPolicy
 
 	completedMu      sync.RWMutex
 	completedHandler func(CompletedFile)
@@ -70,7 +73,12 @@ type CompletedFile struct {
 	Size    int64
 }
 
-func NewSlskd(endpoint, apiKey string, timeout time.Duration) (*Client, error) {
+type DownloadPolicy struct {
+	MaxActive     int
+	RetryAttempts int
+}
+
+func NewSlskd(endpoint, apiKey string, timeout time.Duration, policies ...DownloadPolicy) (*Client, error) {
 	endpoint = strings.TrimSpace(endpoint)
 	parsed, err := url.Parse(endpoint)
 	if err != nil {
@@ -85,11 +93,21 @@ func NewSlskd(endpoint, apiKey string, timeout time.Duration) (*Client, error) {
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
+	policy := DownloadPolicy{MaxActive: defaultMaxDownloads, RetryAttempts: defaultDownloadRetries}
+	if len(policies) > 0 {
+		if policies[0].MaxActive > 0 {
+			policy.MaxActive = policies[0].MaxActive
+		}
+		if policies[0].RetryAttempts > 0 {
+			policy.RetryAttempts = policies[0].RetryAttempts
+		}
+	}
 	cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
 	return &Client{
 		endpoint: parsed, apiKey: strings.TrimSpace(apiKey), httpClient: &http.Client{Timeout: timeout},
 		searchCleanupCtx: cleanupCtx, searchCleanupEnd: cleanupCancel, cleanupDelay: searchCleanupDelay,
 		peerOperations: make(map[string]*peerOperationGate),
+		downloadPolicy: policy,
 	}, nil
 }
 
@@ -629,6 +647,22 @@ func (e *slskdHTTPError) Error() string {
 func isSlskdHTTPStatus(err error, status int) bool {
 	var responseErr *slskdHTTPError
 	return errors.As(err, &responseErr) && responseErr.statusCode == status
+}
+
+func temporarySlskdError(err error) bool {
+	if err == nil || errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return true
+	}
+	var responseErr *slskdHTTPError
+	if errors.As(err, &responseErr) {
+		return responseErr.statusCode == http.StatusTooManyRequests || responseErr.statusCode >= 500
+	}
+	message := strings.ToLower(err.Error())
+	return strings.Contains(message, "timeout") || strings.Contains(message, "timed out") ||
+		strings.Contains(message, "connection reset") || strings.Contains(message, "connection refused")
 }
 
 // doPeerJSON serializes slskd operations that may need the same remote user's

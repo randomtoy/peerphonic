@@ -34,6 +34,7 @@ var imageContentTypes = map[string]string{
 }
 
 const streamReadahead = 8 << 20
+const defaultMaxActiveDownloads = 3
 
 const legacyVerificationMarker = ".peerphonic-legacy-unverified"
 
@@ -67,20 +68,23 @@ type Provider struct {
 	onCompleted  func(CompletedFile)
 	closing      bool
 
-	downloadMu      sync.Mutex
-	downloads       map[string]downloadRecord
-	activeDownloads map[string]*torrentclient.File
-	downloadCtx     context.Context
-	downloadCancel  context.CancelFunc
-	downloadWG      sync.WaitGroup
+	downloadMu       sync.Mutex
+	downloads        map[string]downloadRecord
+	activeDownloads  map[string]*torrentclient.File
+	pendingDownloads map[string]*torrentclient.File
+	downloadSlots    chan struct{}
+	downloadCtx      context.Context
+	downloadCancel   context.CancelFunc
+	downloadWG       sync.WaitGroup
 }
 
 type StreamingOptions struct {
-	Seed           bool
-	ListenPort     int
-	PortForwarding bool
-	UploadLimit    int64
-	DownloadLimit  int64
+	Seed               bool
+	ListenPort         int
+	PortForwarding     bool
+	UploadLimit        int64
+	DownloadLimit      int64
+	MaxActiveDownloads int
 }
 
 type CompletedFile struct {
@@ -117,17 +121,19 @@ type evictionCandidate struct {
 func New() *Provider {
 	downloadCtx, downloadCancel := context.WithCancel(context.Background())
 	return &Provider{
-		artworks:        make(map[string]domain.SourceRef),
-		trackIDs:        make(map[string]string),
-		completed:       make(map[string]bool),
-		cacheFiles:      make(map[string]cacheFile),
-		active:          make(map[string]int),
-		streams:         make(map[string]int),
-		lastAccessed:    make(map[string]time.Time),
-		downloads:       make(map[string]downloadRecord),
-		activeDownloads: make(map[string]*torrentclient.File),
-		downloadCtx:     downloadCtx,
-		downloadCancel:  downloadCancel,
+		artworks:         make(map[string]domain.SourceRef),
+		trackIDs:         make(map[string]string),
+		completed:        make(map[string]bool),
+		cacheFiles:       make(map[string]cacheFile),
+		active:           make(map[string]int),
+		streams:          make(map[string]int),
+		lastAccessed:     make(map[string]time.Time),
+		downloads:        make(map[string]downloadRecord),
+		activeDownloads:  make(map[string]*torrentclient.File),
+		pendingDownloads: make(map[string]*torrentclient.File),
+		downloadSlots:    make(chan struct{}, defaultMaxActiveDownloads),
+		downloadCtx:      downloadCtx,
+		downloadCancel:   downloadCancel,
 	}
 }
 
@@ -150,6 +156,10 @@ func NewStreaming(metadataRoot, dataRoot string, options ...StreamingOptions) (*
 	if len(options) != 0 {
 		provider.options = options[0]
 	}
+	if provider.options.MaxActiveDownloads <= 0 {
+		provider.options.MaxActiveDownloads = defaultMaxActiveDownloads
+	}
+	provider.downloadSlots = make(chan struct{}, provider.options.MaxActiveDownloads)
 	return provider, nil
 }
 

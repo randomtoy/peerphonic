@@ -69,6 +69,8 @@ spec:
               value: {{ .Values.peerphonic.torrent.port | quote }}
             - name: PEERPHONIC_TORRENT_PORT_FORWARDING
               value: {{ .Values.peerphonic.torrent.portForwarding | quote }}
+            - name: PEERPHONIC_TORRENT_MAX_ACTIVE_DOWNLOADS
+              value: {{ .Values.peerphonic.torrent.maxActiveDownloads | quote }}
             - name: PEERPHONIC_SCAN_ON_START
               value: {{ .Values.peerphonic.scanOnStart | quote }}
             - name: PEERPHONIC_SCAN_INTERVAL_SECONDS
@@ -95,6 +97,10 @@ spec:
               value: /data/cache/soulseek/downloads
             - name: PEERPHONIC_SLSKD_INCOMPLETE_DIR
               value: /data/cache/soulseek/incomplete
+            - name: PEERPHONIC_SLSKD_MAX_ACTIVE_DOWNLOADS
+              value: {{ .Values.slskd.maxActiveDownloads | quote }}
+            - name: PEERPHONIC_SLSKD_RETRY_ATTEMPTS
+              value: {{ .Values.slskd.retryAttempts | quote }}
             {{- end }}
           ports:
             - name: http
