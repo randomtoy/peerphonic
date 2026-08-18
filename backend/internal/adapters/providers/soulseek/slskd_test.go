@@ -89,13 +89,14 @@ func TestSlskdSearchMapsAudioResultsAndCleansUp(t *testing.T) {
 		switch {
 		case request.Method == http.MethodPost && request.URL.Path == "/base/api/v0/searches":
 			var payload struct {
-				SearchText string `json:"searchText"`
-				FileLimit  int    `json:"fileLimit"`
+				SearchText    string `json:"searchText"`
+				SearchTimeout int    `json:"searchTimeout"`
+				FileLimit     int    `json:"fileLimit"`
 			}
 			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
 				t.Error(err)
 			}
-			if payload.SearchText != "Massive Attack" || payload.FileLimit != 12 {
+			if payload.SearchText != "Massive Attack" || payload.SearchTimeout != 5_000 || payload.FileLimit != 12 {
 				t.Errorf("payload = %#v", payload)
 			}
 			_, _ = writer.Write([]byte(`{"id":"11111111-1111-1111-1111-111111111111","isComplete":false}`))

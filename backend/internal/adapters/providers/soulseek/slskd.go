@@ -24,11 +24,13 @@ import (
 const Name = "soulseek"
 
 const (
-	searchTimeout  = 5
-	searchMaxLimit = 200
-	searchMaxWait  = 8 * time.Second
-	pollInterval   = 250 * time.Millisecond
-	maxResponse    = 8 << 20
+	// slskd passes this value to Soulseek.NET, where the timeout is measured in
+	// milliseconds even though the slskd API describes it as seconds.
+	searchTimeoutMilliseconds = 5_000
+	searchMaxLimit            = 200
+	searchMaxWait             = 8 * time.Second
+	pollInterval              = 250 * time.Millisecond
+	maxResponse               = 8 << 20
 )
 
 var audioExtensions = map[string]struct{}{
@@ -172,7 +174,7 @@ func (c *Client) Search(ctx context.Context, query domain.SearchQuery) ([]domain
 		ResponseLimit int    `json:"responseLimit"`
 		FileLimit     int    `json:"fileLimit"`
 	}{
-		SearchText: query.Text, SearchTimeout: searchTimeout,
+		SearchText: query.Text, SearchTimeout: searchTimeoutMilliseconds,
 		ResponseLimit: query.Limit, FileLimit: query.Limit * 4,
 	}
 	var search slskdSearch
