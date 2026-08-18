@@ -14,6 +14,15 @@ type runnerStub struct {
 	err     error
 }
 
+type periodicRunner struct {
+	runs chan struct{}
+}
+
+func (r *periodicRunner) Scan(context.Context) (Report, error) {
+	r.runs <- struct{}{}
+	return Report{Tracks: 3}, nil
+}
+
 func (r *runnerStub) Scan(ctx context.Context) (Report, error) {
 	if r.started != nil {
 		close(r.started)
@@ -69,5 +78,27 @@ func TestManagerPreventsConcurrentScans(t *testing.T) {
 	status := manager.Status()
 	if status.Scanning || status.Count != 7 {
 		t.Fatalf("Status() after completion = %#v", status)
+	}
+}
+
+func TestManagerRunsPeriodicScansUntilCancelled(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runner := &periodicRunner{runs: make(chan struct{}, 4)}
+	manager := NewManager(ctx, runner)
+	manager.StartPeriodic(10 * time.Millisecond)
+	select {
+	case <-runner.runs:
+	case <-time.After(time.Second):
+		t.Fatal("periodic scan did not start")
+	}
+	cancel()
+	deadline := time.Now().Add(time.Second)
+	for manager.Status().Scanning && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if status := manager.Status(); status.Scanning || status.Count != 3 {
+		t.Fatalf("Status() = %#v", status)
 	}
 }

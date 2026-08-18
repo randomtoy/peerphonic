@@ -22,6 +22,7 @@ func TestLoadPrecedence(t *testing.T) {
 		"PEERPHONIC_TORRENT_PORT":                            "43000",
 		"PEERPHONIC_TORRENT_UPLOAD_LIMIT_BYTES_PER_SECOND":   "1024",
 		"PEERPHONIC_TORRENT_DOWNLOAD_LIMIT_BYTES_PER_SECOND": "2048",
+		"PEERPHONIC_SCAN_INTERVAL_SECONDS":                   "60",
 	}
 	lookup := func(key string) (string, bool) { value, ok := env[key]; return value, ok }
 
@@ -34,6 +35,7 @@ func TestLoadPrecedence(t *testing.T) {
 		"--torrent-port-forwarding=true",
 		"--torrent-upload-limit", "4096",
 		"--torrent-download-limit", "8192",
+		"--scan-interval", "120",
 	}, lookup)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -58,6 +60,9 @@ func TestLoadPrecedence(t *testing.T) {
 	}
 	if cfg.TorrentUploadLimit != 4096 || cfg.TorrentDownloadLimit != 8192 {
 		t.Errorf("torrent limits = upload %d, download %d", cfg.TorrentUploadLimit, cfg.TorrentDownloadLimit)
+	}
+	if cfg.ScanIntervalSeconds != 120 {
+		t.Errorf("ScanIntervalSeconds = %d, want 120", cfg.ScanIntervalSeconds)
 	}
 }
 
@@ -99,8 +104,19 @@ func TestDefaultsEnableTorrentSeeding(t *testing.T) {
 	t.Parallel()
 
 	cfg := Defaults()
-	if !cfg.TorrentSeed || cfg.TorrentPort != 42069 || cfg.TorrentPortForwarding {
+	if !cfg.TorrentSeed || cfg.TorrentPort != 42069 || cfg.TorrentPortForwarding || cfg.ScanIntervalSeconds != 300 {
 		t.Fatalf("torrent defaults = seed %t, port %d, forwarding %t", cfg.TorrentSeed, cfg.TorrentPort, cfg.TorrentPortForwarding)
+	}
+}
+
+func TestLoadRejectsNegativeScanInterval(t *testing.T) {
+	t.Parallel()
+
+	_, err := Load([]string{"--music", t.TempDir(), "--scan-interval", "-1"}, func(string) (string, bool) {
+		return "", false
+	})
+	if err == nil {
+		t.Fatal("Load() error = nil, want invalid scan interval error")
 	}
 }
 

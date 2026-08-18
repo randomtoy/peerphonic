@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"path/filepath"
+	"time"
 
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/blob/filesystem"
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/metadata"
@@ -103,6 +104,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 			return fail(fmt.Errorf("prune provider cache: %w", err))
 		}
 	}
+	scanManager.StartPeriodic(time.Duration(cfg.ScanIntervalSeconds) * time.Second)
 
 	streaming := services.NewStreamingService(catalog, provider, torrentProvider)
 	mux := http.NewServeMux()

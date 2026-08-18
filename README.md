@@ -8,6 +8,7 @@ changing the client-facing streaming flow.
 ## Current capabilities
 
 - recursive scanning of MP3, FLAC, Ogg/Opus, M4A, AAC, and WAV files;
+- periodic background synchronization of local music and torrent metadata;
 - tag extraction with directory/filename fallbacks and conservative repair of legacy Cyrillic encodings;
 - a migrated SQLite metadata catalog;
 - XML and JSON OpenSubsonic responses;
@@ -113,9 +114,13 @@ then CLI flags.
 | `username` | `PEERPHONIC_USERNAME` | `--username` | `admin` |
 | `password` | `PEERPHONIC_PASSWORD` | `--password` | `admin` |
 | `scan_on_start` | `PEERPHONIC_SCAN_ON_START` | `--scan` | `true` |
+| `scan_interval_seconds` | `PEERPHONIC_SCAN_INTERVAL_SECONDS` | `--scan-interval` | `300` |
 
 Use a config file with `--config peerphonic.json` or set its path through
 `PEERPHONIC_CONFIG`. See [`backend/config.example.json`](backend/config.example.json).
+The periodic scan runs independently of `scan_on_start`; set
+`scan_interval_seconds` to `0` when only manual OpenSubsonic `startScan` calls
+should update the catalog.
 
 ## Architecture
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sync"
+	"time"
 )
 
 var ErrScanInProgress = errors.New("music scan is already in progress")
@@ -47,6 +48,26 @@ func (m *Manager) Start() bool {
 		m.finish(report, err)
 	}()
 	return true
+}
+
+// StartPeriodic schedules scans until the manager context is cancelled. A tick
+// is skipped when another scan is still running.
+func (m *Manager) StartPeriodic(interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-m.ctx.Done():
+				return
+			case <-ticker.C:
+				m.Start()
+			}
+		}
+	}()
 }
 
 func (m *Manager) Status() Status {

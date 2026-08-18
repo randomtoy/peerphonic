@@ -12,5 +12,6 @@
   "torrent_download_limit_bytes_per_second": 0,
   "username": "music",
   "password": "change-me",
-  "scan_on_start": true
+  "scan_on_start": true,
+  "scan_interval_seconds": 300
 }

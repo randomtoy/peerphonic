@@ -27,20 +27,22 @@ type Config struct {
 	Username              string `json:"username"`
 	Password              string `json:"password"`
 	Scan                  bool   `json:"scan_on_start"`
+	ScanIntervalSeconds   int    `json:"scan_interval_seconds"`
 }
 
 func Defaults() Config {
 	return Config{
-		Address:        ":8080",
-		Database:       "peerphonic.db",
-		CacheDir:       "cache",
-		CacheSizeBytes: 10 << 30,
-		TorrentDir:     "torrents",
-		TorrentSeed:    true,
-		TorrentPort:    42069,
-		Username:       "admin",
-		Password:       "admin",
-		Scan:           true,
+		Address:             ":8080",
+		Database:            "peerphonic.db",
+		CacheDir:            "cache",
+		CacheSizeBytes:      10 << 30,
+		TorrentDir:          "torrents",
+		TorrentSeed:         true,
+		TorrentPort:         42069,
+		Username:            "admin",
+		Password:            "admin",
+		Scan:                true,
+		ScanIntervalSeconds: 300,
 	}
 }
 
@@ -80,6 +82,7 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	flags.StringVar(&cfg.Username, "username", cfg.Username, "OpenSubsonic username")
 	flags.StringVar(&cfg.Password, "password", cfg.Password, "OpenSubsonic password")
 	flags.BoolVar(&cfg.Scan, "scan", cfg.Scan, "scan music directory on startup")
+	flags.IntVar(&cfg.ScanIntervalSeconds, "scan-interval", cfg.ScanIntervalSeconds, "background library scan interval in seconds (0 disables it)")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -97,6 +100,9 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	}
 	if cfg.TorrentUploadLimit < 0 || cfg.TorrentDownloadLimit < 0 {
 		return Config{}, errors.New("torrent transfer limits must be non-negative")
+	}
+	if cfg.ScanIntervalSeconds < 0 {
+		return Config{}, errors.New("scan interval must be non-negative")
 	}
 
 	var err error
@@ -165,6 +171,13 @@ func applyEnv(cfg *Config, lookup func(string) (string, bool)) error {
 			return fmt.Errorf("parse PEERPHONIC_SCAN_ON_START: %w", err)
 		}
 		cfg.Scan = parsed
+	}
+	if value, ok := lookup("PEERPHONIC_SCAN_INTERVAL_SECONDS"); ok {
+		parsed, err := strconv.Atoi(value)
+		if err != nil {
+			return fmt.Errorf("parse PEERPHONIC_SCAN_INTERVAL_SECONDS: %w", err)
+		}
+		cfg.ScanIntervalSeconds = parsed
 	}
 	if value, ok := lookup("PEERPHONIC_TORRENT_SEED"); ok {
 		parsed, err := strconv.ParseBool(value)
