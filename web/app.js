@@ -408,42 +408,63 @@ function formatDuration(seconds = 0) {
   return `${minutes}:${String(total % 60).padStart(2, "0")}`;
 }
 
-function renderSoulseekResults(items) {
-  const results = [...items].sort((left, right) =>
+function renderSoulseekResults(items, collections = []) {
+  const grouped = collections.length ? collections : items.map((item) => ({
+    id: item.id,
+    name: item.album || "Unknown Album",
+    artist: item.artist || "Unknown Artist",
+    path: item.path.split("/").slice(0, -1).join("/"),
+    peer: item.peer,
+    matchedTracks: 1,
+    matchedSize: item.size,
+    formats: item.suffix ? [item.suffix.toUpperCase()] : [],
+    uploadSpeedBytesPerSecond: item.uploadSpeedBytesPerSecond,
+    queueLength: item.queueLength,
+    freeUploadSlot: item.freeUploadSlot,
+    requiresApproval: item.requiresApproval,
+    results: [item],
+  }));
+  const results = [...grouped].sort((left, right) =>
     Number(right.freeUploadSlot) - Number(left.freeUploadSlot) ||
     Number(left.requiresApproval) - Number(right.requiresApproval) ||
     (left.queueLength || 0) - (right.queueLength || 0) ||
     (right.uploadSpeedBytesPerSecond || 0) - (left.uploadSpeedBytesPerSecond || 0)
   );
-  elements.soulseekSearchCount.textContent = `${results.length} result${results.length === 1 ? "" : "s"}`;
+  elements.soulseekSearchCount.textContent = `${results.length} album${results.length === 1 ? "" : "s"} · ${items.length} match${items.length === 1 ? "" : "es"}`;
   elements.soulseekSearchResults.replaceChildren();
   if (!results.length) {
     elements.soulseekSearchResults.append(empty("No audio results arrived. Try a broader query or search again."));
     return;
   }
-  elements.soulseekSearchResults.innerHTML = results.map((item) => {
-    const availability = item.requiresApproval ? "Locked" : item.freeUploadSlot ? "Free slot" : "Queued";
+  elements.soulseekSearchResults.innerHTML = results.map((group) => {
+    const availability = group.requiresApproval ? "Locked" : group.freeUploadSlot ? "Free slot" : "Queued";
     const facts = [
-      item.suffix ? item.suffix.toUpperCase() : "Audio",
-      formatBytes(item.size),
-      item.durationSeconds ? formatDuration(item.durationSeconds) : "Unknown length",
-      item.bitRate ? `${item.bitRate} kbps` : "Unknown bitrate",
+      `${group.matchedTracks} matched track${group.matchedTracks === 1 ? "" : "s"}`,
+      formatBytes(group.matchedSize),
+      (group.formats || []).join(" / ") || "Audio",
     ];
+    const matchRows = (group.results || []).map((item) => `<li>
+      <div><span>${escapeHTML(item.title || item.path)}</span><small>${escapeHTML((item.suffix || "audio").toUpperCase())} · ${formatBytes(item.size)} · ${item.durationSeconds ? formatDuration(item.durationSeconds) : "Unknown length"}${item.bitRate ? ` · ${item.bitRate} kbps` : ""}</small></div>
+      <button class="button secondary" type="button" data-add-soulseek="track" data-source-id="${escapeHTML(item.id)}" ${item.requiresApproval ? "disabled" : ""}>${item.requiresApproval ? "Locked" : "Add track"}</button>
+    </li>`).join("");
+    const trackList = group.matchedTracks > 1
+      ? `<details class="search-matches"><summary>Show ${group.matchedTracks} matched tracks</summary><ol class="search-match-list">${matchRows}</ol></details>`
+      : `<ol class="search-match-list">${matchRows}</ol>`;
     return `<article class="source-row search-result">
       <div class="source-copy">
-        <div class="search-result-title"><h3>${escapeHTML(item.title || item.path)}</h3><span class="status ${item.requiresApproval ? "failed" : ""}">${availability}</span></div>
-        <p class="search-path">${escapeHTML(item.path)}</p>
+        <div class="search-result-title"><h3>${escapeHTML(group.artist || "Unknown Artist")} — ${escapeHTML(group.name || "Unknown Album")}</h3><span class="status ${group.requiresApproval ? "failed" : ""}">${availability}</span></div>
+        <p class="search-path">${escapeHTML(group.path)}</p>
         <p class="source-meta">${facts.map((fact) => `<span>${escapeHTML(fact)}</span>`).join("")}</p>
       </div>
       <dl class="search-peer-facts">
-        <div><dt>Peer</dt><dd>${escapeHTML(item.peer || "Unknown")}</dd></div>
-        <div><dt>Upload</dt><dd>${formatBytes(item.uploadSpeedBytesPerSecond)}/s</dd></div>
-        <div><dt>Queue</dt><dd>${Number(item.queueLength) || 0}</dd></div>
+        <div><dt>Peer</dt><dd>${escapeHTML(group.peer || "Unknown")}</dd></div>
+        <div><dt>Upload</dt><dd>${formatBytes(group.uploadSpeedBytesPerSecond)}/s</dd></div>
+        <div><dt>Queue</dt><dd>${Number(group.queueLength) || 0}</dd></div>
       </dl>
       <div class="search-actions">
-        <button class="button secondary search-add" type="button" data-add-soulseek="track" data-source-id="${escapeHTML(item.id)}" ${item.requiresApproval ? "disabled" : ""}>${item.requiresApproval ? "Locked" : "Add track"}</button>
-        <button class="button secondary search-add" type="button" data-preview-soulseek-album data-source-id="${escapeHTML(item.id)}" ${item.requiresApproval ? "disabled" : ""}>Preview album</button>
+        <button class="button secondary search-add" type="button" data-preview-soulseek-album data-source-id="${escapeHTML(group.id)}" ${group.requiresApproval ? "disabled" : ""}>Preview album</button>
       </div>
+      ${trackList}
     </article>`;
   }).join("");
 }
@@ -608,7 +629,7 @@ elements.soulseekSearchForm.addEventListener("submit", async (event) => {
       }),
     });
     const results = payload.results || [];
-    renderSoulseekResults(results);
+    renderSoulseekResults(results, payload.collections || []);
     elements.soulseekSearchMessage.textContent = results.length
       ? `Found ${results.length} audio result${results.length === 1 ? "" : "s"} for “${payload.query}”.`
       : `No audio results found for “${payload.query}”.`;

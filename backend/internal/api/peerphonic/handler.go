@@ -152,6 +152,8 @@ type sourceSearchRequest struct {
 type sourceSearchResultResponse struct {
 	ID                        string `json:"id"`
 	Title                     string `json:"title"`
+	Artist                    string `json:"artist,omitempty"`
+	Album                     string `json:"album,omitempty"`
 	Path                      string `json:"path"`
 	Size                      int64  `json:"size"`
 	DurationSeconds           int64  `json:"durationSeconds,omitempty"`
@@ -165,8 +167,25 @@ type sourceSearchResultResponse struct {
 }
 
 type sourceSearchResponse struct {
-	Query   string                       `json:"query"`
-	Results []sourceSearchResultResponse `json:"results"`
+	Query       string                           `json:"query"`
+	Results     []sourceSearchResultResponse     `json:"results"`
+	Collections []sourceSearchCollectionResponse `json:"collections"`
+}
+
+type sourceSearchCollectionResponse struct {
+	ID                        string                       `json:"id"`
+	Name                      string                       `json:"name"`
+	Artist                    string                       `json:"artist"`
+	Path                      string                       `json:"path"`
+	Peer                      string                       `json:"peer"`
+	MatchedTracks             int                          `json:"matchedTracks"`
+	MatchedSize               int64                        `json:"matchedSize"`
+	Formats                   []string                     `json:"formats"`
+	UploadSpeedBytesPerSecond int64                        `json:"uploadSpeedBytesPerSecond"`
+	QueueLength               int64                        `json:"queueLength"`
+	FreeUploadSlot            bool                         `json:"freeUploadSlot"`
+	RequiresApproval          bool                         `json:"requiresApproval"`
+	Results                   []sourceSearchResultResponse `json:"results"`
 }
 
 type sourceAdder interface {
@@ -397,7 +416,8 @@ func newHandler(
 		}
 		for _, result := range results {
 			response.Results = append(response.Results, sourceSearchResultResponse{
-				ID: result.Track.ID, Title: result.Track.Title, Path: result.DisplayPath,
+				ID: result.Track.ID, Title: result.Track.Title, Artist: result.Track.Artist,
+				Album: result.Track.Album, Path: result.DisplayPath,
 				Size: result.Track.Size, DurationSeconds: int64(result.Track.Duration / time.Second),
 				BitRate: result.Track.BitRate, Suffix: result.Track.Suffix,
 				Peer: result.Availability.Peer, UploadSpeedBytesPerSecond: result.Availability.UploadSpeed,
@@ -405,6 +425,7 @@ func newHandler(
 				RequiresApproval: result.Availability.RequiresApproval,
 			})
 		}
+		response.Collections = groupSourceSearchResults(response.Results)
 		writeJSON(writer, http.StatusOK, response)
 	})
 	mux.HandleFunc("POST /api/v1/providers/soulseek/tracks/{id}", func(writer http.ResponseWriter, request *http.Request) {
@@ -738,6 +759,81 @@ func writeSourceCollectionError(writer http.ResponseWriter, err error, action st
 	default:
 		http.Error(writer, action, http.StatusBadGateway)
 	}
+}
+
+func groupSourceSearchResults(results []sourceSearchResultResponse) []sourceSearchCollectionResponse {
+	groups := make([]sourceSearchCollectionResponse, 0, len(results))
+	indexes := make(map[string]int, len(results))
+	for _, result := range results {
+		directory := sourceResultDirectory(result.Path)
+		key := result.Peer + "\x00" + directory + "\x00" + strconv.FormatBool(result.RequiresApproval)
+		index, ok := indexes[key]
+		if !ok {
+			name := strings.TrimSpace(result.Album)
+			if name == "" {
+				name = sourceResultDirectoryName(directory)
+			}
+			artist := strings.TrimSpace(result.Artist)
+			if artist == "" {
+				artist = "Unknown Artist"
+			}
+			groups = append(groups, sourceSearchCollectionResponse{
+				ID: result.ID, Name: name, Artist: artist, Path: directory, Peer: result.Peer,
+				UploadSpeedBytesPerSecond: result.UploadSpeedBytesPerSecond,
+				QueueLength:               result.QueueLength, FreeUploadSlot: result.FreeUploadSlot,
+				RequiresApproval: result.RequiresApproval,
+				Results:          make([]sourceSearchResultResponse, 0, 1),
+			})
+			index = len(groups) - 1
+			indexes[key] = index
+		}
+		group := &groups[index]
+		group.Results = append(group.Results, result)
+		group.MatchedTracks++
+		group.MatchedSize += result.Size
+		if result.UploadSpeedBytesPerSecond > group.UploadSpeedBytesPerSecond {
+			group.UploadSpeedBytesPerSecond = result.UploadSpeedBytesPerSecond
+		}
+		if result.FreeUploadSlot {
+			group.FreeUploadSlot = true
+		}
+		if result.QueueLength < group.QueueLength {
+			group.QueueLength = result.QueueLength
+		}
+		format := strings.ToUpper(strings.TrimSpace(result.Suffix))
+		if format != "" && !stringSliceContains(group.Formats, format) {
+			group.Formats = append(group.Formats, format)
+		}
+	}
+	return groups
+}
+
+func sourceResultDirectory(path string) string {
+	path = strings.Trim(strings.ReplaceAll(strings.TrimSpace(path), "\\", "/"), "/")
+	if index := strings.LastIndex(path, "/"); index >= 0 {
+		return path[:index]
+	}
+	return ""
+}
+
+func sourceResultDirectoryName(path string) string {
+	if index := strings.LastIndex(path, "/"); index >= 0 {
+		path = path[index+1:]
+	}
+	path = strings.TrimSpace(path)
+	if path == "" {
+		return "Unknown Album"
+	}
+	return path
+}
+
+func stringSliceContains(values []string, candidate string) bool {
+	for _, value := range values {
+		if value == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func newLibraryScanResponse(status scanner.Status) libraryScanResponse {

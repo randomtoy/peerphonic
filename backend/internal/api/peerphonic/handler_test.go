@@ -2,6 +2,7 @@ package peerphonic
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -370,16 +371,28 @@ func TestSoulseekProviderStatus(t *testing.T) {
 func TestSoulseekSearchRequiresPermissionAndReturnsGenericResults(t *testing.T) {
 	t.Parallel()
 
-	searcher := &sourceSearcherStub{results: []domain.TrackSource{{
-		Track: domain.Track{
-			ID: "soulseek_opaque", Title: "Angel", Size: 12_000, Duration: 6 * time.Minute,
-			BitRate: 320, Suffix: "mp3",
+	searcher := &sourceSearcherStub{results: []domain.TrackSource{
+		{
+			Track: domain.Track{
+				ID: "soulseek_opaque", Title: "Angel", Artist: "Massive Attack", Album: "Mezzanine",
+				Size: 12_000, Duration: 6 * time.Minute, BitRate: 320, Suffix: "mp3",
+			},
+			DisplayPath: "Massive Attack/Mezzanine/01 Angel.mp3",
+			Availability: domain.SourceAvailability{
+				Peer: "peer-one", UploadSpeed: 1_048_576, QueueLength: 2, FreeUploadSlot: true,
+			},
 		},
-		DisplayPath: "Massive Attack/Mezzanine/01 Angel.mp3",
-		Availability: domain.SourceAvailability{
-			Peer: "peer-one", UploadSpeed: 1_048_576, QueueLength: 2, FreeUploadSlot: true,
+		{
+			Track: domain.Track{
+				ID: "soulseek_second", Title: "Risingson", Artist: "Massive Attack", Album: "Mezzanine",
+				Size: 24_000, Duration: 5 * time.Minute, BitRate: 1000, Suffix: "flac",
+			},
+			DisplayPath: "Massive Attack/Mezzanine/02 Risingson.flac",
+			Availability: domain.SourceAvailability{
+				Peer: "peer-one", UploadSpeed: 1_048_576, QueueLength: 2, FreeUploadSlot: true,
+			},
 		},
-	}}}
+	}}
 	handler := newHandler(
 		nil, nil, nil, nil, nil, nil,
 		fixedAuthenticator{username: "alice", password: "secret"}, nil, nil, searcher, nil, nil,
@@ -399,11 +412,18 @@ func TestSoulseekSearchRequiresPermissionAndReturnsGenericResults(t *testing.T) 
 	request.SetBasicAuth("alice", "secret")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
+	var payload sourceSearchResponse
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
 	if response.Code != http.StatusOK || searcher.query.Text != "Massive Attack" || searcher.query.Limit != 25 ||
 		!strings.Contains(response.Body.String(), `"id":"soulseek_opaque"`) ||
 		!strings.Contains(response.Body.String(), `"path":"Massive Attack/Mezzanine/01 Angel.mp3"`) ||
 		!strings.Contains(response.Body.String(), `"uploadSpeedBytesPerSecond":1048576`) ||
-		!strings.Contains(response.Body.String(), `"durationSeconds":360`) {
+		!strings.Contains(response.Body.String(), `"durationSeconds":360`) ||
+		len(payload.Collections) != 1 || payload.Collections[0].Name != "Mezzanine" ||
+		payload.Collections[0].MatchedTracks != 2 || payload.Collections[0].MatchedSize != 36_000 ||
+		len(payload.Collections[0].Formats) != 2 || len(payload.Collections[0].Results) != 2 {
 		t.Fatalf("status = %d, query = %#v, body = %s", response.Code, searcher.query, response.Body.String())
 	}
 }
@@ -437,6 +457,22 @@ func TestSoulseekSearchValidatesRequestAndRequiresConfiguredProvider(t *testing.
 	configured.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("invalid status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestSoulseekSearchGroupingKeepsPeersAndLockedFilesSeparate(t *testing.T) {
+	t.Parallel()
+
+	results := []sourceSearchResultResponse{
+		{ID: "one", Path: `Artist\Album\01.mp3`, Peer: "peer-one"},
+		{ID: "two", Path: "Artist/Album/02.flac", Peer: "peer-one"},
+		{ID: "three", Path: "Artist/Album/01.mp3", Peer: "peer-two"},
+		{ID: "locked", Path: "Artist/Album/03.mp3", Peer: "peer-one", RequiresApproval: true},
+	}
+	groups := groupSourceSearchResults(results)
+	if len(groups) != 3 || groups[0].MatchedTracks != 2 || len(groups[0].Results) != 2 ||
+		groups[1].Peer != "peer-two" || !groups[2].RequiresApproval {
+		t.Fatalf("groupSourceSearchResults() = %#v", groups)
 	}
 }
 

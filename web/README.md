@@ -21,7 +21,8 @@ connected Soulseek peers, shows audio files, queues, upload speeds, and free
 slots, and lets an authorized user add one unlocked result or preview the track
 list, duration, size, and cover availability of its remote album before importing
 the directory without starting audio downloads. Matching cover artwork is
-cached on demand. Playback later starts the single-file transfer and reuses
+cached on demand. Search matches from the same peer and directory are grouped
+into one album card, with individual track controls retained inside it. Playback later starts the single-file transfer and reuses
 the completed file from the shared cache. The Activity workspace combines
 torrent and Soulseek jobs, including queued and cancelled states. Accounts with
 source-management access can cancel an active Soulseek transfer or retry a

@@ -210,6 +210,10 @@ are recorded atomically under `<cache>/soulseek/jobs`; after a Peerphonic
 restart, monitoring reconnects to the existing slskd batch instead of enqueueing
 the file again.
 
+Search responses also group matches from the same peer and remote directory into
+album candidates while retaining every matched track for individual selection.
+Locked files and copies from different peers remain separate candidates.
+
 When a Soulseek file completes, Peerphonic extracts its audio tags and embedded
 artwork through the same metadata boundary used for completed torrent tracks.
 The provisional album identity is kept stable so one enriched track cannot
