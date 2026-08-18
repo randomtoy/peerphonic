@@ -394,3 +394,7 @@ depend on it. The container deployment serves the dashboard on port `8081` and
 the OpenSubsonic backend on port `8080`. See `deploy/README.md` for startup
 instructions. A Kubernetes chart with an optional colocated slskd sidecar is
 available under `deploy/helm/peerphonic`.
+
+GitHub Actions validate the Go backend, dashboard JavaScript, container builds,
+and Helm chart on every push and pull request. Pushing a `vX.Y.Z` tag publishes
+multi-architecture backend and web images plus the packaged Helm chart to GHCR.

@@ -11,8 +11,10 @@ scaling requires a different metadata and provider topology.
 
 ## Images
 
-Build and publish the backend and web images before installing, then override
-their repositories and tags. The official slskd image is used by default.
+Version tags publish the backend and web images to GitHub Container Registry.
+The packaged chart selects the matching image tag from its `appVersion`. For
+local development, build both images and override their repositories and tags.
+The official slskd image is used by default.
 
 ```bash
 docker build -f deploy/Dockerfile -t registry.example/peerphonic:latest .
@@ -26,14 +28,6 @@ docker push registry.example/peerphonic-web:latest
 Create a values file that is not committed to source control:
 
 ```yaml
-peerphonic:
-  image:
-    repository: registry.example/peerphonic
-
-web:
-  image:
-    repository: registry.example/peerphonic-web
-
 auth:
   adminPassword: replace-this-password
 
@@ -56,6 +50,23 @@ Install the chart:
 helm upgrade --install peerphonic deploy/helm/peerphonic \
   --namespace peerphonic --create-namespace \
   -f peerphonic-values.yaml
+```
+
+Published chart versions can also be installed directly from GHCR:
+
+```bash
+helm upgrade --install peerphonic \
+  oci://ghcr.io/randomtoy/charts/peerphonic \
+  --version 0.1.0 \
+  --namespace peerphonic --create-namespace \
+  -f peerphonic-values.yaml
+```
+
+Creating and pushing a semantic version tag runs the release workflow:
+
+```bash
+git tag v0.1.0
+git push origin v0.1.0
 ```
 
 Instead of placing credentials in a values file, create a Secret and set
@@ -103,4 +114,3 @@ file is still downloading.
 
 Use `persistence.existingClaim` to retain an already provisioned PVC. Set
 `persistence.enabled=false` only for disposable testing.
-

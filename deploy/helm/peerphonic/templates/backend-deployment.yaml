@@ -46,7 +46,7 @@ spec:
       {{- end }}
       containers:
         - name: peerphonic
-          image: "{{ .Values.peerphonic.image.repository }}:{{ .Values.peerphonic.image.tag }}"
+          image: "{{ .Values.peerphonic.image.repository }}:{{ default .Chart.AppVersion .Values.peerphonic.image.tag }}"
           imagePullPolicy: {{ .Values.peerphonic.image.pullPolicy }}
           securityContext:
             {{- toYaml .Values.peerphonic.securityContext | nindent 12 }}

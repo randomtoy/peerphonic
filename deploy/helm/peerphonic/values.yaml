@@ -3,8 +3,8 @@ fullnameOverride: ""
 
 peerphonic:
   image:
-    repository: peerphonic
-    tag: latest
+    repository: ghcr.io/randomtoy/peerphonic
+    tag: ""
     pullPolicy: IfNotPresent
   imagePullSecrets: []
   cacheSizeBytes: "10737418240"
@@ -40,8 +40,8 @@ web:
   enabled: true
   replicaCount: 1
   image:
-    repository: peerphonic-web
-    tag: latest
+    repository: ghcr.io/randomtoy/peerphonic-web
+    tag: ""
     pullPolicy: IfNotPresent
   service:
     type: ClusterIP

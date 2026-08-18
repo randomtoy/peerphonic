@@ -1,0 +1,116 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.value }}
+    steps:
+      - name: Validate semantic version tag
+        id: version
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+            echo "release tag must match vX.Y.Z or vX.Y.Z-suffix" >&2
+            exit 1
+          fi
+          echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+  images:
+    name: Publish ${{ matrix.image }}
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - image: peerphonic
+            dockerfile: deploy/Dockerfile
+          - image: peerphonic-web
+            dockerfile: web/Dockerfile
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4.2.0
+      - name: Log in to GHCR
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Generate image metadata
+        id: metadata
+        uses: docker/metadata-action@v6.2.0
+        with:
+          images: ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest,enable=${{ !contains(github.ref_name, '-') }}
+      - name: Build and publish image
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.metadata.outputs.tags }}
+          labels: ${{ steps.metadata.outputs.labels }}
+          cache-from: type=gha,scope=release-${{ matrix.image }}
+          cache-to: type=gha,mode=max,scope=release-${{ matrix.image }}
+          provenance: true
+          sbom: true
+
+  chart:
+    name: Publish Helm chart
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+      - name: Set up Helm
+        uses: azure/setup-helm@v5.0.1
+        with:
+          version: v4.1.1
+      - name: Lint chart
+        run: >-
+          helm lint --strict deploy/helm/peerphonic
+          --set auth.existingSecret=peerphonic-auth
+      - name: Package chart
+        run: >-
+          helm package deploy/helm/peerphonic
+          --destination dist
+          --version "${{ needs.validate.outputs.version }}"
+          --app-version "${{ needs.validate.outputs.version }}"
+      - name: Log in to GHCR
+        shell: bash
+        run: echo "${{ secrets.GITHUB_TOKEN }}" | helm registry login ghcr.io --username "${{ github.actor }}" --password-stdin
+      - name: Publish chart
+        shell: bash
+        run: helm push "dist/peerphonic-${{ needs.validate.outputs.version }}.tgz" "oci://ghcr.io/${{ github.repository_owner }}/charts"
+      - name: Upload packaged chart
+        uses: actions/upload-artifact@v7.0.1
+        with:
+          name: peerphonic-chart-${{ needs.validate.outputs.version }}
+          path: dist/peerphonic-${{ needs.validate.outputs.version }}.tgz
+          if-no-files-found: error

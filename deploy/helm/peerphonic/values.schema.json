@@ -5,6 +5,13 @@
     "peerphonic": {
       "type": "object",
       "properties": {
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string" }
+          }
+        },
         "cacheSizeBytes": { "type": "string", "pattern": "^[0-9]+$" },
         "scanIntervalSeconds": { "type": "integer", "minimum": 0 },
         "torrent": {
@@ -25,6 +32,13 @@
     "web": {
       "type": "object",
       "properties": {
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string" }
+          }
+        },
         "replicaCount": { "type": "integer", "minimum": 1 },
         "service": {
           "type": "object",
