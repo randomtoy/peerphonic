@@ -56,6 +56,10 @@
             <span class="nav-icon" aria-hidden="true">04</span>
             <span><strong>Users</strong><small>Accounts and access</small></span>
           </button>
+          <button class="nav-item" type="button" data-page="settings" data-required-permission="sources.manage">
+            <span class="nav-icon" aria-hidden="true">05</span>
+            <span><strong>Settings</strong><small>Transfer limits</small></span>
+          </button>
         </nav>
         <div class="account-card">
           <span id="account-avatar" class="account-avatar" aria-hidden="true">A</span>
@@ -160,6 +164,23 @@
             </details>
             <p id="user-message" class="form-message" role="status"></p>
             <div id="users" class="source-list"></div>
+          </section>
+        </section>
+
+        <section class="dashboard-page" data-page-panel="settings" hidden>
+          <section class="panel" aria-labelledby="transfer-settings-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">TORRENT NETWORK</p><h2 id="transfer-settings-title">Bandwidth limits</h2><p class="section-description">Limit total torrent traffic across all active sources. Changes apply immediately and persist across restarts.</p></div>
+            </div>
+            <form id="transfer-settings-form" class="settings-form">
+              <label>Download limit <span>MiB/s · 0 is unlimited</span><input id="download-limit" name="downloadLimit" type="number" min="0" step="any" inputmode="decimal" required></label>
+              <label>Upload limit <span>MiB/s · 0 is unlimited</span><input id="upload-limit" name="uploadLimit" type="number" min="0" step="any" inputmode="decimal" required></label>
+              <div class="settings-submit">
+                <p id="transfer-settings-summary" class="section-description"></p>
+                <button class="button primary" type="submit">Save limits</button>
+              </div>
+            </form>
+            <p id="transfer-settings-message" class="form-message" role="status"></p>
           </section>
         </section>
       </div>

@@ -47,11 +47,14 @@ type Provider struct {
 	metadataRoot string
 	dataRoot     string
 	options      StreamingOptions
+	optionsMu    sync.RWMutex
 
-	clientMu  sync.Mutex
-	client    *torrentclient.Client
-	operation sync.RWMutex
-	legacyMu  sync.Mutex
+	clientMu        sync.Mutex
+	client          *torrentclient.Client
+	uploadLimiter   *rate.Limiter
+	downloadLimiter *rate.Limiter
+	operation       sync.RWMutex
+	legacyMu        sync.Mutex
 
 	cacheMu        sync.Mutex
 	cacheFiles     map[string]cacheFile
@@ -157,6 +160,36 @@ func NewStreaming(metadataRoot, dataRoot string, options ...StreamingOptions) (*
 }
 
 func (*Provider) Name() string { return Name }
+
+func (p *Provider) TransferLimits(ctx context.Context) (domain.TransferLimits, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.TransferLimits{}, err
+	}
+	p.optionsMu.RLock()
+	defer p.optionsMu.RUnlock()
+	return domain.TransferLimits{
+		UploadBytesPerSecond:   p.options.UploadLimit,
+		DownloadBytesPerSecond: p.options.DownloadLimit,
+	}, nil
+}
+
+func (p *Provider) SetTransferLimits(ctx context.Context, limits domain.TransferLimits) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if limits.UploadBytesPerSecond < 0 || limits.DownloadBytesPerSecond < 0 {
+		return fmt.Errorf("transfer limits must be non-negative")
+	}
+	p.clientMu.Lock()
+	defer p.clientMu.Unlock()
+	p.optionsMu.Lock()
+	p.options.UploadLimit = limits.UploadBytesPerSecond
+	p.options.DownloadLimit = limits.DownloadBytesPerSecond
+	p.optionsMu.Unlock()
+	setRateLimit(p.uploadLimiter, limits.UploadBytesPerSecond)
+	setRateLimit(p.downloadLimiter, limits.DownloadBytesPerSecond)
+	return nil
+}
 
 func (*Provider) Search(context.Context, domain.SearchQuery) ([]domain.TrackSource, error) {
 	return nil, nil
@@ -270,6 +303,10 @@ func (p *Provider) Transfers(ctx context.Context) ([]domain.SourceTransfer, erro
 		streams[infoHash] = count
 	}
 	p.cacheMu.Unlock()
+	limits, err := p.TransferLimits(ctx)
+	if err != nil {
+		return nil, err
+	}
 
 	torrents := client.Torrents()
 	transfers := make([]domain.SourceTransfer, 0, len(torrents))
@@ -284,8 +321,8 @@ func (p *Provider) Transfers(ctx context.Context) ([]domain.SourceTransfer, erro
 			CompletedBytes: torrent.BytesCompleted(), TotalBytes: torrent.Length(),
 			DownloadedBytes: stats.BytesReadUsefulData.Int64(),
 			UploadedBytes:   stats.BytesWrittenData.Int64(),
-			DownloadLimit:   p.options.DownloadLimit,
-			UploadLimit:     p.options.UploadLimit,
+			DownloadLimit:   limits.DownloadBytesPerSecond,
+			UploadLimit:     limits.UploadBytesPerSecond,
 			Peers:           stats.TotalPeers, ActivePeers: stats.ActivePeers,
 			ConnectedSeeders: stats.ConnectedSeeders,
 			ActiveStreams:    streams[infoHash],
@@ -469,6 +506,8 @@ func (p *Provider) Close() error {
 	p.clientMu.Lock()
 	client := p.client
 	p.client = nil
+	p.uploadLimiter = nil
+	p.downloadLimiter = nil
 	p.clientMu.Unlock()
 	var err error
 	if client != nil {
@@ -778,18 +817,23 @@ func (p *Provider) ensureClient() (*torrentclient.Client, error) {
 		return nil, fmt.Errorf("create torrent data directory: %w", err)
 	}
 	config := torrentclient.NewDefaultClientConfig()
+	p.optionsMu.RLock()
+	options := p.options
+	p.optionsMu.RUnlock()
 	config.DataDir = p.dataRoot
 	config.DefaultStorage = storage.NewFileByInfoHash(p.dataRoot)
-	config.ListenPort = p.options.ListenPort
-	config.NoDefaultPortForwarding = !p.options.PortForwarding
-	config.Seed = p.options.Seed
-	applyTransferLimits(config, p.options)
+	config.ListenPort = options.ListenPort
+	config.NoDefaultPortForwarding = !options.PortForwarding
+	config.Seed = options.Seed
+	applyTransferLimits(config, options)
 	config.Slogger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	client, err := torrentclient.NewClient(config)
 	if err != nil {
 		return nil, fmt.Errorf("start torrent client: %w", err)
 	}
 	p.client = client
+	p.uploadLimiter = config.UploadRateLimiter
+	p.downloadLimiter = config.DownloadRateLimiter
 	return client, nil
 }
 
@@ -803,6 +847,17 @@ func applyTransferLimits(config *torrentclient.ClientConfig, options StreamingOp
 	if options.DownloadLimit > 0 {
 		config.DownloadRateLimiter = rate.NewLimiter(rate.Limit(options.DownloadLimit), 0)
 	}
+}
+
+func setRateLimit(limiter *rate.Limiter, bytesPerSecond int64) {
+	if limiter == nil {
+		return
+	}
+	limit := rate.Inf
+	if bytesPerSecond > 0 {
+		limit = rate.Limit(bytesPerSecond)
+	}
+	limiter.SetLimit(limit)
 }
 
 func parseSourceKey(key string) (infoHash, logicalPath string, err error) {

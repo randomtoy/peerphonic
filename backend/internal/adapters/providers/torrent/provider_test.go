@@ -16,6 +16,7 @@ import (
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
+	"golang.org/x/time/rate"
 )
 
 func TestReadCatalogBuildsProvisionalAudioMetadata(t *testing.T) {
@@ -364,6 +365,41 @@ func TestApplyTransferLimits(t *testing.T) {
 	}
 	if got := int64(clientConfig.DownloadRateLimiter.Limit()); got != 2048 {
 		t.Fatalf("download limit = %d, want 2048", got)
+	}
+}
+
+func TestProviderUpdatesTransferLimitsAtRuntime(t *testing.T) {
+	t.Parallel()
+
+	provider, err := NewStreaming(t.TempDir(), t.TempDir(), StreamingOptions{
+		UploadLimit: 1024, DownloadLimit: 2048,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer provider.Close()
+	if _, err := provider.ensureClient(); err != nil {
+		t.Fatal(err)
+	}
+	updated := domain.TransferLimits{UploadBytesPerSecond: 4096, DownloadBytesPerSecond: 8192}
+	if err := provider.SetTransferLimits(context.Background(), updated); err != nil {
+		t.Fatal(err)
+	}
+	got, err := provider.TransferLimits(context.Background())
+	if err != nil || got != updated {
+		t.Fatalf("TransferLimits() = %#v, %v", got, err)
+	}
+	if limit := int64(provider.uploadLimiter.Limit()); limit != updated.UploadBytesPerSecond {
+		t.Fatalf("upload limiter = %d", limit)
+	}
+	if limit := int64(provider.downloadLimiter.Limit()); limit != updated.DownloadBytesPerSecond {
+		t.Fatalf("download limiter = %d", limit)
+	}
+	if err := provider.SetTransferLimits(context.Background(), domain.TransferLimits{}); err != nil {
+		t.Fatal(err)
+	}
+	if provider.uploadLimiter.Limit() != rate.Inf || provider.downloadLimiter.Limit() != rate.Inf {
+		t.Fatal("zero limits did not restore unlimited transfer rates")
 	}
 }
 

@@ -73,6 +73,10 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	if err != nil {
 		return fail(err)
 	}
+	transferSettings := services.NewTransferSettingsService(catalog, torrentProvider)
+	if err := transferSettings.Initialize(ctx); err != nil {
+		return fail(fmt.Errorf("initialize transfer settings: %w", err))
+	}
 	blobs, err := filesystem.New(cfg.CacheDir)
 	if err != nil {
 		return fail(err)
@@ -135,7 +139,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	))
 	mux.Handle("/", peerphonic.NewHandlerWithAuthenticator(
 		cacheStatus, torrentImporter, magnetImporter, torrentManager, torrentProvider, torrentProvider,
-		userService, userService, scanManager,
+		userService, userService, transferSettings, scanManager,
 	))
 	return &application{
 		handler: mux, catalog: catalog, torrentProvider: torrentProvider, magnetImporter: magnetImporter,

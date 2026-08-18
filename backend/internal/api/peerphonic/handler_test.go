@@ -29,6 +29,10 @@ type scanControllerStub struct {
 	starts int
 }
 
+type transferSettingsManagerStub struct {
+	limits domain.TransferLimits
+}
+
 type uriImporterStub struct {
 	uri   string
 	items []domain.SourceImport
@@ -88,6 +92,19 @@ func (s *scanControllerStub) Start() bool {
 }
 
 func (s *scanControllerStub) Status() scanner.Status { return s.status }
+
+func (s *transferSettingsManagerStub) Limits(
+	context.Context, domain.User,
+) (domain.TransferLimits, error) {
+	return s.limits, nil
+}
+
+func (s *transferSettingsManagerStub) UpdateLimits(
+	_ context.Context, _ domain.User, limits domain.TransferLimits,
+) (domain.TransferLimits, error) {
+	s.limits = limits
+	return limits, nil
+}
 
 func (s *uriImporterStub) ImportURI(_ context.Context, uri string) (domain.SourceImport, error) {
 	s.uri = uri
@@ -212,6 +229,43 @@ func TestLibraryScanStatusAndStartRequireAuthentication(t *testing.T) {
 	handler.ServeHTTP(secondResponse, secondRequest)
 	if secondResponse.Code != http.StatusOK || scans.starts != 2 {
 		t.Fatalf("second status = %d, starts = %d", secondResponse.Code, scans.starts)
+	}
+}
+
+func TestTransferSettingsRequireAuthenticationAndUpdate(t *testing.T) {
+	t.Parallel()
+
+	settings := &transferSettingsManagerStub{limits: domain.TransferLimits{
+		UploadBytesPerSecond: 1024, DownloadBytesPerSecond: 2048,
+	}}
+	handler := newHandler(
+		nil, nil, nil, nil, nil, nil,
+		fixedAuthenticator{username: "alice", password: "secret"}, nil, settings, nil,
+	)
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/v1/settings/transfers", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d", unauthorized.Code)
+	}
+
+	getRequest := httptest.NewRequest(http.MethodGet, "/api/v1/settings/transfers", nil)
+	getRequest.SetBasicAuth("alice", "secret")
+	getResponse := httptest.NewRecorder()
+	handler.ServeHTTP(getResponse, getRequest)
+	if getResponse.Code != http.StatusOK ||
+		!strings.Contains(getResponse.Body.String(), `"downloadLimitBytesPerSecond":2048`) {
+		t.Fatalf("status = %d, body = %s", getResponse.Code, getResponse.Body.String())
+	}
+
+	putRequest := httptest.NewRequest(http.MethodPut, "/api/v1/settings/transfers", strings.NewReader(
+		`{"uploadLimitBytesPerSecond":4096,"downloadLimitBytesPerSecond":8192}`,
+	))
+	putRequest.SetBasicAuth("alice", "secret")
+	putResponse := httptest.NewRecorder()
+	handler.ServeHTTP(putResponse, putRequest)
+	if putResponse.Code != http.StatusOK || settings.limits.UploadBytesPerSecond != 4096 ||
+		settings.limits.DownloadBytesPerSecond != 8192 {
+		t.Fatalf("status = %d, limits = %#v, body = %s", putResponse.Code, settings.limits, putResponse.Body.String())
 	}
 }
 

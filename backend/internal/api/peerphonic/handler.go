@@ -13,6 +13,7 @@ import (
 
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
+	"github.com/randomtoy/peerphonic/backend/internal/core/services"
 	"github.com/randomtoy/peerphonic/backend/internal/scanner"
 )
 
@@ -130,6 +131,11 @@ type libraryScanResponse struct {
 	LastFinishedAt string `json:"lastFinishedAt,omitempty"`
 }
 
+type transferSettingsResponse struct {
+	UploadLimitBytesPerSecond   int64 `json:"uploadLimitBytesPerSecond"`
+	DownloadLimitBytesPerSecond int64 `json:"downloadLimitBytesPerSecond"`
+}
+
 func NewHandler(
 	cache cacheStatus,
 	torrentImporter ports.SourceImporter,
@@ -146,7 +152,7 @@ func NewHandler(
 	}
 	return newHandler(
 		cache, torrentImporter, uriImporter, sources, transfers, downloads,
-		fixedAuthenticator{username: username, password: password}, nil, scan,
+		fixedAuthenticator{username: username, password: password}, nil, nil, scan,
 	)
 }
 
@@ -159,13 +165,14 @@ func NewHandlerWithAuthenticator(
 	downloads ports.TrackDownloadMonitor,
 	authenticator ports.Authenticator,
 	users ports.UserManager,
+	settings ports.TransferSettingsManager,
 	scans ...scanController,
 ) http.Handler {
 	var scan scanController
 	if len(scans) > 0 {
 		scan = scans[0]
 	}
-	return newHandler(cache, torrentImporter, uriImporter, sources, transfers, downloads, authenticator, users, scan)
+	return newHandler(cache, torrentImporter, uriImporter, sources, transfers, downloads, authenticator, users, settings, scan)
 }
 
 func newHandler(
@@ -177,6 +184,7 @@ func newHandler(
 	downloads ports.TrackDownloadMonitor,
 	authenticator ports.Authenticator,
 	users ports.UserManager,
+	settings ports.TransferSettingsManager,
 	scans scanController,
 ) http.Handler {
 	mux := http.NewServeMux()
@@ -210,6 +218,47 @@ func newHandler(
 				status = http.StatusOK
 			}
 			writeJSON(writer, status, newLibraryScanResponse(scans.Status()))
+		})
+	}
+	if settings != nil {
+		mux.HandleFunc("GET /api/v1/settings/transfers", func(writer http.ResponseWriter, request *http.Request) {
+			actor, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage)
+			if !ok {
+				return
+			}
+			limits, err := settings.Limits(request.Context(), actor)
+			if err != nil {
+				writeTransferSettingsError(writer, err)
+				return
+			}
+			writeJSON(writer, http.StatusOK, newTransferSettingsResponse(limits))
+		})
+		mux.HandleFunc("PUT /api/v1/settings/transfers", func(writer http.ResponseWriter, request *http.Request) {
+			actor, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage)
+			if !ok {
+				return
+			}
+			request.Body = http.MaxBytesReader(writer, request.Body, 16<<10)
+			decoder := json.NewDecoder(request.Body)
+			decoder.DisallowUnknownFields()
+			var payload transferSettingsResponse
+			if err := decoder.Decode(&payload); err != nil {
+				http.Error(writer, "invalid transfer settings", http.StatusBadRequest)
+				return
+			}
+			if err := decoder.Decode(&struct{}{}); err != io.EOF {
+				http.Error(writer, "invalid transfer settings", http.StatusBadRequest)
+				return
+			}
+			limits, err := settings.UpdateLimits(request.Context(), actor, domain.TransferLimits{
+				UploadBytesPerSecond:   payload.UploadLimitBytesPerSecond,
+				DownloadBytesPerSecond: payload.DownloadLimitBytesPerSecond,
+			})
+			if err != nil {
+				writeTransferSettingsError(writer, err)
+				return
+			}
+			writeJSON(writer, http.StatusOK, newTransferSettingsResponse(limits))
 		})
 	}
 	if cache != nil {
@@ -434,6 +483,24 @@ func newLibraryScanResponse(status scanner.Status) libraryScanResponse {
 		response.LastFinishedAt = status.LastFinishedAt.Format(time.RFC3339)
 	}
 	return response
+}
+
+func newTransferSettingsResponse(limits domain.TransferLimits) transferSettingsResponse {
+	return transferSettingsResponse{
+		UploadLimitBytesPerSecond:   limits.UploadBytesPerSecond,
+		DownloadLimitBytesPerSecond: limits.DownloadBytesPerSecond,
+	}
+}
+
+func writeTransferSettingsError(writer http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, services.ErrInvalidSettings):
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+	case errors.Is(err, ports.ErrForbidden):
+		http.Error(writer, "operation is not permitted", http.StatusForbidden)
+	default:
+		http.Error(writer, "manage transfer settings", http.StatusInternalServerError)
+	}
 }
 
 func newSourceImportResponse(item domain.SourceImport) sourceImportResponse {

@@ -37,6 +37,11 @@ const elements = {
   scanButton: document.querySelector("#scan-now"),
   scanState: document.querySelector("#scan-state"),
   scanSummary: document.querySelector("#scan-summary"),
+  transferSettingsForm: document.querySelector("#transfer-settings-form"),
+  downloadLimit: document.querySelector("#download-limit"),
+  uploadLimit: document.querySelector("#upload-limit"),
+  transferSettingsSummary: document.querySelector("#transfer-settings-summary"),
+  transferSettingsMessage: document.querySelector("#transfer-settings-message"),
   updatedAt: document.querySelector("#updated-at"),
   addSourceSection: document.querySelector("#add-source-section"),
   downloadsSection: document.querySelector("#downloads-section"),
@@ -89,7 +94,14 @@ const pages = {
     title: "Users and permissions",
     description: "Manage accounts and delegate access to individual features.",
   },
+  settings: {
+    eyebrow: "SERVER CONFIGURATION",
+    title: "Settings",
+    description: "Tune network behavior without restarting Peerphonic.",
+  },
 };
+
+const mebibyte = 1024 * 1024;
 
 function api(path, options = {}) {
   return fetch(path, {
@@ -337,6 +349,15 @@ function renderLibraryScan(status) {
   elements.scanSummary.textContent = "No library scan has completed since the server started.";
 }
 
+function renderTransferSettings(settings) {
+  const download = settings.downloadLimitBytesPerSecond || 0;
+  const upload = settings.uploadLimitBytesPerSecond || 0;
+  elements.downloadLimit.value = download ? String(Math.round((download / mebibyte) * 1000) / 1000) : "0";
+  elements.uploadLimit.value = upload ? String(Math.round((upload / mebibyte) * 1000) / 1000) : "0";
+  const describe = (value) => value ? `${formatBytes(value)}/s` : "Unlimited";
+  elements.transferSettingsSummary.textContent = `Download ${describe(download)} · Upload ${describe(upload)}`;
+}
+
 async function refresh() {
   if (!state.authorization) return;
   elements.refresh.disabled = true;
@@ -346,7 +367,7 @@ async function refresh() {
     const canMonitor = allowed.has(permissions.monitoring);
     const canManageSources = allowed.has(permissions.sources);
     const canManageUsers = allowed.has(permissions.users);
-    const [cache, importPayload, downloadPayload, transferPayload, sourcePayload, userPayload, scanStatus] = await Promise.all([
+    const [cache, importPayload, downloadPayload, transferPayload, sourcePayload, userPayload, scanStatus, transferSettings] = await Promise.all([
       canMonitor ? api("/api/v1/cache/status") : Promise.resolve({}),
       canManageSources ? api("/api/v1/imports") : Promise.resolve({ imports: [] }),
       canMonitor ? api("/api/v1/downloads") : Promise.resolve({ downloads: [] }),
@@ -354,6 +375,7 @@ async function refresh() {
       canManageSources ? api("/api/v1/torrents") : Promise.resolve({ sources: [] }),
       canManageUsers ? api("/api/v1/users") : Promise.resolve({ users: [] }),
       canManageSources ? api("/api/v1/library/scan") : Promise.resolve({}),
+      canManageSources ? api("/api/v1/settings/transfers") : Promise.resolve({}),
     ]);
     const imports = importPayload.imports || [];
     const downloads = downloadPayload.downloads || [];
@@ -373,6 +395,7 @@ async function refresh() {
     renderSources(sources);
     renderUsers(users, session);
     if (canManageSources) renderLibraryScan(scanStatus);
+    if (canManageSources) renderTransferSettings(transferSettings);
     elements.updatedAt.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
     elements.loginError.textContent = "";
     showDashboard(true);
@@ -421,6 +444,31 @@ elements.scanButton.addEventListener("click", async () => {
     elements.scanState.className = "pill failed";
     elements.scanState.textContent = "Failed";
     elements.scanSummary.textContent = error.message;
+  }
+});
+elements.transferSettingsForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = elements.transferSettingsForm.querySelector("button[type=submit]");
+  button.disabled = true;
+  elements.transferSettingsMessage.className = "form-message";
+  elements.transferSettingsMessage.textContent = "Saving transfer limits…";
+  try {
+    const settings = await api("/api/v1/settings/transfers", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        downloadLimitBytesPerSecond: Math.round(Number(elements.downloadLimit.value) * mebibyte),
+        uploadLimitBytesPerSecond: Math.round(Number(elements.uploadLimit.value) * mebibyte),
+      }),
+    });
+    renderTransferSettings(settings);
+    elements.transferSettingsMessage.textContent = "Transfer limits saved and applied.";
+    await refresh();
+  } catch (error) {
+    elements.transferSettingsMessage.className = "form-message error";
+    elements.transferSettingsMessage.textContent = error.message;
+  } finally {
+    button.disabled = false;
   }
 });
 elements.navigation.addEventListener("click", (event) => {

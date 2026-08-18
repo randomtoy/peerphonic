@@ -116,7 +116,7 @@ granted these independently:
 | --- | --- |
 | `dashboard.access` | Sign in to the administration dashboard |
 | `monitoring.view` | View cache usage, selected-track downloads, peers, and transfers |
-| `sources.manage` | Add, pause, pin, and remove torrent sources |
+| `sources.manage` | Add, pause, pin, and remove torrent sources; scan the library; change torrent limits |
 | `users.manage` | Create, reset, and remove regular user accounts |
 
 Only administrators can assign capabilities, create administrators, or manage
@@ -152,6 +152,10 @@ The periodic scan runs independently of `scan_on_start`; set
 `scan_interval_seconds` to `0` when only manual OpenSubsonic `startScan` calls
 should update the catalog.
 
+Upload and download limits saved through the Peerphonic API or dashboard are
+stored in SQLite and override their startup configuration values on subsequent
+runs. Saving `0` restores unlimited transfer speed.
+
 User administration is also available through the Peerphonic API:
 
 ```bash
@@ -164,6 +168,10 @@ curl -u admin:admin -X PUT -H 'Content-Type: application/json' \
   http://localhost:8080/api/v1/users/listener/permissions
 curl -u admin:admin http://localhost:8080/api/v1/library/scan
 curl -u admin:admin -X POST http://localhost:8080/api/v1/library/scan
+curl -u admin:admin http://localhost:8080/api/v1/settings/transfers
+curl -u admin:admin -X PUT -H 'Content-Type: application/json' \
+  -d '{"downloadLimitBytesPerSecond":10485760,"uploadLimitBytesPerSecond":2097152}' \
+  http://localhost:8080/api/v1/settings/transfers
 ```
 
 Library scans started through the Peerphonic API run in the background. Their
