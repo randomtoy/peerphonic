@@ -5,10 +5,13 @@ services:
       dockerfile: deploy/Dockerfile
     ports:
       - "8080:8080"
+      - "${PEERPHONIC_TORRENT_PORT:-42069}:${PEERPHONIC_TORRENT_PORT:-42069}/tcp"
+      - "${PEERPHONIC_TORRENT_PORT:-42069}:${PEERPHONIC_TORRENT_PORT:-42069}/udp"
     volumes:
       - "${MUSIC_DIR:?set MUSIC_DIR to the host music directory}:/music:ro"
       - "./data:/data"
     environment:
       PEERPHONIC_USERNAME: "${PEERPHONIC_USERNAME:-admin}"
       PEERPHONIC_PASSWORD: "${PEERPHONIC_PASSWORD:?set PEERPHONIC_PASSWORD}"
+      PEERPHONIC_TORRENT_PORT: "${PEERPHONIC_TORRENT_PORT:-42069}"
     restart: unless-stopped
