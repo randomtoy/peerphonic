@@ -35,6 +35,7 @@ changing the client-facing streaming flow.
 - an optional containerized administration dashboard for cache, transfers, torrent sources, and Soulseek jobs;
 - separate process health and metadata readiness endpoints at `/api/v1/health`
   and `/api/v1/ready`.
+- authenticated Prometheus HTTP metrics at `/api/v1/metrics`.
 
 The implemented OpenSubsonic endpoints are:
 
@@ -180,6 +181,7 @@ curl -u admin:admin -X PUT -H 'Content-Type: application/json' \
 curl -u admin:admin http://localhost:8080/api/v1/library/scan
 curl -u admin:admin -X POST http://localhost:8080/api/v1/library/scan
 curl -u admin:admin http://localhost:8080/api/v1/settings/transfers
+curl -u admin:admin http://localhost:8080/api/v1/metrics
 curl -u admin:admin -X PUT -H 'Content-Type: application/json' \
   -d '{"downloadLimitBytesPerSecond":10485760,"uploadLimitBytesPerSecond":2097152}' \
   http://localhost:8080/api/v1/settings/transfers

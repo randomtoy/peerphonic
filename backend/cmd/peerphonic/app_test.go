@@ -110,6 +110,14 @@ func TestLocalFileToOpenSubsonicStream(t *testing.T) {
 	if listenerCache.Code != http.StatusOK {
 		t.Fatalf("delegated cache status = %d, body = %s", listenerCache.Code, listenerCache.Body.String())
 	}
+	listenerMetricsRequest := httptest.NewRequest(http.MethodGet, "/api/v1/metrics", nil)
+	listenerMetricsRequest.SetBasicAuth("listener", "listener-password")
+	listenerMetrics := httptest.NewRecorder()
+	app.handler.ServeHTTP(listenerMetrics, listenerMetricsRequest)
+	if listenerMetrics.Code != http.StatusOK ||
+		!strings.Contains(listenerMetrics.Body.String(), "peerphonic_http_requests_total") {
+		t.Fatalf("delegated metrics status = %d, body = %s", listenerMetrics.Code, listenerMetrics.Body.String())
+	}
 	listenerSourcesRequest := httptest.NewRequest(http.MethodGet, "/api/v1/torrents", nil)
 	listenerSourcesRequest.SetBasicAuth("listener", "listener-password")
 	listenerSources := httptest.NewRecorder()

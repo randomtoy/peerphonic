@@ -21,6 +21,7 @@ import (
 	"github.com/randomtoy/peerphonic/backend/internal/config"
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
 	"github.com/randomtoy/peerphonic/backend/internal/core/services"
+	"github.com/randomtoy/peerphonic/backend/internal/observability"
 	"github.com/randomtoy/peerphonic/backend/internal/scanner"
 	torrentscanner "github.com/randomtoy/peerphonic/backend/internal/scanner/torrents"
 )
@@ -200,8 +201,10 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	}
 	streaming := services.NewStreamingService(catalog, streamingProviders...)
 	downloadService := services.NewDownloadService(downloadMonitors...)
+	httpMetrics := observability.NewHTTPMetrics()
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/ready", peerphonic.NewReadinessHandler(catalog))
+	mux.Handle("/api/v1/metrics", peerphonic.NewMetricsHandler(httpMetrics, userService))
 	mux.Handle("/rest/", opensubsonic.NewHandlerWithAuthenticatorAndDiscovery(
 		catalog, streaming, artwork, userService, soulseekDiscovery, scanManager,
 	))
@@ -210,7 +213,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		userService, userService, soulseekMonitor, soulseekSearch, transferSettings, scanManager,
 	))
 	return &application{
-		handler: mux, catalog: catalog, torrentProvider: torrentProvider,
+		handler: httpMetrics.Wrap(mux), catalog: catalog, torrentProvider: torrentProvider,
 		soulseekProvider: soulseekClient, magnetImporter: magnetImporter,
 	}, nil
 }
