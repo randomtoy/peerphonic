@@ -129,6 +129,8 @@ func TestSlskdSearchMapsAudioResultsAndCleansUp(t *testing.T) {
 	}
 	first := results[0]
 	if first.Track.Title != "01 Angel" || first.Track.Duration != 6*time.Minute || first.Track.BitRate != 320 ||
+		first.Track.Artist != "Massive Attack" || first.Track.Album != "Mezzanine" ||
+		first.Track.ContentType != "audio/mpeg" || first.Track.ArtistID == "" || first.Track.AlbumID == "" ||
 		first.DisplayPath != "Massive Attack/Mezzanine/01 Angel.mp3" || first.Availability.Peer != "peer-one" ||
 		!first.Availability.FreeUploadSlot || first.Availability.QueueLength != 2 || first.Availability.UploadSpeed != 1048576 ||
 		first.Ref.Provider != Name || first.Ref.Key == "" || strings.Contains(first.Ref.Key, "peer-one") {

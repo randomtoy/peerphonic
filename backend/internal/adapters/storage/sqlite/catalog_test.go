@@ -102,6 +102,54 @@ func TestCatalogRoundTripAndReplacement(t *testing.T) {
 	}
 }
 
+func TestCatalogSavesSelectedTrackSourceIncrementally(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	catalog, err := Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close()
+
+	first := domain.TrackSource{
+		Track: domain.Track{
+			ID: "remote-1", Title: "First", Artist: "Artist", ArtistID: "artist-1",
+			Album: "Album", AlbumID: "album-1", AlbumArtist: "Artist", Suffix: "mp3",
+		},
+		Ref: domain.SourceRef{Provider: "remote", Key: "peer/first.mp3"},
+	}
+	second := domain.TrackSource{
+		Track: domain.Track{
+			ID: "remote-2", Title: "Second", Artist: "Artist", ArtistID: "artist-1",
+			Album: "Album", AlbumID: "album-1", AlbumArtist: "Artist", Suffix: "flac",
+		},
+		Ref: domain.SourceRef{Provider: "remote", Key: "peer/second.flac"},
+	}
+	if err := catalog.SaveTrackSource(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.SaveTrackSource(ctx, second); err != nil {
+		t.Fatal(err)
+	}
+
+	first.Track.Title = "First (updated)"
+	if err := catalog.SaveTrackSource(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	tracks, err := catalog.TracksByAlbum(ctx, "album-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tracks) != 2 || tracks[0].Title != "First (updated)" || tracks[1].Title != "Second" {
+		t.Fatalf("TracksByAlbum() = %#v", tracks)
+	}
+	sources, err := catalog.Sources(ctx, first.Track.ID)
+	if err != nil || len(sources) != 1 || sources[0] != first.Ref {
+		t.Fatalf("Sources() = %#v, %v", sources, err)
+	}
+}
+
 func TestCatalogAlbumListOrderingAndYearRanges(t *testing.T) {
 	t.Parallel()
 

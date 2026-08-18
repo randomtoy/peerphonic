@@ -32,6 +32,12 @@ type Catalog interface {
 	DeletePlaylist(ctx context.Context, id string) error
 }
 
+// TrackSourceWriter incrementally persists a selected provider result without
+// replacing the provider's complete catalog.
+type TrackSourceWriter interface {
+	SaveTrackSource(ctx context.Context, source domain.TrackSource) error
+}
+
 type AlbumOrder string
 
 const (

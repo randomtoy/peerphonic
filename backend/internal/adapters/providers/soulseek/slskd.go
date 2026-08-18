@@ -34,6 +34,12 @@ var audioExtensions = map[string]struct{}{
 	"ogg": {}, "opus": {}, "wav": {}, "wma": {},
 }
 
+var audioContentTypes = map[string]string{
+	"aac": "audio/aac", "aiff": "audio/aiff", "alac": "audio/mp4", "flac": "audio/flac",
+	"m4a": "audio/mp4", "mp3": "audio/mpeg", "ogg": "audio/ogg", "opus": "audio/ogg",
+	"wav": "audio/wav", "wma": "audio/x-ms-wma",
+}
+
 type Client struct {
 	endpoint   *url.URL
 	apiKey     string
@@ -204,6 +210,7 @@ func mapSearchResults(responses []slskdSearchResponse, limit int) []domain.Track
 			}
 			displayPath := strings.ReplaceAll(file.Filename, "\\", "/")
 			title := strings.TrimSuffix(filepath.Base(displayPath), filepath.Ext(displayPath))
+			artist, album := provisionalArtistAlbum(displayPath)
 			refPayload, _ := json.Marshal(struct {
 				Peer string `json:"peer"`
 				Path string `json:"path"`
@@ -211,7 +218,10 @@ func mapSearchResults(responses []slskdSearchResponse, limit int) []domain.Track
 			}{Peer: response.Username, Path: file.Filename, Size: file.Size})
 			track := domain.Track{
 				ID:    domain.StableID(Name, response.Username, file.Filename, strconv.FormatInt(file.Size, 10)),
-				Title: title, Size: file.Size, Suffix: extension,
+				Title: title, Artist: artist, ArtistID: domain.StableID("artist", artist),
+				Album: album, AlbumID: domain.StableID("album", artist, album),
+				AlbumArtist: artist, AlbumArtistID: domain.StableID("artist", artist),
+				Size: file.Size, Suffix: extension, ContentType: audioContentTypes[extension],
 			}
 			if file.Length != nil && *file.Length > 0 {
 				track.Duration = time.Duration(*file.Length) * time.Second
@@ -236,6 +246,18 @@ func mapSearchResults(responses []slskdSearchResponse, limit int) []domain.Track
 		}
 	}
 	return results
+}
+
+func provisionalArtistAlbum(displayPath string) (string, string) {
+	parts := strings.FieldsFunc(displayPath, func(r rune) bool { return r == '/' || r == '\\' })
+	artist, album := "Unknown Artist", "Unknown Album"
+	if len(parts) >= 2 && strings.TrimSpace(parts[len(parts)-2]) != "" {
+		album = strings.TrimSpace(parts[len(parts)-2])
+	}
+	if len(parts) >= 3 && strings.TrimSpace(parts[len(parts)-3]) != "" {
+		artist = strings.TrimSpace(parts[len(parts)-3])
+	}
+	return artist, album
 }
 
 func (c *Client) request(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
