@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"mime"
 	"os"
 	"path"
 	"path/filepath"
@@ -21,18 +20,13 @@ import (
 	torrentclient "github.com/anacrolix/torrent"
 	"github.com/anacrolix/torrent/metainfo"
 	"github.com/anacrolix/torrent/storage"
+	"github.com/randomtoy/peerphonic/backend/internal/audioformat"
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
 	"golang.org/x/time/rate"
 )
 
 const Name = "torrent"
-
-var audioContentTypes = map[string]string{
-	".aac": "audio/aac", ".flac": "audio/flac", ".m4a": "audio/mp4",
-	".mp3": "audio/mpeg", ".oga": "audio/ogg", ".ogg": "audio/ogg",
-	".opus": "audio/ogg", ".wav": "audio/wav",
-}
 
 var imageContentTypes = map[string]string{
 	".gif": "image/gif", ".jpeg": "image/jpeg", ".jpg": "image/jpeg",
@@ -547,12 +541,9 @@ func (p *Provider) ReadCatalog(reader io.Reader) (Catalog, error) {
 			return Catalog{}, err
 		}
 		extension := strings.ToLower(path.Ext(parts[len(parts)-1]))
-		if contentType, supported := audioContentTypes[extension]; supported {
-			if detected := mime.TypeByExtension(extension); detected != "" {
-				contentType = detected
-			}
+		if format, supported := audioformat.ByExtension(extension); supported {
 			audioFiles = append(audioFiles, catalogFile{
-				parts: parts, length: file.Length, extension: extension, contentType: contentType,
+				parts: parts, length: file.Length, extension: extension, contentType: format.ContentType,
 			})
 		} else if contentType, supported := imageContentTypes[extension]; supported {
 			artworkFiles = append(artworkFiles, catalogFile{
@@ -876,8 +867,8 @@ func parseSourceKey(key string) (infoHash, logicalPath string, err error) {
 
 func contentType(name string) string {
 	extension := strings.ToLower(path.Ext(name))
-	if value := audioContentTypes[extension]; value != "" {
-		return value
+	if format, ok := audioformat.ByExtension(extension); ok {
+		return format.ContentType
 	}
 	return imageContentTypes[extension]
 }

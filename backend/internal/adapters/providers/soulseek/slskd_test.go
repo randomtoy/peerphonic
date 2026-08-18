@@ -168,6 +168,30 @@ func TestSlskdSearchValidatesQueryAndReportsUnavailableProvider(t *testing.T) {
 	}
 }
 
+func TestSoulseekSearchAcceptsCommonAudioFormats(t *testing.T) {
+	t.Parallel()
+
+	expected := map[string]string{
+		"mp3": "audio/mpeg", "flac": "audio/flac", "ogg": "audio/ogg", "opus": "audio/ogg",
+		"aac": "audio/aac", "m4a": "audio/mp4", "alac": "audio/mp4", "wav": "audio/wav",
+		"aiff": "audio/aiff", "wma": "audio/x-ms-wma", "ape": "audio/ape", "wv": "audio/wavpack",
+	}
+	files := make([]slskdFile, 0, len(expected)+1)
+	for suffix := range expected {
+		files = append(files, slskdFile{Filename: `Artist\Album\track.` + suffix, Extension: suffix, Size: 100})
+	}
+	files = append(files, slskdFile{Filename: `Artist\Album\cover.jpg`, Extension: "jpg", Size: 100})
+	results := mapSearchResults([]slskdSearchResponse{{Username: "peer", Files: files}}, 100)
+	if len(results) != len(expected) {
+		t.Fatalf("results = %d, want %d", len(results), len(expected))
+	}
+	for _, result := range results {
+		if expected[result.Track.Suffix] != result.Track.ContentType {
+			t.Errorf("format %q content type = %q", result.Track.Suffix, result.Track.ContentType)
+		}
+	}
+}
+
 func TestSlskdBrowseCollectionMapsDirectoryWithoutDownloadingAudio(t *testing.T) {
 	t.Parallel()
 

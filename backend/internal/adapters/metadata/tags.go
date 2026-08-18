@@ -3,12 +3,12 @@ package metadata
 import (
 	"errors"
 	"fmt"
-	"mime"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/dhowden/tag"
+	"github.com/randomtoy/peerphonic/backend/internal/audioformat"
 	"github.com/randomtoy/peerphonic/backend/internal/scanner"
 )
 
@@ -117,21 +117,8 @@ func artistAndTitleFromFilename(filename string) (string, string, bool) {
 }
 
 func contentType(extension string) string {
-	types := map[string]string{
-		".mp3":  "audio/mpeg",
-		".flac": "audio/flac",
-		".ogg":  "audio/ogg",
-		".oga":  "audio/ogg",
-		".opus": "audio/ogg",
-		".m4a":  "audio/mp4",
-		".aac":  "audio/aac",
-		".wav":  "audio/wav",
-	}
-	if value := types[extension]; value != "" {
-		return value
-	}
-	if value := mime.TypeByExtension(extension); value != "" {
-		return value
+	if format, ok := audioformat.ByExtension(extension); ok {
+		return format.ContentType
 	}
 	return "application/octet-stream"
 }

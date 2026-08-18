@@ -31,8 +31,8 @@ func TestResolveLocalTrack(t *testing.T) {
 	}
 	defer resolved.Content.Close()
 	data, _ := io.ReadAll(resolved.Content)
-	if string(data) != "audio" {
-		t.Fatalf("content = %q, want audio", data)
+	if string(data) != "audio" || resolved.ContentType != "audio/mpeg" {
+		t.Fatalf("content = %q, content type = %q", data, resolved.ContentType)
 	}
 }
 

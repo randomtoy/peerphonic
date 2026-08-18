@@ -25,6 +25,22 @@ type artworkWriterStub struct {
 	writes int
 }
 
+func TestScannerAcceptsCommonAudioFormats(t *testing.T) {
+	t.Parallel()
+
+	for _, name := range []string{
+		"track.mp3", "track.flac", "track.ogg", "track.opus", "track.aac", "track.m4a",
+		"track.alac", "track.wav", "track.aiff", "track.wma", "track.ape", "track.wv", "track.mpc",
+	} {
+		if !isSupported(name) {
+			t.Errorf("isSupported(%q) = false", name)
+		}
+	}
+	if isSupported("cover.jpg") {
+		t.Fatal("cover image accepted as audio")
+	}
+}
+
 func (s *artworkWriterStub) Put(context.Context, []byte) (string, error) {
 	s.writes++
 	return "art_test", nil

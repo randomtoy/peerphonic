@@ -17,6 +17,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/randomtoy/peerphonic/backend/internal/audioformat"
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
 )
@@ -32,17 +33,6 @@ const (
 	pollInterval              = 250 * time.Millisecond
 	maxResponse               = 8 << 20
 )
-
-var audioExtensions = map[string]struct{}{
-	"aac": {}, "aiff": {}, "alac": {}, "flac": {}, "m4a": {}, "mp3": {},
-	"ogg": {}, "opus": {}, "wav": {}, "wma": {},
-}
-
-var audioContentTypes = map[string]string{
-	"aac": "audio/aac", "aiff": "audio/aiff", "alac": "audio/mp4", "flac": "audio/flac",
-	"m4a": "audio/mp4", "mp3": "audio/mpeg", "ogg": "audio/ogg", "opus": "audio/ogg",
-	"wav": "audio/wav", "wma": "audio/x-ms-wma",
-}
 
 var artworkExtensions = map[string]struct{}{
 	"gif": {}, "jpeg": {}, "jpg": {}, "png": {},
@@ -263,7 +253,8 @@ func mapSearchResults(responses []slskdSearchResponse, limit int) []domain.Track
 		for _, candidate := range files {
 			file := candidate.file
 			extension := fileExtension(file)
-			if _, ok := audioExtensions[extension]; !ok || strings.TrimSpace(file.Filename) == "" {
+			format, ok := audioformat.ByExtension(extension)
+			if !ok || strings.TrimSpace(file.Filename) == "" {
 				continue
 			}
 			displayPath := strings.ReplaceAll(file.Filename, "\\", "/")
@@ -277,7 +268,7 @@ func mapSearchResults(responses []slskdSearchResponse, limit int) []domain.Track
 				Title: title, Artist: artist, ArtistID: domain.StableID("artist", artist),
 				Album: album, AlbumID: domain.StableID("album", artist, album),
 				AlbumArtist: artist, AlbumArtistID: domain.StableID("artist", artist),
-				Size: file.Size, Suffix: extension, ContentType: audioContentTypes[extension],
+				Size: file.Size, Suffix: format.Suffix, ContentType: format.ContentType,
 			}
 			if file.Length != nil && *file.Length > 0 {
 				track.Duration = time.Duration(*file.Length) * time.Second
@@ -352,7 +343,8 @@ func (c *Client) BrowseCollection(
 	tracks := make([]domain.TrackSource, 0, len(files))
 	for _, file := range files {
 		extension := fileExtension(file)
-		if _, ok := audioExtensions[extension]; !ok || strings.TrimSpace(file.Filename) == "" || file.Size <= 0 {
+		format, ok := audioformat.ByExtension(extension)
+		if !ok || strings.TrimSpace(file.Filename) == "" || file.Size <= 0 {
 			continue
 		}
 		refPayload, _ := json.Marshal(remoteFileRef{Peer: remote.Peer, Path: file.Filename, Size: file.Size})
@@ -363,7 +355,7 @@ func (c *Client) BrowseCollection(
 			Artist: artist, ArtistID: domain.StableID("artist", artist),
 			Album: album, AlbumID: domain.StableID("album", artist, album),
 			AlbumArtist: artist, AlbumArtistID: domain.StableID("artist", artist),
-			Size: file.Size, Suffix: extension, ContentType: audioContentTypes[extension], CoverArtID: coverID,
+			Size: file.Size, Suffix: format.Suffix, ContentType: format.ContentType, CoverArtID: coverID,
 		}
 		if file.Length != nil && *file.Length > 0 {
 			track.Duration = time.Duration(*file.Length) * time.Second

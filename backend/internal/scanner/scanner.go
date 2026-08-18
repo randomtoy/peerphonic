@@ -11,16 +11,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/randomtoy/peerphonic/backend/internal/audioformat"
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
 )
 
 const LocalProvider = "local"
-
-var supportedExtensions = map[string]struct{}{
-	".mp3": {}, ".flac": {}, ".ogg": {}, ".oga": {}, ".opus": {},
-	".m4a": {}, ".aac": {}, ".wav": {},
-}
 
 type Metadata struct {
 	Title               string
@@ -316,6 +312,6 @@ func isVariousArtistName(value string) bool {
 }
 
 func isSupported(path string) bool {
-	_, ok := supportedExtensions[strings.ToLower(filepath.Ext(path))]
+	_, ok := audioformat.FromPath(path)
 	return ok
 }

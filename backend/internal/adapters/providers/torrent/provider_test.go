@@ -49,6 +49,35 @@ func TestReadCatalogBuildsProvisionalAudioMetadata(t *testing.T) {
 	}
 }
 
+func TestReadCatalogSupportsCommonAudioFormats(t *testing.T) {
+	t.Parallel()
+
+	expected := map[string]string{
+		"mp3": "audio/mpeg", "flac": "audio/flac", "ogg": "audio/ogg", "opus": "audio/ogg",
+		"aac": "audio/aac", "m4a": "audio/mp4", "alac": "audio/mp4", "wav": "audio/wav",
+		"aiff": "audio/aiff", "wma": "audio/x-ms-wma", "ape": "audio/ape", "wv": "audio/wavpack",
+	}
+	files := make([]metainfo.FileInfo, 0, len(expected)+1)
+	for suffix := range expected {
+		files = append(files, metainfo.FileInfo{Length: 123, Path: []string{"track." + suffix}})
+	}
+	files = append(files, metainfo.FileInfo{Length: 50, Path: []string{"notes.txt"}})
+	catalog, err := New().ReadCatalog(bytes.NewReader(torrentBytes(t, metainfo.Info{
+		Name: "Formats", PieceLength: 16 * 1024, Pieces: make([]byte, 20), Files: files,
+	})))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(catalog.Tracks) != len(expected) {
+		t.Fatalf("tracks = %d, want %d", len(catalog.Tracks), len(expected))
+	}
+	for _, source := range catalog.Tracks {
+		if expected[source.Track.Suffix] != source.Track.ContentType {
+			t.Errorf("format %q content type = %q", source.Track.Suffix, source.Track.ContentType)
+		}
+	}
+}
+
 func TestReadCatalogUsesScanAsArtworkFallback(t *testing.T) {
 	t.Parallel()
 

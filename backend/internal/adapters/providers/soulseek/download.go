@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/randomtoy/peerphonic/backend/internal/audioformat"
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
 )
@@ -199,8 +200,9 @@ func resolvedRemoteSource(
 	content ports.ReadSeekCloser, name string, size int64, modTime time.Time,
 ) ports.ResolvedSource {
 	extension := strings.TrimPrefix(strings.ToLower(filepath.Ext(name)), ".")
+	format, _ := audioformat.ByExtension(extension)
 	return ports.ResolvedSource{
-		Content: content, Name: name, ContentType: audioContentTypes[extension],
+		Content: content, Name: name, ContentType: format.ContentType,
 		Size: size, ModTime: modTime,
 	}
 }

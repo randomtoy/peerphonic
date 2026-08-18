@@ -3,11 +3,11 @@ package local
 import (
 	"context"
 	"fmt"
-	"mime"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/randomtoy/peerphonic/backend/internal/audioformat"
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
 )
@@ -53,8 +53,9 @@ func (p *Provider) Resolve(_ context.Context, ref domain.SourceRef) (ports.Resol
 		file.Close()
 		return ports.ResolvedSource{}, fmt.Errorf("local media %q is not a regular file", ref.Key)
 	}
+	format, _ := audioformat.FromPath(info.Name())
 	return ports.ResolvedSource{
-		Content: file, Name: info.Name(), ContentType: mime.TypeByExtension(filepath.Ext(info.Name())),
+		Content: file, Name: info.Name(), ContentType: format.ContentType,
 		Size: info.Size(), ModTime: info.ModTime(),
 	}, nil
 }
