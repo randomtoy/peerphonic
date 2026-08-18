@@ -11,5 +11,5 @@ FROM gcr.io/distroless/static-debian12:nonroot
 COPY --from=build /out/peerphonic /peerphonic
 VOLUME ["/data", "/music"]
 EXPOSE 8080 42069/tcp 42069/udp
-ENTRYPOINT ["/peerphonic", "serve"]
-CMD ["--music", "/music", "--database", "/data/peerphonic.db", "--cache", "/data/cache", "--torrents", "/data/torrents"]
+ENTRYPOINT ["/peerphonic"]
+CMD ["serve", "--music", "/music", "--database", "/data/peerphonic.db", "--cache", "/data/cache", "--torrents", "/data/torrents"]

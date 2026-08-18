@@ -1,13 +1,45 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/randomtoy/peerphonic/backend/internal/adapters/storage/sqlite"
 )
+
+func TestRunBackupCreatesArchiveWhileDatabaseIsOpen(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	databasePath := filepath.Join(root, "peerphonic.db")
+	catalog, err := sqlite.Open(context.Background(), databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close()
+	if err := os.WriteFile(databasePath+".auth.key", make([]byte, 32), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outputPath := filepath.Join(root, "backups", "peerphonic.tar.gz")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := run([]string{
+		"backup", "--database", databasePath, "--output", outputPath,
+	}, logger); err != nil {
+		t.Fatalf("run(backup) error = %v", err)
+	}
+	info, err := os.Stat(outputPath)
+	if err != nil || info.Size() == 0 || info.Mode().Perm() != 0o600 {
+		t.Fatalf("backup info = %#v, error = %v", info, err)
+	}
+}
 
 func TestShutdownHTTPServerGracefullyStopsIdleServer(t *testing.T) {
 	t.Parallel()

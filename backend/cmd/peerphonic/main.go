@@ -3,14 +3,19 @@ package main
 import (
 	"context"
 	"errors"
+	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
+	"github.com/randomtoy/peerphonic/backend/internal/adapters/storage/sqlite"
+	"github.com/randomtoy/peerphonic/backend/internal/backup"
 	"github.com/randomtoy/peerphonic/backend/internal/config"
 )
 
@@ -23,10 +28,21 @@ func main() {
 }
 
 func run(args []string, logger *slog.Logger) error {
-	if len(args) == 0 || args[0] != "serve" {
-		return errors.New("usage: peerphonic serve --music /path/to/music")
+	if len(args) == 0 {
+		return errors.New("usage: peerphonic <serve|backup>")
 	}
-	cfg, err := config.Load(args[1:], os.LookupEnv)
+	switch args[0] {
+	case "serve":
+		return runServe(args[1:], logger)
+	case "backup":
+		return runBackup(args[1:], logger)
+	default:
+		return fmt.Errorf("unknown command %q (use serve or backup)", args[0])
+	}
+}
+
+func runServe(args []string, logger *slog.Logger) error {
+	cfg, err := config.Load(args, os.LookupEnv)
 	if err != nil {
 		return fmt.Errorf("load configuration: %w", err)
 	}
@@ -67,6 +83,56 @@ func run(args []string, logger *slog.Logger) error {
 		}
 		return nil
 	}
+}
+
+func runBackup(args []string, logger *slog.Logger) error {
+	databasePath := "peerphonic.db"
+	if configured, ok := os.LookupEnv("PEERPHONIC_DATABASE"); ok {
+		databasePath = configured
+	}
+	var outputPath, credentialKeyPath string
+	flags := flag.NewFlagSet("backup", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.StringVar(&databasePath, "database", databasePath, "SQLite database path")
+	flags.StringVar(&credentialKeyPath, "credential-key", "", "credential encryption key path")
+	flags.StringVar(&outputPath, "output", "", "backup archive path")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 {
+		return fmt.Errorf("unexpected arguments: %v", flags.Args())
+	}
+	if outputPath == "" {
+		return errors.New("backup output path is required (use --output)")
+	}
+	var err error
+	databasePath, err = filepath.Abs(databasePath)
+	if err != nil {
+		return fmt.Errorf("resolve database path: %w", err)
+	}
+	outputPath, err = filepath.Abs(outputPath)
+	if err != nil {
+		return fmt.Errorf("resolve backup output path: %w", err)
+	}
+	if credentialKeyPath == "" {
+		credentialKeyPath = databasePath + ".auth.key"
+	} else if credentialKeyPath, err = filepath.Abs(credentialKeyPath); err != nil {
+		return fmt.Errorf("resolve credential key path: %w", err)
+	}
+	snapshotter, err := sqlite.NewSnapshotter(databasePath)
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	manifest, err := backup.Create(ctx, snapshotter, backup.Options{
+		OutputPath: outputPath, CredentialKeyPath: credentialKeyPath,
+	})
+	if err != nil {
+		return err
+	}
+	logger.Info("backup created", "path", outputPath, "files", len(manifest.Files))
+	return nil
 }
 
 func shutdownHTTPServer(server *http.Server, timeout time.Duration) (bool, error) {

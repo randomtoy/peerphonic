@@ -164,6 +164,20 @@ The periodic scan runs independently of `scan_on_start`; set
 `scan_interval_seconds` to `0` when only manual OpenSubsonic `startScan` calls
 should update the catalog.
 
+Create a consistent metadata and credential backup without stopping the server:
+
+```bash
+peerphonic backup \
+  --database /srv/peerphonic/peerphonic.db \
+  --output /srv/backups/peerphonic-$(date +%F).tar.gz
+```
+
+The archive contains a verified SQLite snapshot, the credential encryption key,
+and a manifest with sizes and SHA-256 checksums. Existing output files are never
+overwritten. Treat the archive as a secret because its key can decrypt stored
+OpenSubsonic credentials. Music, cached media, and `.torrent` files remain on
+their configured storage and are not duplicated in this metadata archive.
+
 Upload and download limits saved through the Peerphonic API or dashboard are
 stored in SQLite and override their startup configuration values on subsequent
 runs. Saving `0` restores unlimited transfer speed.
