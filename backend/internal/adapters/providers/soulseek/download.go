@@ -39,17 +39,25 @@ type downloadCoordinator struct {
 	downloadsDir  string
 	incompleteDir string
 
-	mu   sync.Mutex
-	jobs map[string]*downloadJob
+	mu      sync.Mutex
+	jobs    map[string]*downloadJob
+	records map[string]*downloadJob
 }
 
 type downloadJob struct {
+	key            string
+	trackID        string
+	remote         remoteFileRef
+	batchID        string
+	transferID     string
 	finalPath      string
 	incompletePath string
 	done           chan struct{}
 
-	mu  sync.Mutex
-	err error
+	mu       sync.Mutex
+	download domain.TrackDownload
+	err      error
+	finished bool
 }
 
 type slskdDownloadBatchResponse struct {
@@ -99,7 +107,7 @@ func newDownloadCoordinator(
 	}
 	return &downloadCoordinator{
 		client: client, downloadsDir: downloadsDir, incompleteDir: incompleteDir,
-		jobs: make(map[string]*downloadJob),
+		jobs: make(map[string]*downloadJob), records: make(map[string]*downloadJob),
 	}, nil
 }
 
@@ -148,6 +156,7 @@ func (c *downloadCoordinator) resolve(
 		if err != nil {
 			return ports.ResolvedSource{}, fmt.Errorf("open cached Soulseek file: %w", err)
 		}
+		c.rememberCached(key, trackID, name, remote, info)
 		return resolvedRemoteSource(file, name, remote.Size, info.ModTime()), nil
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return ports.ResolvedSource{}, fmt.Errorf("inspect cached Soulseek file: %w", err)
@@ -179,15 +188,24 @@ func (c *downloadCoordinator) ensureDownload(
 		c.mu.Unlock()
 		return job, nil
 	}
+	now := time.Now().UTC()
+	downloadID := domain.StableID("download", Name, key)
 	job := &downloadJob{
+		key: key, trackID: trackID, remote: remote,
 		finalPath: filepath.Join(c.downloadsDir, trackID, name),
 		incompletePath: filepath.Join(
 			c.incompleteDir, sanitizedPathSegment(remote.Peer),
 			sanitizedRemoteDirectory(remote.Path), name,
 		),
 		done: make(chan struct{}),
+		download: domain.TrackDownload{
+			ID: downloadID, Provider: Name, SourceID: remote.Peer, TrackID: trackID,
+			Name: name, State: domain.DownloadStateQueued, TotalBytes: remote.Size,
+			StartedAt: now, UpdatedAt: now,
+		},
 	}
 	c.jobs[key] = job
+	c.records[downloadID] = job
 	c.mu.Unlock()
 
 	payload := struct {
@@ -210,17 +228,23 @@ func (c *downloadCoordinator) ensureDownload(
 
 	var response slskdDownloadBatchResponse
 	if err := c.client.doJSON(ctx, http.MethodPost, "/api/v0/transfers/downloads/batches", payload, &response); err != nil {
-		c.removeJob(key, job)
-		return nil, fmt.Errorf("enqueue Soulseek download: %w", err)
+		err = fmt.Errorf("enqueue Soulseek download: %w", err)
+		c.finishJob(key, job, domain.DownloadStateFailed, err)
+		return nil, err
 	}
 	if response.Batch.ID == "" || len(response.Batch.Transfers) == 0 {
-		c.removeJob(key, job)
 		message := "slskd did not enqueue the file"
 		if len(response.Failures) > 0 && strings.TrimSpace(response.Failures[0].Message) != "" {
 			message = response.Failures[0].Message
 		}
-		return nil, fmt.Errorf("enqueue Soulseek download: %s", message)
+		err := fmt.Errorf("enqueue Soulseek download: %s", message)
+		c.finishJob(key, job, domain.DownloadStateFailed, err)
+		return nil, err
 	}
+	job.mu.Lock()
+	job.batchID = response.Batch.ID
+	job.transferID = response.Batch.Transfers[0].ID
+	job.mu.Unlock()
 	go c.monitorDownload(key, job, response.Batch.ID)
 	return job, nil
 }
@@ -230,6 +254,9 @@ func (c *downloadCoordinator) monitorDownload(key string, job *downloadJob, batc
 	defer ticker.Stop()
 	consecutiveErrors := 0
 	for {
+		if job.isFinished() {
+			return
+		}
 		var batch slskdDownloadBatch
 		ctx, cancel := context.WithTimeout(context.Background(), c.client.httpClient.Timeout)
 		err := c.client.doJSON(ctx, http.MethodGet,
@@ -238,22 +265,23 @@ func (c *downloadCoordinator) monitorDownload(key string, job *downloadJob, batc
 		if err != nil {
 			consecutiveErrors++
 			if consecutiveErrors >= 5 {
-				c.finishJob(key, job, fmt.Errorf("monitor Soulseek download: %w", err))
+				c.finishJob(key, job, domain.DownloadStateFailed, fmt.Errorf("monitor Soulseek download: %w", err))
 				return
 			}
 		} else {
 			consecutiveErrors = 0
 			if len(batch.Transfers) == 0 {
-				c.finishJob(key, job, errors.New("monitor Soulseek download: batch has no transfers"))
+				c.finishJob(key, job, domain.DownloadStateFailed, errors.New("monitor Soulseek download: batch has no transfers"))
 				return
 			}
 			transfer := batch.Transfers[0]
+			job.updateTransfer(transfer)
 			if transferSucceeded(transfer.State) {
 				if err := waitForFinalFile(job.finalPath, 10*time.Second); err != nil {
-					c.finishJob(key, job, err)
+					c.finishJob(key, job, domain.DownloadStateFailed, err)
 					return
 				}
-				c.finishJob(key, job, nil)
+				c.finishJob(key, job, domain.DownloadStateCached, nil)
 				return
 			}
 			if transferFailed(transfer.State) {
@@ -261,7 +289,11 @@ func (c *downloadCoordinator) monitorDownload(key string, job *downloadJob, batc
 				if message == "" {
 					message = transfer.State
 				}
-				c.finishJob(key, job, fmt.Errorf("Soulseek download failed: %s", message))
+				state := domain.DownloadStateFailed
+				if stateContains(transfer.State, "Cancelled") {
+					state = domain.DownloadStateCancelled
+				}
+				c.finishJob(key, job, state, fmt.Errorf("Soulseek download failed: %s", message))
 				return
 			}
 		}
@@ -309,9 +341,24 @@ func waitForFinalFile(path string, timeout time.Duration) error {
 	}
 }
 
-func (c *downloadCoordinator) finishJob(key string, job *downloadJob, err error) {
+func (c *downloadCoordinator) finishJob(
+	key string, job *downloadJob, state domain.DownloadState, err error,
+) {
 	job.mu.Lock()
+	if job.finished {
+		job.mu.Unlock()
+		return
+	}
+	job.finished = true
 	job.err = err
+	job.download.State = state
+	job.download.UpdatedAt = time.Now().UTC()
+	if state == domain.DownloadStateCached {
+		job.download.CompletedBytes = job.download.TotalBytes
+		job.download.Error = ""
+	} else if err != nil {
+		job.download.Error = err.Error()
+	}
 	close(job.done)
 	job.mu.Unlock()
 	c.removeJob(key, job)
@@ -329,6 +376,61 @@ func (j *downloadJob) result() error {
 	j.mu.Lock()
 	defer j.mu.Unlock()
 	return j.err
+}
+
+func (j *downloadJob) isFinished() bool {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	return j.finished
+}
+
+func (j *downloadJob) updateTransfer(transfer slskdDownloadTransfer) {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.finished {
+		return
+	}
+	if transfer.ID != "" {
+		j.transferID = transfer.ID
+	}
+	j.download.CompletedBytes = min(transfer.BytesTransferred, j.download.TotalBytes)
+	j.download.UpdatedAt = time.Now().UTC()
+	if stateContains(transfer.State, "InProgress") {
+		j.download.State = domain.DownloadStateDownloading
+	} else if stateContains(transfer.State, "Queued") || stateContains(transfer.State, "Requested") ||
+		stateContains(transfer.State, "Initializing") {
+		j.download.State = domain.DownloadStateQueued
+	}
+}
+
+func (c *downloadCoordinator) rememberCached(
+	key, trackID, name string, remote remoteFileRef, info os.FileInfo,
+) {
+	id := domain.StableID("download", Name, key)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if existing := c.records[id]; existing != nil {
+		existing.mu.Lock()
+		existing.download.State = domain.DownloadStateCached
+		existing.download.CompletedBytes = remote.Size
+		existing.download.TotalBytes = remote.Size
+		existing.download.Error = ""
+		existing.download.UpdatedAt = info.ModTime().UTC()
+		existing.mu.Unlock()
+		return
+	}
+	completedAt := info.ModTime().UTC()
+	c.records[id] = &downloadJob{
+		key: key, trackID: trackID, remote: remote,
+		finalPath: filepath.Join(c.downloadsDir, trackID, name),
+		download: domain.TrackDownload{
+			ID: id, Provider: Name, SourceID: remote.Peer, TrackID: trackID,
+			Name: name, State: domain.DownloadStateCached,
+			CompletedBytes: remote.Size, TotalBytes: remote.Size,
+			StartedAt: completedAt, UpdatedAt: completedAt,
+		},
+		finished: true,
+	}
 }
 
 func sanitizedFilename(path string) string {

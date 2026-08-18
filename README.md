@@ -30,8 +30,8 @@ changing the client-facing streaming flow.
 - persistent cross-client OpenSubsonic play queues;
 - authenticated live source transfer status for download, upload, peer, and seeding visibility;
 - authenticated torrent source management with persistent pause and cache pinning;
-- optional authenticated Soulseek search through a slskd source-provider adapter;
-- an optional containerized administration dashboard for cache, transfers, and torrent sources;
+- optional authenticated Soulseek search, catalog selection, buffered single-file downloads, and cache reuse through slskd;
+- an optional containerized administration dashboard for cache, transfers, torrent sources, and Soulseek jobs;
 - a small Peerphonic health endpoint at `/api/v1/health`.
 
 The implemented OpenSubsonic endpoints are:
@@ -229,10 +229,11 @@ whether bytes are local, cached, or remote.
 
 Cache usage is available from `GET /api/v1/cache/status`. The total includes
 the shared media cache and provider-managed data such as complete and partial
-torrent files. The response includes a component breakdown and counts partial
-entries separately. Physical disk allocation is used for sparse partial files.
-Unpinned and inactive entries are evicted by least recent access when the
-combined configured size limit is exceeded.
+torrent and Soulseek files. The response includes a component breakdown and
+counts partial entries separately. Physical disk allocation is used for sparse
+torrent files. Unpinned and inactive media and torrent entries are evicted by
+least recent access when the combined configured size limit is exceeded;
+completed Soulseek files are currently retained until explicitly managed.
 
 Place `.torrent` files in the configured torrent directory and start a library
 scan. Audio entries and references to included cover images appear in the catalog
@@ -274,6 +275,16 @@ curl -u admin:admin http://localhost:8080/api/v1/downloads
 These jobs are also shown in the administration dashboard. Completed pieces
 remain available for upload while the torrent is attached and seeding is
 enabled.
+
+Soulseek single-track jobs use the same endpoint and add queued and cancelled
+states. Users with `sources.manage` can cancel an active slskd transfer or retry
+a failed, cancelled, or evicted job. Retry reuses slskd's partial file when its
+resume policy allows it:
+
+```bash
+curl -u admin:admin -X DELETE http://localhost:8080/api/v1/downloads/DOWNLOAD_ID
+curl -u admin:admin -X POST http://localhost:8080/api/v1/downloads/DOWNLOAD_ID/retry
+```
 
 Torrent cache cleanup never removes data from an actively streamed torrent.
 Before removing inactive torrent files, Peerphonic detaches that torrent from

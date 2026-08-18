@@ -20,7 +20,10 @@ without exposing the API key to the browser. The Search workspace queries
 connected Soulseek peers, shows audio files, queues, upload speeds, and free
 slots, and lets an authorized user add an unlocked result to the library without
 starting the download. Playback later starts the single-file transfer and reuses
-the completed file from the shared cache.
+the completed file from the shared cache. The Activity workspace combines
+torrent and Soulseek jobs, including queued and cancelled states. Accounts with
+source-management access can cancel an active Soulseek transfer or retry a
+failed, cancelled, or evicted one.
 
 For local frontend work, serve this directory through a web server that proxies
 the API paths to the backend. Opening `index.html` directly does not provide an

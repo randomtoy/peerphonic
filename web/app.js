@@ -199,7 +199,7 @@ function renderSummary(cache, imports, downloads, transfers, sources, users, ses
   const capacity = cache.capacityBytes || 0;
   const utilization = capacity ? Math.round((cache.sizeBytes / capacity) * 100) : 0;
   const activeStreams = transfers.reduce((total, item) => total + (item.activeStreams || 0), 0);
-  const activeDownloads = downloads.filter((item) => item.state === "downloading").length;
+  const activeDownloads = downloads.filter((item) => item.state === "queued" || item.state === "downloading").length;
   const activeImports = imports.filter((item) => item.state === "fetching_metadata" || item.state === "scanning").length;
   const metrics = [];
   if (allowed.has(permissions.monitoring)) metrics.push(
@@ -274,18 +274,29 @@ function renderImports(items) {
   }).join("");
 }
 
-function renderDownloads(items) {
+function renderDownloads(items, canManageSources = false) {
   elements.downloadCount.textContent = `${items.length} total`;
   elements.downloads.replaceChildren();
   if (!items.length) {
-    elements.downloads.append(empty("Play a torrent track to start caching it in the background."));
+    elements.downloads.append(empty("Play a torrent or Soulseek track to start caching it in the background."));
     return;
   }
   elements.downloads.innerHTML = items.map((item) => {
     const percent = item.totalBytes ? Math.min(100, Math.round((item.completedBytes / item.totalBytes) * 100)) : 0;
-    const stateLabel = item.state.charAt(0).toUpperCase() + item.state.slice(1);
+    const stateLabels = {
+      queued: "Queued",
+      downloading: "Downloading",
+      cached: "Cached",
+      failed: "Failed",
+      cancelled: "Cancelled",
+      evicted: "Evicted",
+    };
+    const stateLabel = stateLabels[item.state] || item.state;
+    const canControl = canManageSources && item.provider === "soulseek";
+    const canCancel = canControl && (item.state === "queued" || item.state === "downloading");
+    const canRetry = canControl && ["failed", "cancelled", "evicted"].includes(item.state);
     return `<article class="transfer-card">
-      <div class="card-title"><h3>${escapeHTML(item.name || item.trackId)}</h3><span class="status">${escapeHTML(stateLabel)}</span></div>
+      <div class="card-title"><div><h3>${escapeHTML(item.name || item.trackId)}</h3><p class="download-provider">${escapeHTML(item.provider || "unknown provider")}</p></div><span class="status ${item.state === "failed" || item.state === "cancelled" ? "failed" : ""}">${escapeHTML(stateLabel)}</span></div>
       <div class="progress" aria-label="${percent}% complete"><span style="width:${percent}%"></span></div>
       <div class="facts">
         <div class="fact"><span>Complete</span><strong>${percent}%</strong></div>
@@ -293,6 +304,10 @@ function renderDownloads(items) {
         <div class="fact"><span>Total</span><strong>${formatBytes(item.totalBytes)}</strong></div>
       </div>
       ${item.error ? `<p class="form-error">${escapeHTML(item.error)}</p>` : ""}
+      ${canCancel || canRetry ? `<div class="download-actions">
+        ${canCancel ? `<button class="button danger" type="button" data-download-action="cancel" data-download-id="${escapeHTML(item.id)}">Cancel</button>` : ""}
+        ${canRetry ? `<button class="button secondary" type="button" data-download-action="retry" data-download-id="${escapeHTML(item.id)}">Retry</button>` : ""}
+      </div>` : ""}
     </article>`;
   }).join("");
 }
@@ -463,7 +478,7 @@ async function refresh() {
     configureNavigation(session);
     renderSummary(cache, imports, downloads, transfers, sources, users, session);
     renderImports(imports);
-    renderDownloads(downloads);
+    renderDownloads(downloads, canManageSources);
     renderTransfers(transfers);
     renderSources(sources);
     renderUsers(users, session);
@@ -474,7 +489,7 @@ async function refresh() {
     elements.loginError.textContent = "";
     showDashboard(true);
     const active = imports.some((item) => item.state === "fetching_metadata" || item.state === "scanning") ||
-      downloads.some((item) => item.state === "downloading") || scanStatus.scanning;
+      downloads.some((item) => item.state === "queued" || item.state === "downloading") || scanStatus.scanning;
     window.clearTimeout(state.refreshTimer);
     if (active) state.refreshTimer = window.setTimeout(refresh, 3000);
   } catch (error) {
@@ -594,6 +609,24 @@ elements.soulseekSearchResults.addEventListener("click", async (event) => {
     button.textContent = original;
     elements.soulseekSearchMessage.className = "form-message error";
     elements.soulseekSearchMessage.textContent = error.message;
+  }
+});
+elements.downloads.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-download-action]");
+  if (!button || button.disabled) return;
+  const action = button.dataset.downloadAction;
+  const id = encodeURIComponent(button.dataset.downloadId);
+  button.disabled = true;
+  button.textContent = action === "cancel" ? "Cancelling…" : "Retrying…";
+  try {
+    await api(action === "cancel" ? `/api/v1/downloads/${id}` : `/api/v1/downloads/${id}/retry`, {
+      method: action === "cancel" ? "DELETE" : "POST",
+    });
+    await refresh();
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = action === "cancel" ? "Cancel" : "Retry";
+    elements.loginError.textContent = error.message;
   }
 });
 elements.navigation.addEventListener("click", (event) => {

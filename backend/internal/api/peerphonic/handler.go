@@ -612,11 +612,41 @@ func newHandler(
 			writer.Header().Set("Content-Type", "application/json; charset=utf-8")
 			_ = json.NewEncoder(writer).Encode(response)
 		})
+		if controller, ok := downloads.(ports.TrackDownloadController); ok {
+			mux.HandleFunc("DELETE /api/v1/downloads/{id}", func(writer http.ResponseWriter, request *http.Request) {
+				if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
+					return
+				}
+				if err := controller.CancelTrackDownload(request.Context(), request.PathValue("id")); err != nil {
+					writeDownloadActionError(writer, err)
+					return
+				}
+				writer.WriteHeader(http.StatusNoContent)
+			})
+			mux.HandleFunc("POST /api/v1/downloads/{id}/retry", func(writer http.ResponseWriter, request *http.Request) {
+				if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
+					return
+				}
+				if err := controller.RetryTrackDownload(request.Context(), request.PathValue("id")); err != nil {
+					writeDownloadActionError(writer, err)
+					return
+				}
+				writer.WriteHeader(http.StatusNoContent)
+			})
+		}
 	}
 	if users != nil {
 		registerUserRoutes(mux, authenticator, users)
 	}
 	return mux
+}
+
+func writeDownloadActionError(writer http.ResponseWriter, err error) {
+	if errors.Is(err, ports.ErrNotFound) {
+		http.Error(writer, "track download not found", http.StatusNotFound)
+		return
+	}
+	http.Error(writer, "change track download", http.StatusConflict)
 }
 
 func newLibraryScanResponse(status scanner.Status) libraryScanResponse {

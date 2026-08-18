@@ -81,9 +81,10 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	}
 	var soulseekMonitor ports.ProviderStatusMonitor
 	var soulseekSearch ports.SourceSearcher
-	var soulseekStreaming ports.SourceProvider
+	var soulseekClient *soulseekprovider.Client
 	if cfg.SlskdURL != "" {
-		soulseekClient, clientErr := soulseekprovider.NewSlskd(
+		var clientErr error
+		soulseekClient, clientErr = soulseekprovider.NewSlskd(
 			cfg.SlskdURL, cfg.SlskdAPIKey, time.Duration(cfg.SlskdTimeoutSeconds)*time.Second,
 		)
 		if clientErr != nil {
@@ -96,7 +97,6 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		}
 		soulseekMonitor = soulseekClient
 		soulseekSearch = services.NewDiscoveryService(soulseekClient, catalog)
-		soulseekStreaming = soulseekClient
 	}
 	blobs, err := filesystem.New(cfg.CacheDir)
 	if err != nil {
@@ -119,6 +119,9 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		return fail(fmt.Errorf("prune media cache: %w", err))
 	}
 	cacheStatus := services.NewCacheStatus(mediaCache, torrentProvider)
+	if soulseekClient != nil {
+		cacheStatus = services.NewCacheStatus(mediaCache, torrentProvider, soulseekClient)
+	}
 	torrentProvider.SetCacheChangedHandler(func() {
 		if err := cacheStatus.Prune(context.WithoutCancel(ctx)); err != nil {
 			logger.Warn("media cache pruning failed", "error", err)
@@ -154,16 +157,19 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	}
 
 	streamingProviders := []ports.SourceProvider{provider, torrentProvider}
-	if soulseekStreaming != nil {
-		streamingProviders = append(streamingProviders, soulseekStreaming)
+	downloadMonitors := []ports.TrackDownloadMonitor{torrentProvider}
+	if soulseekClient != nil {
+		streamingProviders = append(streamingProviders, soulseekClient)
+		downloadMonitors = append(downloadMonitors, soulseekClient)
 	}
 	streaming := services.NewStreamingService(catalog, streamingProviders...)
+	downloadService := services.NewDownloadService(downloadMonitors...)
 	mux := http.NewServeMux()
 	mux.Handle("/rest/", opensubsonic.NewHandlerWithAuthenticator(
 		catalog, streaming, artwork, userService, scanManager,
 	))
 	mux.Handle("/", peerphonic.NewHandlerWithAuthenticator(
-		cacheStatus, torrentImporter, magnetImporter, torrentManager, torrentProvider, torrentProvider,
+		cacheStatus, torrentImporter, magnetImporter, torrentManager, torrentProvider, downloadService,
 		userService, userService, soulseekMonitor, soulseekSearch, transferSettings, scanManager,
 	))
 	return &application{

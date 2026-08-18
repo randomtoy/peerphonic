@@ -23,7 +23,10 @@ type sourceImporterStub struct {
 
 type transferMonitorStub struct{}
 
-type downloadMonitorStub struct{}
+type downloadMonitorStub struct {
+	cancelID string
+	retryID  string
+}
 
 type scanControllerStub struct {
 	status scanner.Status
@@ -86,12 +89,28 @@ func (transferMonitorStub) Transfers(context.Context) ([]domain.SourceTransfer, 
 	}}, nil
 }
 
-func (downloadMonitorStub) TrackDownloads(context.Context) ([]domain.TrackDownload, error) {
+func (*downloadMonitorStub) TrackDownloads(context.Context) ([]domain.TrackDownload, error) {
 	return []domain.TrackDownload{{
 		ID: "download-1", Provider: "torrent", SourceID: "source-1", TrackID: "track-1",
 		Name: "Song.mp3", State: domain.DownloadStateDownloading,
 		CompletedBytes: 50, TotalBytes: 100,
 	}}, nil
+}
+
+func (s *downloadMonitorStub) CancelTrackDownload(_ context.Context, id string) error {
+	if id == "missing" {
+		return ports.ErrNotFound
+	}
+	s.cancelID = id
+	return nil
+}
+
+func (s *downloadMonitorStub) RetryTrackDownload(_ context.Context, id string) error {
+	if id == "missing" {
+		return ports.ErrNotFound
+	}
+	s.retryID = id
+	return nil
 }
 
 func (s *scanControllerStub) Start() bool {
@@ -543,7 +562,7 @@ func TestTransferStatusRequiresAuthentication(t *testing.T) {
 func TestTrackDownloadStatusRequiresAuthentication(t *testing.T) {
 	t.Parallel()
 
-	handler := NewHandler(nil, nil, nil, nil, nil, downloadMonitorStub{}, "alice", "secret")
+	handler := NewHandler(nil, nil, nil, nil, nil, &downloadMonitorStub{}, "alice", "secret")
 	unauthorized := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/v1/downloads", nil))
 	if unauthorized.Code != http.StatusUnauthorized {
@@ -559,6 +578,42 @@ func TestTrackDownloadStatusRequiresAuthentication(t *testing.T) {
 		!strings.Contains(body, `"state":"downloading"`) ||
 		!strings.Contains(body, `"completedBytes":50`) || !strings.Contains(body, `"totalBytes":100`) {
 		t.Fatalf("status = %d, body = %s", response.Code, body)
+	}
+}
+
+func TestTrackDownloadActionsRequireAuthenticationAndRouteByID(t *testing.T) {
+	t.Parallel()
+
+	downloads := &downloadMonitorStub{}
+	handler := NewHandler(nil, nil, nil, nil, nil, downloads, "alice", "secret")
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodDelete, "/api/v1/downloads/job-1", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d", unauthorized.Code)
+	}
+
+	for method, path := range map[string]string{
+		http.MethodDelete: "/api/v1/downloads/job-1",
+		http.MethodPost:   "/api/v1/downloads/job-1/retry",
+	} {
+		request := httptest.NewRequest(method, path, nil)
+		request.SetBasicAuth("alice", "secret")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusNoContent {
+			t.Fatalf("%s %s status = %d, body = %s", method, path, response.Code, response.Body.String())
+		}
+	}
+	if downloads.cancelID != "job-1" || downloads.retryID != "job-1" {
+		t.Fatalf("cancel = %q, retry = %q", downloads.cancelID, downloads.retryID)
+	}
+
+	missing := httptest.NewRequest(http.MethodDelete, "/api/v1/downloads/missing", nil)
+	missing.SetBasicAuth("alice", "secret")
+	missingResponse := httptest.NewRecorder()
+	handler.ServeHTTP(missingResponse, missing)
+	if missingResponse.Code != http.StatusNotFound {
+		t.Fatalf("missing status = %d", missingResponse.Code)
 	}
 }
 

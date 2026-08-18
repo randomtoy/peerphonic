@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -278,6 +279,94 @@ func TestSlskdResolveStreamsGrowingFileAndReusesCompletedDownload(t *testing.T) 
 	_ = cached.Content.Close()
 	if err != nil || string(cachedData) != "audio-data" || enqueueCalls.Load() != 1 {
 		t.Fatalf("cached data = %q, err = %v, enqueue calls = %d", cachedData, err, enqueueCalls.Load())
+	}
+	downloads, err := client.TrackDownloads(context.Background())
+	if err != nil || len(downloads) != 1 || downloads[0].State != domain.DownloadStateCached ||
+		downloads[0].CompletedBytes != remote.Size || downloads[0].Provider != Name {
+		t.Fatalf("TrackDownloads() = %#v, %v", downloads, err)
+	}
+	usage, err := client.CacheUsage(context.Background())
+	if err != nil || usage.Name != Name || usage.Entries != 1 || usage.Size != remote.Size || usage.PartialEntries != 0 {
+		t.Fatalf("CacheUsage() = %#v, %v", usage, err)
+	}
+}
+
+func TestSlskdDownloadCanBeCancelledAndRetried(t *testing.T) {
+	t.Parallel()
+
+	var enqueueCalls atomic.Int32
+	var cancelCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v0/transfers/downloads/batches":
+			call := enqueueCalls.Add(1)
+			_, _ = writer.Write([]byte(fmt.Sprintf(
+				`{"batch":{"id":"batch-%d","transfers":[{"id":"transfer-%d","state":"Queued, Locally"}]},"failures":[]}`,
+				call, call,
+			)))
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v0/transfers/downloads/batches/batch-1":
+			_, _ = writer.Write([]byte(`{"id":"batch-1","transfers":[{"id":"transfer-1","state":"Queued, Locally"}]}`))
+		case request.Method == http.MethodDelete && request.URL.Path == "/api/v0/transfers/downloads/peer-one/transfer-1":
+			cancelCalls.Add(1)
+			writer.WriteHeader(http.StatusNoContent)
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v0/transfers/downloads/batches/batch-2":
+			_, _ = writer.Write([]byte(`{"id":"batch-2","transfers":[{"id":"transfer-2","state":"Completed, Errored, Remotely","exception":"peer disconnected"}]}`))
+		default:
+			http.Error(writer, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewSlskd(server.URL, "key", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetMediaDirectories(t.TempDir(), t.TempDir()); err != nil {
+		t.Fatal(err)
+	}
+	remote := remoteFileRef{Peer: "peer-one", Path: `Album\song.mp3`, Size: 10}
+	encoded, _ := json.Marshal(remote)
+	ref := domain.SourceRef{Provider: Name, Key: base64.RawURLEncoding.EncodeToString(encoded)}
+	resolved, err := client.Resolve(context.Background(), ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	downloads, err := client.TrackDownloads(context.Background())
+	if err != nil || len(downloads) != 1 {
+		t.Fatalf("TrackDownloads() = %#v, %v", downloads, err)
+	}
+	id := downloads[0].ID
+	if err := client.CancelTrackDownload(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := resolved.Content.Read(make([]byte, 1)); err == nil {
+		t.Fatal("cancelled stream read error = nil")
+	}
+	_ = resolved.Content.Close()
+	downloads, _ = client.TrackDownloads(context.Background())
+	if downloads[0].State != domain.DownloadStateCancelled || cancelCalls.Load() != 1 {
+		t.Fatalf("cancelled download = %#v, calls = %d", downloads[0], cancelCalls.Load())
+	}
+	if err := client.RetryTrackDownload(context.Background(), id); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		downloads, err = client.TrackDownloads(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(downloads) == 1 && downloads[0].State == domain.DownloadStateFailed {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("retried download = %#v", downloads)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if enqueueCalls.Load() != 2 || !strings.Contains(downloads[0].Error, "peer disconnected") {
+		t.Fatalf("retry calls = %d, download = %#v", enqueueCalls.Load(), downloads[0])
 	}
 }
 
