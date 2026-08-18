@@ -1,6 +1,7 @@
 package opensubsonic
 
 import (
+	"context"
 	"crypto/md5"
 	"crypto/subtle"
 	"encoding/hex"
@@ -34,9 +35,15 @@ type Handler struct {
 	playlists   *services.PlaylistService
 	annotations *services.AnnotationService
 	playQueue   *services.PlayQueueService
-	username    string
-	password    string
+	auth        ports.Authenticator
 	scans       scanController
+}
+
+type authenticatedUserKey struct{}
+
+type fixedAuthenticator struct {
+	username string
+	password string
 }
 
 type scanController interface {
@@ -51,9 +58,21 @@ func NewHandler(
 	username, password string,
 	scans ...scanController,
 ) http.Handler {
+	return NewHandlerWithAuthenticator(
+		catalog, streams, artwork, fixedAuthenticator{username: username, password: password}, scans...,
+	)
+}
+
+func NewHandlerWithAuthenticator(
+	catalog ports.Catalog,
+	streams *services.StreamingService,
+	artwork *services.ArtworkService,
+	authenticator ports.Authenticator,
+	scans ...scanController,
+) http.Handler {
 	handler := &Handler{
 		catalog: catalog, streams: streams, artwork: artwork,
-		playlists: services.NewPlaylistService(catalog), username: username, password: password,
+		playlists: services.NewPlaylistService(catalog), auth: authenticator,
 	}
 	if store, ok := catalog.(ports.MediaAnnotationStore); ok {
 		handler.annotations = services.NewAnnotationService(catalog, store)
@@ -73,10 +92,12 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.writeError(writer, request, http.StatusBadRequest, 10, "Invalid request parameters")
 		return
 	}
-	if !h.authenticated(request) {
+	user, err := h.authenticate(request)
+	if err != nil {
 		h.writeError(writer, request, http.StatusUnauthorized, 40, "Wrong username or password")
 		return
 	}
+	request = request.WithContext(context.WithValue(request.Context(), authenticatedUserKey{}, user))
 
 	switch endpoint {
 	case "ping":
@@ -386,7 +407,7 @@ func (h *Handler) getAlbumList2(writer http.ResponseWriter, request *http.Reques
 			h.writeError(writer, request, http.StatusInternalServerError, 0, "Media annotations are not configured")
 			return
 		}
-		starred, err := h.annotations.Starred(request.Context(), h.username)
+		starred, err := h.annotations.Starred(request.Context(), requestUsername(request))
 		if err != nil {
 			h.writeAnnotationError(writer, request, err)
 			return
@@ -436,7 +457,7 @@ func (h *Handler) getAlbumList(writer http.ResponseWriter, request *http.Request
 			h.writeError(writer, request, http.StatusInternalServerError, 0, "Media annotations are not configured")
 			return
 		}
-		starred, err := h.annotations.Starred(request.Context(), h.username)
+		starred, err := h.annotations.Starred(request.Context(), requestUsername(request))
 		if err != nil {
 			h.writeAnnotationError(writer, request, err)
 			return
@@ -718,29 +739,54 @@ func (h *Handler) stream(writer http.ResponseWriter, request *http.Request) {
 	http.ServeContent(writer, request, resolved.Name, resolved.ModTime, resolved.Content)
 }
 
-func (h *Handler) authenticated(request *http.Request) bool {
+func (h *Handler) authenticate(request *http.Request) (domain.User, error) {
 	username := request.Form.Get("u")
-	if subtle.ConstantTimeCompare([]byte(username), []byte(h.username)) != 1 {
-		return false
-	}
 	providedPassword := request.Form.Get("p")
 	if strings.HasPrefix(providedPassword, "enc:") {
 		decoded, err := hex.DecodeString(strings.TrimPrefix(providedPassword, "enc:"))
 		if err != nil {
-			return false
+			return domain.User{}, ports.ErrAuthenticationFailed
 		}
 		providedPassword = string(decoded)
 	}
 	if providedPassword != "" {
-		return subtle.ConstantTimeCompare([]byte(providedPassword), []byte(h.password)) == 1
+		return h.auth.AuthenticatePassword(request.Context(), username, providedPassword)
 	}
 	salt := request.Form.Get("s")
 	token := request.Form.Get("t")
-	if salt == "" || token == "" {
-		return false
+	return h.auth.AuthenticateToken(request.Context(), username, token, salt)
+}
+
+func (a fixedAuthenticator) AuthenticatePassword(
+	_ context.Context, username, password string,
+) (domain.User, error) {
+	if subtle.ConstantTimeCompare([]byte(username), []byte(a.username)) != 1 ||
+		subtle.ConstantTimeCompare([]byte(password), []byte(a.password)) != 1 {
+		return domain.User{}, ports.ErrAuthenticationFailed
 	}
-	expected := fmt.Sprintf("%x", md5.Sum([]byte(h.password+salt)))
-	return subtle.ConstantTimeCompare([]byte(strings.ToLower(token)), []byte(expected)) == 1
+	return domain.User{Username: a.username, Role: domain.UserRoleAdmin}, nil
+}
+
+func (a fixedAuthenticator) AuthenticateToken(
+	_ context.Context, username, token, salt string,
+) (domain.User, error) {
+	if subtle.ConstantTimeCompare([]byte(username), []byte(a.username)) != 1 || salt == "" || token == "" {
+		return domain.User{}, ports.ErrAuthenticationFailed
+	}
+	expected := fmt.Sprintf("%x", md5.Sum([]byte(a.password+salt)))
+	if subtle.ConstantTimeCompare([]byte(strings.ToLower(token)), []byte(expected)) != 1 {
+		return domain.User{}, ports.ErrAuthenticationFailed
+	}
+	return domain.User{Username: a.username, Role: domain.UserRoleAdmin}, nil
+}
+
+func authenticatedUser(ctx context.Context) domain.User {
+	user, _ := ctx.Value(authenticatedUserKey{}).(domain.User)
+	return user
+}
+
+func requestUsername(request *http.Request) string {
+	return authenticatedUser(request.Context()).Username
 }
 
 func (h *Handler) writeError(writer http.ResponseWriter, request *http.Request, status, code int, message string) {

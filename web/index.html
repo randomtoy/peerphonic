@@ -75,6 +75,21 @@
         <div id="downloads" class="card-grid"></div>
       </section>
 
+      <section class="section" aria-labelledby="users-title">
+        <div class="section-heading">
+          <div><p class="eyebrow">ACCESS</p><h2 id="users-title">Users</h2></div>
+          <span id="user-count" class="pill"></span>
+        </div>
+        <form id="user-form" class="user-form">
+          <label>Username<input id="new-username" name="username" autocomplete="off" required></label>
+          <label>Password<input id="new-password" name="password" type="password" minlength="8" maxlength="72" autocomplete="new-password" required></label>
+          <label>Role<select id="new-user-role" name="role"><option value="user">User</option><option value="admin">Administrator</option></select></label>
+          <button class="button primary" type="submit">Create user</button>
+        </form>
+        <p id="user-message" class="form-message" role="status"></p>
+        <div id="users" class="source-list"></div>
+      </section>
+
       <section class="section" aria-labelledby="transfers-title">
         <div class="section-heading"><div><p class="eyebrow">NETWORK</p><h2 id="transfers-title">Live transfers</h2></div></div>
         <div id="transfers" class="card-grid"></div>

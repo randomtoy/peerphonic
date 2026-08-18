@@ -19,7 +19,7 @@ func (h *Handler) setStarred(writer http.ResponseWriter, request *http.Request, 
 		return
 	}
 	refs := annotationRefs(request)
-	if err := h.annotations.SetStarred(request.Context(), h.username, refs, starred); err != nil {
+	if err := h.annotations.SetStarred(request.Context(), requestUsername(request), refs, starred); err != nil {
 		h.writeAnnotationError(writer, request, err)
 		return
 	}
@@ -42,7 +42,7 @@ func (h *Handler) setRating(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	if err := h.annotations.SetRating(
-		request.Context(), h.username, domain.MediaRef{ID: id}, rating,
+		request.Context(), requestUsername(request), domain.MediaRef{ID: id}, rating,
 	); err != nil {
 		h.writeAnnotationError(writer, request, err)
 		return
@@ -69,7 +69,7 @@ func (h *Handler) scrobble(writer http.ResponseWriter, request *http.Request) {
 			return
 		}
 	}
-	if err := h.annotations.Scrobble(request.Context(), h.username, ids, times, submission); err != nil {
+	if err := h.annotations.Scrobble(request.Context(), requestUsername(request), ids, times, submission); err != nil {
 		h.writeAnnotationError(writer, request, err)
 		return
 	}
@@ -92,7 +92,7 @@ func (h *Handler) getStarred(writer http.ResponseWriter, request *http.Request, 
 		h.writeError(writer, request, http.StatusInternalServerError, 0, "Media annotations are not configured")
 		return
 	}
-	items, err := h.annotations.Starred(request.Context(), h.username)
+	items, err := h.annotations.Starred(request.Context(), requestUsername(request))
 	if err != nil {
 		h.writeAnnotationError(writer, request, err)
 		return
@@ -167,7 +167,7 @@ func (h *Handler) decorateAnnotations(ctx context.Context, payload *response) {
 	if h.annotations == nil || payload.Error != nil || !payloadContainsMedia(payload) {
 		return
 	}
-	annotations, err := h.annotations.All(ctx, h.username)
+	annotations, err := h.annotations.All(ctx, authenticatedUser(ctx).Username)
 	if err != nil {
 		return
 	}

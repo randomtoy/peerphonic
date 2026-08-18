@@ -21,6 +21,13 @@ const elements = {
   importMessage: document.querySelector("#import-message"),
   imports: document.querySelector("#imports"),
   importCount: document.querySelector("#import-count"),
+  userForm: document.querySelector("#user-form"),
+  newUsername: document.querySelector("#new-username"),
+  newPassword: document.querySelector("#new-password"),
+  newUserRole: document.querySelector("#new-user-role"),
+  userMessage: document.querySelector("#user-message"),
+  users: document.querySelector("#users"),
+  userCount: document.querySelector("#user-count"),
   downloads: document.querySelector("#downloads"),
   downloadCount: document.querySelector("#download-count"),
   transfers: document.querySelector("#transfers"),
@@ -75,7 +82,7 @@ function showDashboard(visible) {
   elements.connection.classList.toggle("online", visible);
 }
 
-function renderSummary(cache, imports, downloads, transfers, sources) {
+function renderSummary(cache, imports, downloads, transfers, sources, users) {
   const capacity = cache.capacityBytes || 0;
   const utilization = capacity ? Math.round((cache.sizeBytes / capacity) * 100) : 0;
   const activeStreams = transfers.reduce((total, item) => total + (item.activeStreams || 0), 0);
@@ -88,10 +95,26 @@ function renderSummary(cache, imports, downloads, transfers, sources) {
     ["Downloads", activeDownloads, ""],
     ["Imports", activeImports, ""],
     ["Torrent sources", sources.length, ""],
+    ["Users", users.length, ""],
   ];
   elements.summary.innerHTML = metrics.map(([label, value, kind]) =>
     `<article class="metric ${kind}"><span class="metric-label">${label}</span><strong class="metric-value">${value}</strong></article>`
   ).join("");
+}
+
+function renderUsers(items, session) {
+  elements.userCount.textContent = `${items.length} total`;
+  elements.users.replaceChildren();
+  elements.users.innerHTML = items.map((item) => `<article class="source-row">
+    <div class="source-copy">
+      <h3>${escapeHTML(item.username)}</h3>
+      <p class="source-meta"><span>${item.role === "admin" ? "Administrator" : "User"}</span></p>
+    </div>
+    <div class="source-actions">
+      <button class="button secondary" data-user-action="password" data-username="${escapeHTML(item.username)}">Reset password</button>
+      <button class="button danger" data-user-action="delete" data-username="${escapeHTML(item.username)}" ${item.username === session.username ? "disabled" : ""}>Delete</button>
+    </div>
+  </article>`).join("");
 }
 
 function renderImports(items) {
@@ -195,22 +218,26 @@ async function refresh() {
   if (!state.authorization) return;
   elements.refresh.disabled = true;
   try {
-    const [cache, importPayload, downloadPayload, transferPayload, sourcePayload] = await Promise.all([
+    const [cache, importPayload, downloadPayload, transferPayload, sourcePayload, userPayload, session] = await Promise.all([
       api("/api/v1/cache/status"),
       api("/api/v1/imports"),
       api("/api/v1/downloads"),
       api("/api/v1/transfers"),
       api("/api/v1/torrents"),
+      api("/api/v1/users"),
+      api("/api/v1/session"),
     ]);
     const imports = importPayload.imports || [];
     const downloads = downloadPayload.downloads || [];
     const transfers = transferPayload.transfers || [];
     const sources = sourcePayload.sources || [];
-    renderSummary(cache, imports, downloads, transfers, sources);
+    const users = userPayload.users || [];
+    renderSummary(cache, imports, downloads, transfers, sources, users);
     renderImports(imports);
     renderDownloads(downloads);
     renderTransfers(transfers);
     renderSources(sources);
+    renderUsers(users, session);
     elements.updatedAt.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
     elements.loginError.textContent = "";
     showDashboard(true);
@@ -297,6 +324,62 @@ elements.torrentForm.addEventListener("submit", async (event) => {
     elements.importMessage.className = "form-message error";
     elements.importMessage.textContent = error.message;
   } finally {
+    button.disabled = false;
+  }
+});
+
+elements.userForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = elements.userForm.querySelector("button[type=submit]");
+  button.disabled = true;
+  elements.userMessage.className = "form-message";
+  elements.userMessage.textContent = "Creating user…";
+  try {
+    const created = await api("/api/v1/users", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        username: elements.newUsername.value,
+        password: elements.newPassword.value,
+        role: elements.newUserRole.value,
+      }),
+    });
+    elements.userForm.reset();
+    elements.userMessage.textContent = `Created ${created.username}.`;
+    await refresh();
+  } catch (error) {
+    elements.userMessage.className = "form-message error";
+    elements.userMessage.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+elements.users.addEventListener("click", async (event) => {
+  const button = event.target.closest("button[data-user-action]");
+  if (!button || button.disabled) return;
+  const { userAction, username } = button.dataset;
+  let options;
+  if (userAction === "password") {
+    const password = window.prompt(`New password for ${username} (8–72 bytes):`);
+    if (password == null) return;
+    options = {
+      path: `/api/v1/users/${encodeURIComponent(username)}/password`,
+      request: { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) },
+    };
+  } else {
+    if (!window.confirm(`Delete user “${username}”? Their personal library data will be kept.`)) return;
+    options = { path: `/api/v1/users/${encodeURIComponent(username)}`, request: { method: "DELETE" } };
+  }
+  button.disabled = true;
+  elements.userMessage.className = "form-message";
+  try {
+    await api(options.path, options.request);
+    elements.userMessage.textContent = userAction === "password" ? `Password updated for ${username}.` : `Deleted ${username}.`;
+    await refresh();
+  } catch (error) {
+    elements.userMessage.className = "form-message error";
+    elements.userMessage.textContent = error.message;
     button.disabled = false;
   }
 });

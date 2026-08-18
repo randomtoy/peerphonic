@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
+	authadapter "github.com/randomtoy/peerphonic/backend/internal/adapters/auth"
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/blob/filesystem"
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/metadata"
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/providers/local"
@@ -45,6 +46,14 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		}
 		catalog.Close()
 		return nil, err
+	}
+	credentialCodec, err := authadapter.NewCredentialCodec(cfg.Database + ".auth.key")
+	if err != nil {
+		return fail(fmt.Errorf("initialize user credentials: %w", err))
+	}
+	userService := services.NewUserService(catalog, credentialCodec)
+	if err := userService.EnsureBootstrapAdmin(ctx, cfg.Username, cfg.Password); err != nil {
+		return fail(fmt.Errorf("initialize bootstrap administrator: %w", err))
 	}
 
 	provider, err := local.New(cfg.MusicDir)
@@ -121,10 +130,12 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 
 	streaming := services.NewStreamingService(catalog, provider, torrentProvider)
 	mux := http.NewServeMux()
-	mux.Handle("/rest/", opensubsonic.NewHandler(catalog, streaming, artwork, cfg.Username, cfg.Password, scanManager))
-	mux.Handle("/", peerphonic.NewHandler(
+	mux.Handle("/rest/", opensubsonic.NewHandlerWithAuthenticator(
+		catalog, streaming, artwork, userService, scanManager,
+	))
+	mux.Handle("/", peerphonic.NewHandlerWithAuthenticator(
 		cacheStatus, torrentImporter, magnetImporter, torrentManager, torrentProvider, torrentProvider,
-		cfg.Username, cfg.Password,
+		userService, userService,
 	))
 	return &application{
 		handler: mux, catalog: catalog, torrentProvider: torrentProvider, magnetImporter: magnetImporter,

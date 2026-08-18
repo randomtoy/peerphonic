@@ -6,6 +6,7 @@ require (
 	github.com/anacrolix/torrent v1.61.0
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
 	github.com/tcolgate/mp3 v0.0.0-20170426193717-e79c5a46d300
+	golang.org/x/crypto v0.44.0
 	golang.org/x/text v0.41.0
 	golang.org/x/time v0.14.0
 	modernc.org/sqlite v1.56.0
@@ -83,7 +84,6 @@ require (
 	go.opentelemetry.io/otel v1.38.0 // indirect
 	go.opentelemetry.io/otel/metric v1.38.0 // indirect
 	go.opentelemetry.io/otel/trace v1.38.0 // indirect
-	golang.org/x/crypto v0.44.0 // indirect
 	golang.org/x/exp v0.0.0-20251113190631-e25ba8c21ef6 // indirect
 	golang.org/x/net v0.47.0 // indirect
 	golang.org/x/sync v0.22.0 // indirect

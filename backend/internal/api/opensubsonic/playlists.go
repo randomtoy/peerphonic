@@ -15,7 +15,9 @@ import (
 func (h *Handler) getPlaylists(writer http.ResponseWriter, request *http.Request) {
 	owner := request.Form.Get("username")
 	if owner == "" {
-		owner = h.username
+		owner = requestUsername(request)
+	} else if !authenticatedUser(request.Context()).IsAdmin() {
+		owner = requestUsername(request)
 	}
 	items, err := h.playlists.List(request.Context(), owner)
 	if err != nil {
@@ -35,7 +37,7 @@ func (h *Handler) getPlaylist(writer http.ResponseWriter, request *http.Request)
 		h.writeError(writer, request, http.StatusBadRequest, 10, "Required parameter id is missing")
 		return
 	}
-	item, err := h.playlists.Get(request.Context(), h.username, id)
+	item, err := h.playlists.Get(request.Context(), requestUsername(request), id)
 	if err != nil {
 		h.writePlaylistError(writer, request, err)
 		return
@@ -52,7 +54,7 @@ func (h *Handler) createPlaylist(writer http.ResponseWriter, request *http.Reque
 		return
 	}
 	item, err := h.playlists.CreateOrReplace(
-		request.Context(), h.username, id, name, request.Form["songId"],
+		request.Context(), requestUsername(request), id, name, request.Form["songId"],
 	)
 	if err != nil {
 		h.writePlaylistError(writer, request, err)
@@ -91,7 +93,7 @@ func (h *Handler) updatePlaylist(writer http.ResponseWriter, request *http.Reque
 		h.writeError(writer, request, http.StatusBadRequest, 10, err.Error())
 		return
 	}
-	if _, err := h.playlists.Update(request.Context(), h.username, id, update); err != nil {
+	if _, err := h.playlists.Update(request.Context(), requestUsername(request), id, update); err != nil {
 		h.writePlaylistError(writer, request, err)
 		return
 	}
@@ -104,7 +106,7 @@ func (h *Handler) deletePlaylist(writer http.ResponseWriter, request *http.Reque
 		h.writeError(writer, request, http.StatusBadRequest, 10, "Required parameter id is missing")
 		return
 	}
-	if err := h.playlists.Delete(request.Context(), h.username, id); err != nil {
+	if err := h.playlists.Delete(request.Context(), requestUsername(request), id); err != nil {
 		h.writePlaylistError(writer, request, err)
 		return
 	}

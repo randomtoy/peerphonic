@@ -15,7 +15,7 @@
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
 body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); }
-button, input, textarea { font: inherit; }
+button, input, textarea, select { font: inherit; }
 button { cursor: pointer; }
 
 .topbar { height: 72px; padding: 0 clamp(20px, 4vw, 64px); display: flex; align-items: center; justify-content: space-between; border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; background: rgb(11 13 14 / 92%); backdrop-filter: blur(16px); }
@@ -36,9 +36,9 @@ h2 { margin-bottom: 0; font-size: clamp(24px, 3vw, 34px); letter-spacing: -.035e
 .login-panel { min-height: calc(100vh - 210px); display: grid; grid-template-columns: 1.4fr minmax(300px, .6fr); align-items: center; gap: clamp(48px, 10vw, 140px); }
 .login-form { padding: 28px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); box-shadow: 0 32px 90px rgb(0 0 0 / 32%); }
 label { display: grid; gap: 8px; margin-bottom: 18px; color: var(--muted); font-size: 13px; }
-input, textarea { width: 100%; padding: 13px 14px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; outline: 0; }
+input, textarea, select { width: 100%; padding: 13px 14px; color: var(--text); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; outline: 0; }
 textarea { resize: vertical; min-height: 108px; }
-input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(200 255 90 / 10%); }
+input:focus, textarea:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgb(200 255 90 / 10%); }
 .form-error { min-height: 18px; margin: 14px 0 0; color: var(--danger); font-size: 13px; }
 .form-message { min-height: 20px; margin: 14px 2px 0; color: var(--accent); font-size: 13px; }
 .form-message.error { color: var(--danger); }
@@ -71,6 +71,9 @@ input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px
 .import-card p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.5; }
 .import-card label { margin: 0; }
 .import-card .button.primary { width: auto; align-self: flex-start; }
+.user-form { padding: 18px; display: grid; grid-template-columns: minmax(150px, 1fr) minmax(180px, 1fr) 160px auto; gap: 12px; align-items: end; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
+.user-form label { margin: 0; }
+.user-form .button.primary { width: auto; }
 .card-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
 .transfer-card, .source-row { border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); }
 .transfer-card { padding: 22px; }
@@ -100,6 +103,7 @@ input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px
   .summary-grid { grid-template-columns: repeat(2, 1fr); }
   .card-grid { grid-template-columns: 1fr; }
   .import-grid { grid-template-columns: 1fr; }
+  .user-form { grid-template-columns: 1fr 1fr; }
   .source-row { grid-template-columns: 1fr; }
   .source-actions { justify-content: flex-start; }
   .connection-state { display: none; }
@@ -112,4 +116,5 @@ input:focus, textarea:focus { border-color: var(--accent); box-shadow: 0 0 0 3px
   .summary-grid { grid-template-columns: 1fr; }
   .metric { min-height: 116px; }
   .hero { display: block; }
+  .user-form { grid-template-columns: 1fr; }
 }

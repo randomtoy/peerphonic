@@ -89,6 +89,17 @@ type sourceImportsResponse struct {
 	Imports []sourceImportResponse `json:"imports"`
 }
 
+type userResponse struct {
+	Username  string          `json:"username"`
+	Role      domain.UserRole `json:"role"`
+	CreatedAt string          `json:"createdAt"`
+	UpdatedAt string          `json:"updatedAt"`
+}
+
+type usersResponse struct {
+	Users []userResponse `json:"users"`
+}
+
 type cacheComponentResponse struct {
 	Name           string `json:"name"`
 	SizeBytes      int64  `json:"sizeBytes"`
@@ -113,6 +124,35 @@ func NewHandler(
 	transfers ports.SourceTransferMonitor,
 	downloads ports.TrackDownloadMonitor,
 	username, password string,
+) http.Handler {
+	return newHandler(
+		cache, torrentImporter, uriImporter, sources, transfers, downloads,
+		fixedAuthenticator{username: username, password: password}, nil,
+	)
+}
+
+func NewHandlerWithAuthenticator(
+	cache cacheStatus,
+	torrentImporter ports.SourceImporter,
+	uriImporter ports.SourceURIImporter,
+	sources ports.SourceManager,
+	transfers ports.SourceTransferMonitor,
+	downloads ports.TrackDownloadMonitor,
+	authenticator ports.Authenticator,
+	users ports.UserManager,
+) http.Handler {
+	return newHandler(cache, torrentImporter, uriImporter, sources, transfers, downloads, authenticator, users)
+}
+
+func newHandler(
+	cache cacheStatus,
+	torrentImporter ports.SourceImporter,
+	uriImporter ports.SourceURIImporter,
+	sources ports.SourceManager,
+	transfers ports.SourceTransferMonitor,
+	downloads ports.TrackDownloadMonitor,
+	authenticator ports.Authenticator,
+	users ports.UserManager,
 ) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(writer http.ResponseWriter, _ *http.Request) {
@@ -153,9 +193,7 @@ func NewHandler(
 	}
 	if torrentImporter != nil {
 		mux.HandleFunc("POST /api/v1/torrents", func(writer http.ResponseWriter, request *http.Request) {
-			if !basicAuthenticated(request, username, password) {
-				writer.Header().Set("WWW-Authenticate", `Basic realm="Peerphonic"`)
-				http.Error(writer, "authentication required", http.StatusUnauthorized)
+			if _, ok := requireAdministrator(writer, request, authenticator); !ok {
 				return
 			}
 			request.Body = http.MaxBytesReader(writer, request.Body, 16<<20)
@@ -179,7 +217,7 @@ func NewHandler(
 	}
 	if uriImporter != nil {
 		mux.HandleFunc("POST /api/v1/torrents/magnet", func(writer http.ResponseWriter, request *http.Request) {
-			if !requireBasicAuthentication(writer, request, username, password) {
+			if _, ok := requireAdministrator(writer, request, authenticator); !ok {
 				return
 			}
 			request.Body = http.MaxBytesReader(writer, request.Body, 64<<10)
@@ -206,7 +244,7 @@ func NewHandler(
 			_ = json.NewEncoder(writer).Encode(newSourceImportResponse(item))
 		})
 		mux.HandleFunc("GET /api/v1/imports", func(writer http.ResponseWriter, request *http.Request) {
-			if !requireBasicAuthentication(writer, request, username, password) {
+			if _, ok := requireAdministrator(writer, request, authenticator); !ok {
 				return
 			}
 			items, err := uriImporter.SourceImports(request.Context())
@@ -224,7 +262,7 @@ func NewHandler(
 	}
 	if sources != nil {
 		mux.HandleFunc("GET /api/v1/torrents", func(writer http.ResponseWriter, request *http.Request) {
-			if !requireBasicAuthentication(writer, request, username, password) {
+			if _, ok := requireAdministrator(writer, request, authenticator); !ok {
 				return
 			}
 			items, err := sources.ManagedSources(request.Context())
@@ -253,7 +291,7 @@ func NewHandler(
 			},
 		} {
 			mux.HandleFunc("POST /api/v1/torrents/{id}/"+action, func(writer http.ResponseWriter, request *http.Request) {
-				if !requireBasicAuthentication(writer, request, username, password) {
+				if _, ok := requireAdministrator(writer, request, authenticator); !ok {
 					return
 				}
 				if err := update(request.Context(), request.PathValue("id")); err != nil {
@@ -264,7 +302,7 @@ func NewHandler(
 			})
 		}
 		mux.HandleFunc("DELETE /api/v1/torrents/{id}", func(writer http.ResponseWriter, request *http.Request) {
-			if !requireBasicAuthentication(writer, request, username, password) {
+			if _, ok := requireAdministrator(writer, request, authenticator); !ok {
 				return
 			}
 			deleteData := false
@@ -285,9 +323,7 @@ func NewHandler(
 	}
 	if transfers != nil {
 		mux.HandleFunc("GET /api/v1/transfers", func(writer http.ResponseWriter, request *http.Request) {
-			if !basicAuthenticated(request, username, password) {
-				writer.Header().Set("WWW-Authenticate", `Basic realm="Peerphonic"`)
-				http.Error(writer, "authentication required", http.StatusUnauthorized)
+			if _, ok := requireAdministrator(writer, request, authenticator); !ok {
 				return
 			}
 			items, err := transfers.Transfers(request.Context())
@@ -314,7 +350,7 @@ func NewHandler(
 	}
 	if downloads != nil {
 		mux.HandleFunc("GET /api/v1/downloads", func(writer http.ResponseWriter, request *http.Request) {
-			if !requireBasicAuthentication(writer, request, username, password) {
+			if _, ok := requireAdministrator(writer, request, authenticator); !ok {
 				return
 			}
 			items, err := downloads.TrackDownloads(request.Context())
@@ -335,6 +371,9 @@ func NewHandler(
 			_ = json.NewEncoder(writer).Encode(response)
 		})
 	}
+	if users != nil {
+		registerUserRoutes(mux, authenticator, users)
+	}
 	return mux
 }
 
@@ -346,22 +385,49 @@ func newSourceImportResponse(item domain.SourceImport) sourceImportResponse {
 	}
 }
 
-func basicAuthenticated(request *http.Request, username, password string) bool {
-	providedUsername, providedPassword, ok := request.BasicAuth()
-	if !ok {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(providedUsername), []byte(username)) == 1 &&
-		subtle.ConstantTimeCompare([]byte(providedPassword), []byte(password)) == 1
+type fixedAuthenticator struct {
+	username string
+	password string
 }
 
-func requireBasicAuthentication(writer http.ResponseWriter, request *http.Request, username, password string) bool {
-	if basicAuthenticated(request, username, password) {
-		return true
+func (a fixedAuthenticator) AuthenticatePassword(
+	_ context.Context, username, password string,
+) (domain.User, error) {
+	if subtle.ConstantTimeCompare([]byte(username), []byte(a.username)) != 1 ||
+		subtle.ConstantTimeCompare([]byte(password), []byte(a.password)) != 1 {
+		return domain.User{}, ports.ErrAuthenticationFailed
 	}
-	writer.Header().Set("WWW-Authenticate", `Basic realm="Peerphonic"`)
-	http.Error(writer, "authentication required", http.StatusUnauthorized)
-	return false
+	return domain.User{Username: a.username, Role: domain.UserRoleAdmin}, nil
+}
+
+func (fixedAuthenticator) AuthenticateToken(
+	context.Context, string, string, string,
+) (domain.User, error) {
+	return domain.User{}, ports.ErrAuthenticationFailed
+}
+
+func authenticateBasic(request *http.Request, authenticator ports.Authenticator) (domain.User, error) {
+	providedUsername, providedPassword, ok := request.BasicAuth()
+	if !ok || authenticator == nil {
+		return domain.User{}, ports.ErrAuthenticationFailed
+	}
+	return authenticator.AuthenticatePassword(request.Context(), providedUsername, providedPassword)
+}
+
+func requireAdministrator(
+	writer http.ResponseWriter, request *http.Request, authenticator ports.Authenticator,
+) (domain.User, bool) {
+	user, err := authenticateBasic(request, authenticator)
+	if err != nil {
+		writer.Header().Set("WWW-Authenticate", `Basic realm="Peerphonic"`)
+		http.Error(writer, "authentication required", http.StatusUnauthorized)
+		return domain.User{}, false
+	}
+	if !user.IsAdmin() {
+		http.Error(writer, "administrator access required", http.StatusForbidden)
+		return domain.User{}, false
+	}
+	return user, true
 }
 
 func writeSourceManagementError(writer http.ResponseWriter, err error) {

@@ -16,7 +16,7 @@ func (h *Handler) getPlayQueue(writer http.ResponseWriter, request *http.Request
 		h.writeError(writer, request, http.StatusInternalServerError, 0, "Play queue storage is not configured")
 		return
 	}
-	queue, err := h.playQueue.Get(request.Context(), h.username)
+	queue, err := h.playQueue.Get(request.Context(), requestUsername(request))
 	if err != nil {
 		h.writePlayQueueError(writer, request, err)
 		return
@@ -40,7 +40,7 @@ func (h *Handler) savePlayQueue(writer http.ResponseWriter, request *http.Reques
 		}
 	}
 	if _, err := h.playQueue.Save(
-		request.Context(), h.username, request.Form["id"], request.Form.Get("current"),
+		request.Context(), requestUsername(request), request.Form["id"], request.Form.Get("current"),
 		position, request.Form.Get("c"),
 	); err != nil {
 		h.writePlayQueueError(writer, request, err)

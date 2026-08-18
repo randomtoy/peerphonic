@@ -13,6 +13,7 @@ changing the client-facing streaming flow.
 - a migrated SQLite metadata catalog;
 - XML and JSON OpenSubsonic responses;
 - password, hex-encoded password, and token/salt authentication;
+- persistent administrator and listener accounts with isolated personal library state;
 - artist/album/track browsing and HTTP range streaming;
 - genre browsing and album filtering from embedded tags;
 - paged album lists ordered by name, artist, import time, year, or randomly;
@@ -81,9 +82,9 @@ go build -o peerphonic ./cmd/peerphonic
 ./peerphonic serve --music /path/to/Music
 ```
 
-The server listens on `:8080`, stores its catalog in `peerphonic.db`, and uses
-`admin` / `admin` by default. Set a private password before exposing it to a
-network:
+The server listens on `:8080`, stores its catalog in `peerphonic.db`, and creates
+`admin` / `admin` when the user table is empty. Set a private bootstrap password
+before the first start or change it immediately in the administration dashboard:
 
 ```bash
 PEERPHONIC_USERNAME=music \
@@ -97,6 +98,15 @@ credentials. A direct connectivity check is also available:
 ```bash
 curl 'http://localhost:8080/rest/ping?u=music&p=replace-this-password&v=1.16.1&c=curl&f=json'
 ```
+
+The configured username and password are bootstrap values only. Once at least
+one account exists, changing the environment or CLI values does not overwrite
+database users. Administrators can create listener or administrator accounts,
+reset passwords, and remove accounts from the dashboard. User records contain a
+bcrypt password hash. OpenSubsonic token authentication additionally requires a
+reversible credential protected by a random AES-GCM key stored next to the
+database as `<database>.auth.key`; back up that `0600` file together with the
+database.
 
 ## Configuration
 
@@ -126,6 +136,15 @@ Use a config file with `--config peerphonic.json` or set its path through
 The periodic scan runs independently of `scan_on_start`; set
 `scan_interval_seconds` to `0` when only manual OpenSubsonic `startScan` calls
 should update the catalog.
+
+User administration is also available through the Peerphonic API:
+
+```bash
+curl -u admin:admin http://localhost:8080/api/v1/users
+curl -u admin:admin -H 'Content-Type: application/json' \
+  -d '{"username":"listener","password":"replace-this-password","role":"user"}' \
+  http://localhost:8080/api/v1/users
+```
 
 ## Architecture
 

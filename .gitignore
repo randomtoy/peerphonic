@@ -2,6 +2,7 @@
 /backend/*.db
 /backend/*.db-shm
 /backend/*.db-wal
+/backend/*.auth.key
 /backend/cache/
 /backend/torrents/
 /deploy/data/

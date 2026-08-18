@@ -3,7 +3,9 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/md5"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -50,6 +52,32 @@ func TestLocalFileToOpenSubsonicStream(t *testing.T) {
 	if rootResponse.Code != http.StatusOK {
 		t.Fatalf("root status = %d, body = %s", rootResponse.Code, rootResponse.Body.String())
 	}
+	createUser := httptest.NewRequest(http.MethodPost, "/api/v1/users", strings.NewReader(
+		`{"username":"listener","password":"listener-password","role":"user"}`,
+	))
+	createUser.SetBasicAuth("admin", "secret")
+	createUser.Header.Set("Content-Type", "application/json")
+	createUserResponse := httptest.NewRecorder()
+	app.handler.ServeHTTP(createUserResponse, createUser)
+	if createUserResponse.Code != http.StatusCreated ||
+		!strings.Contains(createUserResponse.Body.String(), `"username":"listener"`) {
+		t.Fatalf("create user status = %d, body = %s", createUserResponse.Code, createUserResponse.Body.String())
+	}
+	salt := "client-salt"
+	token := fmt.Sprintf("%x", md5.Sum([]byte("listener-password"+salt)))
+	userPing := httptest.NewRecorder()
+	app.handler.ServeHTTP(userPing, httptest.NewRequest(http.MethodGet,
+		"/rest/ping?u=listener&s="+salt+"&t="+token+"&f=json", nil))
+	if userPing.Code != http.StatusOK || !strings.Contains(userPing.Body.String(), `"status":"ok"`) {
+		t.Fatalf("new user ping status = %d, body = %s", userPing.Code, userPing.Body.String())
+	}
+	nonAdminUsers := httptest.NewRequest(http.MethodGet, "/api/v1/users", nil)
+	nonAdminUsers.SetBasicAuth("listener", "listener-password")
+	nonAdminUsersResponse := httptest.NewRecorder()
+	app.handler.ServeHTTP(nonAdminUsersResponse, nonAdminUsers)
+	if nonAdminUsersResponse.Code != http.StatusForbidden {
+		t.Fatalf("non-admin users status = %d, want %d", nonAdminUsersResponse.Code, http.StatusForbidden)
+	}
 	cacheResponse := httptest.NewRecorder()
 	app.handler.ServeHTTP(cacheResponse, httptest.NewRequest(http.MethodGet, "/api/v1/cache/status", nil))
 	if cacheResponse.Code != http.StatusOK || !strings.Contains(cacheResponse.Body.String(), `"capacityBytes":1024`) {
@@ -64,6 +92,18 @@ func TestLocalFileToOpenSubsonicStream(t *testing.T) {
 	}
 
 	trackID := domain.StableID("track", "local", "Artist/Album/Song.mp3")
+	listenerQueue := httptest.NewRecorder()
+	app.handler.ServeHTTP(listenerQueue, httptest.NewRequest(http.MethodGet,
+		"/rest/savePlayQueue?u=listener&p=listener-password&f=json&id="+trackID+"&current="+trackID, nil))
+	if listenerQueue.Code != http.StatusOK {
+		t.Fatalf("listener queue status = %d, body = %s", listenerQueue.Code, listenerQueue.Body.String())
+	}
+	adminQueue := httptest.NewRecorder()
+	app.handler.ServeHTTP(adminQueue, httptest.NewRequest(http.MethodGet,
+		"/rest/getPlayQueue?u=admin&p=secret&f=json", nil))
+	if adminQueue.Code != http.StatusOK || !strings.Contains(adminQueue.Body.String(), `"entry":[]`) {
+		t.Fatalf("admin queue leaked listener state: status = %d, body = %s", adminQueue.Code, adminQueue.Body.String())
+	}
 	stream := httptest.NewRecorder()
 	app.handler.ServeHTTP(stream, httptest.NewRequest(http.MethodGet,
 		"/rest/stream?u=admin&p=secret&id="+trackID, nil))
