@@ -10,8 +10,9 @@ import (
 )
 
 type discoveryProviderStub struct {
-	results []domain.TrackSource
-	err     error
+	results    []domain.TrackSource
+	collection domain.SourceCollection
+	err        error
 }
 
 func (s discoveryProviderStub) Name() string { return "remote" }
@@ -22,6 +23,12 @@ func (s discoveryProviderStub) Search(
 	return s.results, s.err
 }
 
+func (s discoveryProviderStub) BrowseCollection(
+	_ context.Context, _ domain.TrackSource,
+) (domain.SourceCollection, error) {
+	return s.collection, s.err
+}
+
 type trackSourceWriterStub struct {
 	saved []domain.TrackSource
 	err   error
@@ -29,6 +36,11 @@ type trackSourceWriterStub struct {
 
 func (s *trackSourceWriterStub) SaveTrackSource(_ context.Context, source domain.TrackSource) error {
 	s.saved = append(s.saved, source)
+	return s.err
+}
+
+func (s *trackSourceWriterStub) SaveTrackSources(_ context.Context, sources []domain.TrackSource) error {
+	s.saved = append(s.saved, sources...)
 	return s.err
 }
 
@@ -74,5 +86,31 @@ func TestDiscoveryServiceRejectsUnknownAndPropagatesStorageErrors(t *testing.T) 
 	}
 	if _, err := service.Add(context.Background(), result.Track.ID); err == nil || errors.Is(err, ErrDiscoveryResultNotFound) {
 		t.Fatalf("Add() error = %v", err)
+	}
+}
+
+func TestDiscoveryServiceAddsACollectionAsOneBatch(t *testing.T) {
+	t.Parallel()
+
+	anchor := domain.TrackSource{
+		Track: domain.Track{ID: "track-1"}, Ref: domain.SourceRef{Provider: "remote", Key: "one"},
+	}
+	collection := domain.SourceCollection{Name: "Album", Tracks: []domain.TrackSource{
+		anchor,
+		{Track: domain.Track{ID: "track-2"}, Ref: domain.SourceRef{Provider: "remote", Key: "two"}},
+	}}
+	writer := &trackSourceWriterStub{}
+	service := NewDiscoveryService(discoveryProviderStub{
+		results: []domain.TrackSource{anchor}, collection: collection,
+	}, writer)
+	if _, err := service.Search(context.Background(), domain.SearchQuery{Text: "Album"}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := service.AddCollection(context.Background(), anchor.Track.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "Album" || len(writer.saved) != 2 || writer.saved[1].Track.ID != "track-2" {
+		t.Fatalf("AddCollection() = %#v, saved = %#v", got, writer.saved)
 	}
 }

@@ -440,7 +440,10 @@ function renderSoulseekResults(items) {
         <div><dt>Upload</dt><dd>${formatBytes(item.uploadSpeedBytesPerSecond)}/s</dd></div>
         <div><dt>Queue</dt><dd>${Number(item.queueLength) || 0}</dd></div>
       </dl>
-      <button class="button secondary search-add" type="button" data-add-soulseek="${escapeHTML(item.id)}" ${item.requiresApproval ? "disabled" : ""}>${item.requiresApproval ? "Locked" : "Add to library"}</button>
+      <div class="search-actions">
+        <button class="button secondary search-add" type="button" data-add-soulseek="track" data-source-id="${escapeHTML(item.id)}" ${item.requiresApproval ? "disabled" : ""}>${item.requiresApproval ? "Locked" : "Add track"}</button>
+        <button class="button secondary search-add" type="button" data-add-soulseek="album" data-source-id="${escapeHTML(item.id)}" ${item.requiresApproval ? "disabled" : ""}>Add album</button>
+      </div>
     </article>`;
   }).join("");
 }
@@ -599,11 +602,14 @@ elements.soulseekSearchResults.addEventListener("click", async (event) => {
   button.textContent = "Adding…";
   elements.soulseekSearchMessage.className = "form-message";
   try {
-    const track = await api(`/api/v1/providers/soulseek/tracks/${encodeURIComponent(button.dataset.addSoulseek)}`, {
+    const album = button.dataset.addSoulseek === "album";
+    const result = await api(`/api/v1/providers/soulseek/${album ? "albums" : "tracks"}/${encodeURIComponent(button.dataset.sourceId)}`, {
       method: "POST",
     });
     button.textContent = "Added";
-    elements.soulseekSearchMessage.textContent = `Added “${track.title}” to ${track.album || "the library"}. Play it from any OpenSubsonic client to start downloading.`;
+    elements.soulseekSearchMessage.textContent = album
+      ? `Added ${result.tracks} tracks from “${result.name}”. Audio stays remote until you press play.`
+      : `Added “${result.title}” to ${result.album || "the library"}. Play it from any OpenSubsonic client to start downloading.`;
   } catch (error) {
     button.disabled = false;
     button.textContent = original;

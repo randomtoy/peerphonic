@@ -175,8 +175,9 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .search-form label { margin: 0; }
 .search-form .button.primary { width: auto; min-width: 92px; }
 .search-results { margin-top: 18px; }
-.search-result { align-items: start; }
+.search-result { grid-template-columns: minmax(0, 1fr) minmax(240px, auto) auto; align-items: start; }
 .search-result .search-add { align-self: center; white-space: nowrap; }
+.search-actions { display: flex; align-items: center; gap: 7px; }
 .search-result-title { display: flex; align-items: start; justify-content: space-between; gap: 14px; }
 .search-path { margin: 7px 0 0; overflow-wrap: anywhere; color: var(--muted); font-size: 11px; line-height: 1.45; }
 .search-peer-facts { min-width: 270px; margin: 0; display: grid; grid-template-columns: minmax(90px, 1.4fr) repeat(2, minmax(58px, .7fr)); gap: 14px; }

@@ -40,12 +40,15 @@ type transferSettingsManagerStub struct {
 type providerStatusMonitorStub struct{ status domain.ProviderStatus }
 
 type sourceSearcherStub struct {
-	query   domain.SearchQuery
-	results []domain.TrackSource
-	err     error
-	addedID string
-	added   domain.Track
-	addErr  error
+	query         domain.SearchQuery
+	results       []domain.TrackSource
+	err           error
+	addedID       string
+	added         domain.Track
+	addErr        error
+	collectionID  string
+	collection    domain.SourceCollection
+	collectionErr error
 }
 
 type uriImporterStub struct {
@@ -153,6 +156,13 @@ func (s *sourceSearcherStub) Search(
 func (s *sourceSearcherStub) Add(_ context.Context, id string) (domain.Track, error) {
 	s.addedID = id
 	return s.added, s.addErr
+}
+
+func (s *sourceSearcherStub) AddCollection(
+	_ context.Context, id string,
+) (domain.SourceCollection, error) {
+	s.collectionID = id
+	return s.collection, s.collectionErr
 }
 
 func (s *uriImporterStub) ImportURI(_ context.Context, uri string) (domain.SourceImport, error) {
@@ -468,6 +478,29 @@ func TestSoulseekTrackAddReportsExpiredResult(t *testing.T) {
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestSoulseekAlbumAddReturnsImportedCollection(t *testing.T) {
+	t.Parallel()
+
+	searcher := &sourceSearcherStub{collection: domain.SourceCollection{
+		Name: "Mezzanine", Artist: "Massive Attack", CoverArtID: "remote-cover",
+		Tracks: []domain.TrackSource{{}, {}, {}},
+	}}
+	handler := newHandler(
+		nil, nil, nil, nil, nil, nil,
+		fixedAuthenticator{username: "alice", password: "secret"}, nil, nil, searcher, nil, nil,
+	)
+	request := httptest.NewRequest(http.MethodPost, "/api/v1/providers/soulseek/albums/anchor", nil)
+	request.SetBasicAuth("alice", "secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusCreated || searcher.collectionID != "anchor" ||
+		!strings.Contains(response.Body.String(), `"name":"Mezzanine"`) ||
+		!strings.Contains(response.Body.String(), `"tracks":3`) ||
+		!strings.Contains(response.Body.String(), `"coverArtId":"remote-cover"`) {
+		t.Fatalf("status = %d, id = %q, body = %s", response.Code, searcher.collectionID, response.Body.String())
 	}
 }
 

@@ -173,11 +173,22 @@ type sourceAdder interface {
 	Add(ctx context.Context, id string) (domain.Track, error)
 }
 
+type sourceCollectionAdder interface {
+	AddCollection(ctx context.Context, id string) (domain.SourceCollection, error)
+}
+
 type sourceAddResponse struct {
 	ID     string `json:"id"`
 	Title  string `json:"title"`
 	Artist string `json:"artist"`
 	Album  string `json:"album"`
+}
+
+type sourceCollectionAddResponse struct {
+	Name       string `json:"name"`
+	Artist     string `json:"artist"`
+	Tracks     int    `json:"tracks"`
+	CoverArtID string `json:"coverArtId,omitempty"`
 }
 
 func NewHandler(
@@ -406,6 +417,37 @@ func newHandler(
 		}
 		writeJSON(writer, http.StatusCreated, sourceAddResponse{
 			ID: track.ID, Title: track.Title, Artist: track.Artist, Album: track.Album,
+		})
+	})
+	mux.HandleFunc("POST /api/v1/providers/soulseek/albums/{id}", func(writer http.ResponseWriter, request *http.Request) {
+		if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
+			return
+		}
+		adder, ok := providerSearch.(sourceCollectionAdder)
+		if !ok {
+			http.Error(writer, "Soulseek album browsing is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		id := strings.TrimSpace(request.PathValue("id"))
+		if id == "" {
+			http.Error(writer, "track ID is required", http.StatusBadRequest)
+			return
+		}
+		collection, err := adder.AddCollection(request.Context(), id)
+		if err != nil {
+			switch {
+			case errors.Is(err, services.ErrDiscoveryResultNotFound):
+				http.Error(writer, "search result expired; search again", http.StatusNotFound)
+			case errors.Is(err, ports.ErrSourceUnavailable):
+				http.Error(writer, "Soulseek peer is unavailable", http.StatusBadGateway)
+			default:
+				http.Error(writer, "add Soulseek album to library", http.StatusBadGateway)
+			}
+			return
+		}
+		writeJSON(writer, http.StatusCreated, sourceCollectionAddResponse{
+			Name: collection.Name, Artist: collection.Artist, Tracks: len(collection.Tracks),
+			CoverArtID: collection.CoverArtID,
 		})
 	})
 	if cache != nil {

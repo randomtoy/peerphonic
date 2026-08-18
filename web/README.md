@@ -18,8 +18,9 @@ limits at runtime and persists them in the metadata database. It also reports
 whether an optional slskd API is configured, reachable, and authenticated
 without exposing the API key to the browser. The Search workspace queries
 connected Soulseek peers, shows audio files, queues, upload speeds, and free
-slots, and lets an authorized user add an unlocked result to the library without
-starting the download. Playback later starts the single-file transfer and reuses
+slots, and lets an authorized user add one unlocked result or its entire remote
+album directory without starting audio downloads. Matching cover artwork is
+cached on demand. Playback later starts the single-file transfer and reuses
 the completed file from the shared cache. The Activity workspace combines
 torrent and Soulseek jobs, including queued and cancelled states. Accounts with
 source-management access can cancel an active Soulseek transfer or retry a

@@ -106,7 +106,11 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	if err != nil {
 		return fail(err)
 	}
-	artwork := services.NewArtworkService(blobs, torrentProvider)
+	artworkSources := []services.ArtworkSource{torrentProvider}
+	if soulseekClient != nil {
+		artworkSources = append(artworkSources, soulseekClient)
+	}
+	artwork := services.NewArtworkService(blobs, artworkSources...)
 	completedEnricher := scanner.NewEnricher(catalog, metadata.TagExtractor{}, artwork)
 	torrentProvider.SetCompletedHandler(func(file torrentprovider.CompletedFile) {
 		if err := completedEnricher.Enrich(ctx, file.TrackID, file.Path); err != nil {

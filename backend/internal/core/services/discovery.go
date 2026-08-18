@@ -12,6 +12,7 @@ import (
 )
 
 var ErrDiscoveryResultNotFound = errors.New("discovery result not found")
+var ErrCollectionBrowsingUnsupported = errors.New("source collection browsing is not supported")
 
 const discoveryRetention = 30 * time.Minute
 
@@ -63,4 +64,28 @@ func (s *DiscoveryService) Add(ctx context.Context, id string) (domain.Track, er
 		return domain.Track{}, fmt.Errorf("save discovered track: %w", err)
 	}
 	return result.Track, nil
+}
+
+func (s *DiscoveryService) AddCollection(ctx context.Context, id string) (domain.SourceCollection, error) {
+	s.mu.Lock()
+	result, ok := s.results[id]
+	s.mu.Unlock()
+	if !ok {
+		return domain.SourceCollection{}, ErrDiscoveryResultNotFound
+	}
+	browser, ok := s.provider.(ports.SourceCollectionBrowser)
+	if !ok {
+		return domain.SourceCollection{}, ErrCollectionBrowsingUnsupported
+	}
+	collection, err := browser.BrowseCollection(ctx, result)
+	if err != nil {
+		return domain.SourceCollection{}, fmt.Errorf("browse discovered collection: %w", err)
+	}
+	if len(collection.Tracks) == 0 {
+		return domain.SourceCollection{}, errors.New("discovered collection has no tracks")
+	}
+	if err := s.catalog.SaveTrackSources(ctx, collection.Tracks); err != nil {
+		return domain.SourceCollection{}, fmt.Errorf("save discovered collection: %w", err)
+	}
+	return collection, nil
 }

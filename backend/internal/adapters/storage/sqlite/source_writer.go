@@ -2,6 +2,7 @@ package sqlite
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 	"time"
 
@@ -9,15 +10,33 @@ import (
 )
 
 func (c *Catalog) SaveTrackSource(ctx context.Context, source domain.TrackSource) error {
-	if source.Track.ID == "" || source.Ref.Provider == "" || source.Ref.Key == "" {
-		return fmt.Errorf("track id, provider, and source key are required")
+	return c.SaveTrackSources(ctx, []domain.TrackSource{source})
+}
+
+func (c *Catalog) SaveTrackSources(ctx context.Context, sources []domain.TrackSource) error {
+	if len(sources) == 0 {
+		return nil
 	}
 	tx, err := c.db.BeginTx(ctx, nil)
 	if err != nil {
-		return fmt.Errorf("begin track source save: %w", err)
+		return fmt.Errorf("begin track sources save: %w", err)
 	}
 	defer tx.Rollback()
+	for _, source := range sources {
+		if err := saveTrackSource(ctx, tx, source); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("commit track sources save: %w", err)
+	}
+	return nil
+}
 
+func saveTrackSource(ctx context.Context, tx *sql.Tx, source domain.TrackSource) error {
+	if source.Track.ID == "" || source.Ref.Provider == "" || source.Ref.Key == "" {
+		return fmt.Errorf("track id, provider, and source key are required")
+	}
 	track := source.Track
 	albumArtistID := track.AlbumArtistID
 	if albumArtistID == "" {
@@ -65,9 +84,6 @@ func (c *Catalog) SaveTrackSource(ctx context.Context, source domain.TrackSource
 		track.ID, source.Ref.Provider, source.Ref.Key, discoveredAt,
 	); err != nil {
 		return fmt.Errorf("save source for track %q: %w", track.ID, err)
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("commit track source save: %w", err)
 	}
 	return nil
 }

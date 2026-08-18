@@ -30,6 +30,12 @@ type SourceSearcher interface {
 	Search(ctx context.Context, query domain.SearchQuery) ([]domain.TrackSource, error)
 }
 
+// SourceCollectionBrowser discovers tracks grouped with an already discovered
+// source. The source remains opaque to the application layer.
+type SourceCollectionBrowser interface {
+	BrowseCollection(ctx context.Context, anchor domain.TrackSource) (domain.SourceCollection, error)
+}
+
 type SourceProvider interface {
 	SourceSearcher
 	Resolve(ctx context.Context, ref domain.SourceRef) (ResolvedSource, error)

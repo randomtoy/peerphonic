@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -41,6 +42,10 @@ var audioContentTypes = map[string]string{
 	"wav": "audio/wav", "wma": "audio/x-ms-wma",
 }
 
+var artworkExtensions = map[string]struct{}{
+	"gif": {}, "jpeg": {}, "jpg": {}, "png": {},
+}
+
 type Client struct {
 	endpoint   *url.URL
 	apiKey     string
@@ -49,6 +54,10 @@ type Client struct {
 
 	completedMu      sync.RWMutex
 	completedHandler func(CompletedFile)
+
+	artworkMu   sync.Mutex
+	artworkJobs map[string]*artworkDownload
+	artworkWG   sync.WaitGroup
 }
 
 type CompletedFile struct {
@@ -109,6 +118,7 @@ func (c *Client) Close() error {
 	if c.downloads != nil {
 		c.downloads.close()
 	}
+	c.artworkWG.Wait()
 	return nil
 }
 
@@ -223,6 +233,11 @@ type slskdFile struct {
 	BitRate   *int   `json:"bitRate"`
 }
 
+type slskdDirectory struct {
+	Name  string      `json:"name"`
+	Files []slskdFile `json:"files"`
+}
+
 func mapSearchResults(responses []slskdSearchResponse, limit int) []domain.TrackSource {
 	results := make([]domain.TrackSource, 0, limit)
 	discoveredAt := time.Now().UTC()
@@ -245,10 +260,7 @@ func mapSearchResults(responses []slskdSearchResponse, limit int) []domain.Track
 		}
 		for _, candidate := range files {
 			file := candidate.file
-			extension := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(file.Extension), "."))
-			if extension == "" {
-				extension = strings.TrimPrefix(strings.ToLower(filepath.Ext(file.Filename)), ".")
-			}
+			extension := fileExtension(file)
 			if _, ok := audioExtensions[extension]; !ok || strings.TrimSpace(file.Filename) == "" {
 				continue
 			}
@@ -300,6 +312,149 @@ func provisionalArtistAlbum(displayPath string) (string, string) {
 		artist = strings.TrimSpace(parts[len(parts)-3])
 	}
 	return artist, album
+}
+
+func (c *Client) BrowseCollection(
+	ctx context.Context, anchor domain.TrackSource,
+) (domain.SourceCollection, error) {
+	if anchor.Ref.Provider != Name {
+		return domain.SourceCollection{}, fmt.Errorf("unexpected provider %q", anchor.Ref.Provider)
+	}
+	if anchor.Availability.RequiresApproval {
+		return domain.SourceCollection{}, fmt.Errorf("%w: remote directory requires peer approval", ports.ErrSourceUnavailable)
+	}
+	remote, err := decodeRemoteFileRef(anchor.Ref.Key)
+	if err != nil {
+		return domain.SourceCollection{}, err
+	}
+	directory := remoteDirectory(remote.Path)
+	if directory == "" {
+		return domain.SourceCollection{}, errors.New("Soulseek result does not belong to a directory")
+	}
+	var directories []slskdDirectory
+	if err := c.doJSON(ctx, http.MethodPost,
+		"/api/v0/users/"+url.PathEscape(remote.Peer)+"/directory",
+		struct {
+			Directory string `json:"directory"`
+		}{Directory: directory}, &directories,
+	); err != nil {
+		return domain.SourceCollection{}, fmt.Errorf("browse Soulseek directory: %w", err)
+	}
+	files := filesForDirectory(directories, directory)
+	if len(files) == 0 {
+		return domain.SourceCollection{}, errors.New("Soulseek directory is empty or no longer available")
+	}
+	artist, album := provisionalArtistAlbum(remote.Path)
+	coverID := remoteCoverID(remote.Peer, files)
+	discoveredAt := time.Now().UTC()
+	tracks := make([]domain.TrackSource, 0, len(files))
+	for _, file := range files {
+		extension := fileExtension(file)
+		if _, ok := audioExtensions[extension]; !ok || strings.TrimSpace(file.Filename) == "" || file.Size <= 0 {
+			continue
+		}
+		refPayload, _ := json.Marshal(remoteFileRef{Peer: remote.Peer, Path: file.Filename, Size: file.Size})
+		displayPath := strings.ReplaceAll(file.Filename, "\\", "/")
+		track := domain.Track{
+			ID:     domain.StableID(Name, remote.Peer, file.Filename, strconv.FormatInt(file.Size, 10)),
+			Title:  strings.TrimSuffix(filepath.Base(displayPath), filepath.Ext(displayPath)),
+			Artist: artist, ArtistID: domain.StableID("artist", artist),
+			Album: album, AlbumID: domain.StableID("album", artist, album),
+			AlbumArtist: artist, AlbumArtistID: domain.StableID("artist", artist),
+			Size: file.Size, Suffix: extension, ContentType: audioContentTypes[extension], CoverArtID: coverID,
+		}
+		if file.Length != nil && *file.Length > 0 {
+			track.Duration = time.Duration(*file.Length) * time.Second
+		}
+		if file.BitRate != nil && *file.BitRate > 0 {
+			track.BitRate = *file.BitRate
+		}
+		track.TrackNumber = provisionalTrackNumber(track.Title)
+		tracks = append(tracks, domain.TrackSource{
+			Track:       track,
+			Ref:         domain.SourceRef{Provider: Name, Key: base64.RawURLEncoding.EncodeToString(refPayload)},
+			DisplayPath: displayPath, Availability: anchor.Availability, DiscoveredAt: discoveredAt,
+		})
+	}
+	sort.SliceStable(tracks, func(i, j int) bool {
+		left, right := tracks[i].Track, tracks[j].Track
+		if left.TrackNumber > 0 && right.TrackNumber > 0 && left.TrackNumber != right.TrackNumber {
+			return left.TrackNumber < right.TrackNumber
+		}
+		return strings.ToLower(tracks[i].DisplayPath) < strings.ToLower(tracks[j].DisplayPath)
+	})
+	return domain.SourceCollection{Name: album, Artist: artist, CoverArtID: coverID, Tracks: tracks}, nil
+}
+
+func fileExtension(file slskdFile) string {
+	extension := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(file.Extension), "."))
+	if extension == "" {
+		extension = strings.TrimPrefix(strings.ToLower(filepath.Ext(file.Filename)), ".")
+	}
+	return extension
+}
+
+func remoteDirectory(path string) string {
+	index := strings.LastIndexAny(strings.TrimSpace(path), `/\\`)
+	if index <= 0 {
+		return ""
+	}
+	return path[:index]
+}
+
+func filesForDirectory(directories []slskdDirectory, requested string) []slskdFile {
+	normalize := func(value string) string {
+		return strings.Trim(strings.ReplaceAll(strings.TrimSpace(value), "\\", "/"), "/")
+	}
+	for _, directory := range directories {
+		if normalize(directory.Name) == normalize(requested) {
+			return directory.Files
+		}
+	}
+	if len(directories) == 1 {
+		return directories[0].Files
+	}
+	return nil
+}
+
+func provisionalTrackNumber(title string) int {
+	digits := strings.TrimSpace(title)
+	end := 0
+	for end < len(digits) && end < 3 && digits[end] >= '0' && digits[end] <= '9' {
+		end++
+	}
+	if end == 0 {
+		return 0
+	}
+	number, _ := strconv.Atoi(digits[:end])
+	return number
+}
+
+func remoteCoverID(peer string, files []slskdFile) string {
+	bestScore := 100
+	var best slskdFile
+	for _, file := range files {
+		extension := fileExtension(file)
+		if _, ok := artworkExtensions[extension]; !ok || file.Size <= 0 || file.Size > maxRemoteArtworkSize {
+			continue
+		}
+		base := strings.ToLower(strings.TrimSuffix(filepath.Base(strings.ReplaceAll(file.Filename, "\\", "/")), filepath.Ext(file.Filename)))
+		score := 10
+		for index, preferred := range []string{"cover", "folder", "front", "album"} {
+			if base == preferred {
+				score = index
+				break
+			}
+		}
+		if score < bestScore {
+			bestScore, best = score, file
+		}
+	}
+	if bestScore == 100 {
+		return ""
+	}
+	payload, _ := json.Marshal(remoteFileRef{Peer: peer, Path: best.Filename, Size: best.Size})
+	return remoteArtworkPrefix + base64.RawURLEncoding.EncodeToString(payload)
 }
 
 func (c *Client) request(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {

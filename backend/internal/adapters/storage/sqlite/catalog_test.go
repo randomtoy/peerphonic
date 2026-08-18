@@ -150,6 +150,28 @@ func TestCatalogSavesSelectedTrackSourceIncrementally(t *testing.T) {
 	}
 }
 
+func TestCatalogSavesTrackSourceBatchAtomically(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	catalog, err := Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer catalog.Close()
+	valid := domain.TrackSource{
+		Track: domain.Track{ID: "remote-1", Title: "First", Artist: "Artist", ArtistID: "artist-1"},
+		Ref:   domain.SourceRef{Provider: "remote", Key: "peer/first.mp3"},
+	}
+	invalid := domain.TrackSource{Track: domain.Track{ID: "remote-2"}}
+	if err := catalog.SaveTrackSources(ctx, []domain.TrackSource{valid, invalid}); err == nil {
+		t.Fatal("SaveTrackSources() error = nil")
+	}
+	if _, err := catalog.Track(ctx, valid.Track.ID); !errors.Is(err, ports.ErrNotFound) {
+		t.Fatalf("Track() error = %v, want ErrNotFound after rollback", err)
+	}
+}
+
 func TestCatalogAlbumListOrderingAndYearRanges(t *testing.T) {
 	t.Parallel()
 

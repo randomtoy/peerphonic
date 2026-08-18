@@ -167,6 +167,126 @@ func TestSlskdSearchValidatesQueryAndReportsUnavailableProvider(t *testing.T) {
 	}
 }
 
+func TestSlskdBrowseCollectionMapsDirectoryWithoutDownloadingAudio(t *testing.T) {
+	t.Parallel()
+
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		requests.Add(1)
+		if request.Method != http.MethodPost || request.URL.Path != "/api/v0/users/peer-one/directory" {
+			http.Error(writer, "unexpected request", http.StatusNotFound)
+			return
+		}
+		var payload struct {
+			Directory string `json:"directory"`
+		}
+		if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+			t.Error(err)
+		}
+		if payload.Directory != `Massive Attack\Mezzanine` {
+			t.Errorf("directory = %q", payload.Directory)
+		}
+		writer.Header().Set("Content-Type", "application/json")
+		_, _ = writer.Write([]byte(`[{
+			"name":"Massive Attack\\Mezzanine","files":[
+				{"filename":"Massive Attack\\Mezzanine\\02 Risingson.flac","extension":"flac","size":2400,"length":289,"bitRate":1000},
+				{"filename":"Massive Attack\\Mezzanine\\01 Angel.mp3","extension":"mp3","size":1200,"length":360,"bitRate":320},
+				{"filename":"Massive Attack\\Mezzanine\\cover.jpg","extension":"jpg","size":400},
+				{"filename":"Massive Attack\\Mezzanine\\notes.txt","extension":"txt","size":50}
+			]
+		}]`))
+	}))
+	defer server.Close()
+	client, err := NewSlskd(server.URL, "key", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	remote := remoteFileRef{Peer: "peer-one", Path: `Massive Attack\Mezzanine\01 Angel.mp3`, Size: 1200}
+	encoded, _ := json.Marshal(remote)
+	anchor := domain.TrackSource{
+		Ref:          domain.SourceRef{Provider: Name, Key: base64.RawURLEncoding.EncodeToString(encoded)},
+		Availability: domain.SourceAvailability{Peer: "peer-one", FreeUploadSlot: true},
+	}
+	collection, err := client.BrowseCollection(context.Background(), anchor)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if collection.Name != "Mezzanine" || collection.Artist != "Massive Attack" || len(collection.Tracks) != 2 ||
+		collection.Tracks[0].Track.Title != "01 Angel" || collection.Tracks[0].Track.TrackNumber != 1 ||
+		collection.Tracks[1].Track.Title != "02 Risingson" || collection.CoverArtID == "" ||
+		collection.Tracks[0].Track.CoverArtID != collection.CoverArtID || requests.Load() != 1 {
+		t.Fatalf("BrowseCollection() = %#v, requests = %d", collection, requests.Load())
+	}
+	if !strings.HasPrefix(collection.CoverArtID, remoteArtworkPrefix) {
+		t.Fatalf("cover ID = %q", collection.CoverArtID)
+	}
+}
+
+func TestSlskdArtworkDownloadsOnceAndReusesCache(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	downloadsDir := filepath.Join(root, "downloads")
+	remote := remoteFileRef{Peer: "peer-one", Path: `Artist\Album\cover.jpg`, Size: 10}
+	encoded, _ := json.Marshal(remote)
+	key := base64.RawURLEncoding.EncodeToString(encoded)
+	destination := domain.StableID("soulseek-cover", key)
+	finalPath := filepath.Join(downloadsDir, destination, "cover.jpg")
+	var enqueueCalls atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v0/transfers/downloads/batches":
+			enqueueCalls.Add(1)
+			var payload struct {
+				Options struct {
+					Destination string `json:"destination"`
+				} `json:"options"`
+			}
+			if err := json.NewDecoder(request.Body).Decode(&payload); err != nil {
+				t.Error(err)
+			}
+			if payload.Options.Destination != destination {
+				t.Errorf("destination = %q", payload.Options.Destination)
+			}
+			_, _ = writer.Write([]byte(`{"batch":{"id":"cover-batch","transfers":[{"id":"cover-transfer","state":"Queued, Locally"}]},"failures":[]}`))
+		case request.Method == http.MethodGet && request.URL.Path == "/api/v0/transfers/downloads/batches/cover-batch":
+			if err := os.MkdirAll(filepath.Dir(finalPath), 0o750); err != nil {
+				t.Error(err)
+			}
+			if err := os.WriteFile(finalPath, []byte("image-data"), 0o640); err != nil {
+				t.Error(err)
+			}
+			_, _ = writer.Write([]byte(`{"id":"cover-batch","transfers":[{"id":"cover-transfer","state":"Completed, Succeeded, Remotely","bytesTransferred":10}]}`))
+		default:
+			http.Error(writer, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	client, err := NewSlskd(server.URL, "key", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.SetMediaDirectories(downloadsDir, filepath.Join(root, "incomplete")); err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	for range 2 {
+		resolved, err := client.OpenArtwork(context.Background(), remoteArtworkPrefix+key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := io.ReadAll(resolved.Content)
+		_ = resolved.Content.Close()
+		if err != nil || string(data) != "image-data" || resolved.ContentType != "image/jpeg" {
+			t.Fatalf("artwork = %q, content type = %q, error = %v", data, resolved.ContentType, err)
+		}
+	}
+	if enqueueCalls.Load() != 1 {
+		t.Fatalf("enqueue calls = %d, want 1", enqueueCalls.Load())
+	}
+}
+
 func TestSlskdResolveStreamsGrowingFileAndReusesCompletedDownload(t *testing.T) {
 	t.Parallel()
 

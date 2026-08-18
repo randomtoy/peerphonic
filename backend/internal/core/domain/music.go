@@ -122,6 +122,16 @@ type TrackSource struct {
 	DiscoveredAt time.Time
 }
 
+// SourceCollection is a provider-neutral group of tracks discovered next to
+// a selected source. Providers may map it to a remote directory, release, or
+// another native grouping without exposing that detail to application code.
+type SourceCollection struct {
+	Name       string
+	Artist     string
+	CoverArtID string
+	Tracks     []TrackSource
+}
+
 // SourceAvailability describes provider-neutral hints for choosing between
 // remote copies of the same track.
 type SourceAvailability struct {

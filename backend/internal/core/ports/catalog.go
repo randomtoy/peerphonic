@@ -36,6 +36,7 @@ type Catalog interface {
 // replacing the provider's complete catalog.
 type TrackSourceWriter interface {
 	SaveTrackSource(ctx context.Context, source domain.TrackSource) error
+	SaveTrackSources(ctx context.Context, sources []domain.TrackSource) error
 }
 
 type AlbumOrder string
