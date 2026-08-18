@@ -86,6 +86,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	}
 	var soulseekMonitor ports.ProviderStatusMonitor
 	var soulseekSearch ports.SourceSearcher
+	var soulseekDiscovery *services.DiscoveryService
 	if cfg.SlskdURL != "" {
 		var clientErr error
 		soulseekClient, clientErr = soulseekprovider.NewSlskd(
@@ -100,7 +101,8 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 			return fail(fmt.Errorf("initialize slskd media directories: %w", clientErr))
 		}
 		soulseekMonitor = soulseekClient
-		soulseekSearch = services.NewDiscoveryService(soulseekClient, catalog)
+		soulseekDiscovery = services.NewDiscoveryService(soulseekClient, catalog)
+		soulseekSearch = soulseekDiscovery
 	}
 	blobs, err := filesystem.New(cfg.CacheDir)
 	if err != nil {
@@ -187,8 +189,8 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	streaming := services.NewStreamingService(catalog, streamingProviders...)
 	downloadService := services.NewDownloadService(downloadMonitors...)
 	mux := http.NewServeMux()
-	mux.Handle("/rest/", opensubsonic.NewHandlerWithAuthenticator(
-		catalog, streaming, artwork, userService, scanManager,
+	mux.Handle("/rest/", opensubsonic.NewHandlerWithAuthenticatorAndDiscovery(
+		catalog, streaming, artwork, userService, soulseekDiscovery, scanManager,
 	))
 	mux.Handle("/", peerphonic.NewHandlerWithAuthenticator(
 		cacheStatus, torrentImporter, magnetImporter, torrentManager, torrentProvider, downloadService,

@@ -29,6 +29,12 @@ source-management access can cancel an active Soulseek transfer or retry a
 failed, cancelled, or evicted one. Active Soulseek job monitoring resumes after
 a Peerphonic restart without enqueueing a duplicate slskd transfer.
 
+Soulseek access is delegated independently: `soulseek.search` exposes the Search
+workspace and album previews, `soulseek.add` enables track and album imports, and
+`soulseek.client-search` extends that account's OpenSubsonic searches with temporary
+remote results. General source managers keep dashboard search and import access,
+while music-client network search remains an explicit opt-in.
+
 For local frontend work, serve this directory through a web server that proxies
 the API paths to the backend. Opening `index.html` directly does not provide an
 API proxy.

@@ -2,6 +2,7 @@ const state = {
   authorization: sessionStorage.getItem("peerphonic.authorization") || "",
   activePage: sessionStorage.getItem("peerphonic.activePage") || "overview",
   refreshTimer: 0,
+  session: null,
 };
 
 const elements = {
@@ -75,6 +76,9 @@ const permissions = {
   dashboard: "dashboard.access",
   monitoring: "monitoring.view",
   sources: "sources.manage",
+  soulseekSearch: "soulseek.search",
+  soulseekAdd: "soulseek.add",
+  soulseekClient: "soulseek.client-search",
   users: "users.manage",
 };
 
@@ -82,6 +86,9 @@ const permissionLabels = {
   "dashboard.access": "Dashboard",
   "monitoring.view": "Monitoring",
   "sources.manage": "Sources",
+  "soulseek.search": "Soulseek search",
+  "soulseek.add": "Add from Soulseek",
+  "soulseek.client-search": "Soulseek in music clients",
   "users.manage": "Users",
 };
 
@@ -408,7 +415,7 @@ function formatDuration(seconds = 0) {
   return `${minutes}:${String(total % 60).padStart(2, "0")}`;
 }
 
-function renderSoulseekResults(items, collections = []) {
+function renderSoulseekResults(items, collections = [], canAdd = false) {
   const grouped = collections.length ? collections : items.map((item) => ({
     id: item.id,
     name: item.album || "Unknown Album",
@@ -445,7 +452,7 @@ function renderSoulseekResults(items, collections = []) {
     ];
     const matchRows = (group.results || []).map((item) => `<li>
       <div><span>${escapeHTML(item.title || item.path)}</span><small>${escapeHTML((item.suffix || "audio").toUpperCase())} · ${formatBytes(item.size)} · ${item.durationSeconds ? formatDuration(item.durationSeconds) : "Unknown length"}${item.bitRate ? ` · ${item.bitRate} kbps` : ""}</small></div>
-      <button class="button secondary" type="button" data-add-soulseek="track" data-source-id="${escapeHTML(item.id)}" ${item.requiresApproval ? "disabled" : ""}>${item.requiresApproval ? "Locked" : "Add track"}</button>
+      <button class="button secondary" type="button" data-add-soulseek="track" data-source-id="${escapeHTML(item.id)}" ${item.requiresApproval || !canAdd ? "disabled" : ""}>${item.requiresApproval ? "Locked" : canAdd ? "Add track" : "No add access"}</button>
     </li>`).join("");
     const trackList = group.matchedTracks > 1
       ? `<details class="search-matches"><summary>Show ${group.matchedTracks} matched tracks</summary><ol class="search-match-list">${matchRows}</ol></details>`
@@ -486,7 +493,7 @@ function renderSoulseekAlbumPreview(article, album, sourceId) {
         <h4>${escapeHTML(album.artist || "Unknown Artist")} — ${escapeHTML(album.name || "Unknown Album")}</h4>
         <p>${tracks.length} track${tracks.length === 1 ? "" : "s"} · ${formatBytes(totalSize)} · ${formatDuration(totalDuration)} · ${album.hasArtwork ? "Cover found" : "No cover found"}</p>
       </div>
-      <button class="button primary" type="button" data-import-soulseek-album data-source-id="${escapeHTML(sourceId)}">Import album</button>
+      <button class="button primary" type="button" data-import-soulseek-album data-source-id="${escapeHTML(sourceId)}" ${state.session?.permissions?.includes(permissions.soulseekAdd) ? "" : "disabled"}>${state.session?.permissions?.includes(permissions.soulseekAdd) ? "Import album" : "No import access"}</button>
     </div>
     <ol class="album-track-list">
       ${tracks.map((track) => `<li>
@@ -501,9 +508,11 @@ async function refresh() {
   elements.refresh.disabled = true;
   try {
     const session = await api("/api/v1/session");
+    state.session = session;
     const allowed = new Set(session.permissions || []);
     const canMonitor = allowed.has(permissions.monitoring);
     const canManageSources = allowed.has(permissions.sources);
+    const canSearchSoulseek = allowed.has(permissions.soulseekSearch);
     const canManageUsers = allowed.has(permissions.users);
     const [cache, importPayload, downloadPayload, transferPayload, sourcePayload, userPayload, scanStatus, transferSettings, soulseekStatus] = await Promise.all([
       canMonitor ? api("/api/v1/cache/status") : Promise.resolve({}),
@@ -514,7 +523,7 @@ async function refresh() {
       canManageUsers ? api("/api/v1/users") : Promise.resolve({ users: [] }),
       canManageSources ? api("/api/v1/library/scan") : Promise.resolve({}),
       canManageSources ? api("/api/v1/settings/transfers") : Promise.resolve({}),
-      canManageSources ? api("/api/v1/providers/soulseek/status") : Promise.resolve({}),
+      canSearchSoulseek ? api("/api/v1/providers/soulseek/status") : Promise.resolve({}),
     ]);
     const imports = importPayload.imports || [];
     const downloads = downloadPayload.downloads || [];
@@ -535,7 +544,7 @@ async function refresh() {
     renderUsers(users, session);
     if (canManageSources) renderLibraryScan(scanStatus);
     if (canManageSources) renderTransferSettings(transferSettings);
-    if (canManageSources) renderSoulseekStatus(soulseekStatus);
+    if (canSearchSoulseek) renderSoulseekStatus(soulseekStatus);
     elements.updatedAt.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
     elements.loginError.textContent = "";
     showDashboard(true);
@@ -629,7 +638,7 @@ elements.soulseekSearchForm.addEventListener("submit", async (event) => {
       }),
     });
     const results = payload.results || [];
-    renderSoulseekResults(results, payload.collections || []);
+    renderSoulseekResults(results, payload.collections || [], Boolean(state.session?.permissions?.includes(permissions.soulseekAdd)));
     elements.soulseekSearchMessage.textContent = results.length
       ? `Found ${results.length} audio result${results.length === 1 ? "" : "s"} for “${payload.query}”.`
       : `No audio results found for “${payload.query}”.`;

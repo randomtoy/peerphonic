@@ -70,6 +70,13 @@ func TestDiscoveryServiceAddsSelectedSearchResult(t *testing.T) {
 	if track != result.Track || len(writer.saved) != 1 || writer.saved[0].Ref != result.Ref {
 		t.Fatalf("Add() = %#v, saved = %#v", track, writer.saved)
 	}
+	cached, ok := service.Result(result.Track.ID)
+	if !ok || cached != result {
+		t.Fatalf("Result() = %#v, %v", cached, ok)
+	}
+	if _, ok := service.Result("missing"); ok {
+		t.Fatal("Result(missing) unexpectedly succeeded")
+	}
 }
 
 func TestDiscoveryServiceRejectsUnknownAndPropagatesStorageErrors(t *testing.T) {

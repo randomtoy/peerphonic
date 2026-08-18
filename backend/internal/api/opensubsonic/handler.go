@@ -36,6 +36,7 @@ type Handler struct {
 	annotations *services.AnnotationService
 	playQueue   *services.PlayQueueService
 	auth        ports.Authenticator
+	discovery   sourceDiscovery
 	scans       scanController
 }
 
@@ -49,6 +50,12 @@ type fixedAuthenticator struct {
 type scanController interface {
 	Start() bool
 	Status() scanner.Status
+}
+
+type sourceDiscovery interface {
+	Search(ctx context.Context, query domain.SearchQuery) ([]domain.TrackSource, error)
+	Add(ctx context.Context, id string) (domain.Track, error)
+	Result(id string) (domain.TrackSource, bool)
 }
 
 func NewHandler(
@@ -70,9 +77,22 @@ func NewHandlerWithAuthenticator(
 	authenticator ports.Authenticator,
 	scans ...scanController,
 ) http.Handler {
+	return NewHandlerWithAuthenticatorAndDiscovery(
+		catalog, streams, artwork, authenticator, nil, scans...,
+	)
+}
+
+func NewHandlerWithAuthenticatorAndDiscovery(
+	catalog ports.Catalog,
+	streams *services.StreamingService,
+	artwork *services.ArtworkService,
+	authenticator ports.Authenticator,
+	discovery sourceDiscovery,
+	scans ...scanController,
+) http.Handler {
 	handler := &Handler{
 		catalog: catalog, streams: streams, artwork: artwork,
-		playlists: services.NewPlaylistService(catalog), auth: authenticator,
+		playlists: services.NewPlaylistService(catalog), auth: authenticator, discovery: discovery,
 	}
 	if store, ok := catalog.(ports.MediaAnnotationStore); ok {
 		handler.annotations = services.NewAnnotationService(catalog, store)
@@ -217,6 +237,9 @@ func (h *Handler) search2(writer http.ResponseWriter, request *http.Request) {
 	for _, item := range result.Songs {
 		payload.Songs = append(payload.Songs, trackChild(item))
 	}
+	for _, item := range h.externalSearchSongs(request, result.Songs, songCount) {
+		payload.Songs = append(payload.Songs, trackChild(item))
+	}
 	h.write(writer, request, http.StatusOK, response{SearchResult2: payload})
 }
 
@@ -306,7 +329,65 @@ func (h *Handler) search3(writer http.ResponseWriter, request *http.Request) {
 	for _, song := range result.Songs {
 		payload.Songs = append(payload.Songs, trackChild(song))
 	}
+	for _, song := range h.externalSearchSongs(request, result.Songs, songCount) {
+		payload.Songs = append(payload.Songs, trackChild(song))
+	}
 	h.write(writer, request, http.StatusOK, response{SearchResult3: payload})
+}
+
+func (h *Handler) externalSearchSongs(
+	request *http.Request, local []domain.Track, requested int,
+) []domain.Track {
+	if !h.canUseClientDiscovery(request) || requested <= len(local) {
+		return nil
+	}
+	query := strings.TrimSpace(request.Form.Get("query"))
+	if length := len([]rune(query)); length < 3 || length > 200 {
+		return nil
+	}
+	remaining := requested - len(local)
+	searchLimit := min(max(remaining*4, remaining), 200)
+	results, err := h.discovery.Search(request.Context(), domain.SearchQuery{Text: query, Limit: searchLimit})
+	if err != nil {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(local)+remaining)
+	for _, track := range local {
+		seen[trackSearchIdentity(track)] = struct{}{}
+	}
+	remote := make([]domain.Track, 0, remaining)
+	for _, result := range results {
+		if result.Track.ID == "" || result.Availability.RequiresApproval {
+			continue
+		}
+		identity := trackSearchIdentity(result.Track)
+		if _, exists := seen[identity]; exists {
+			continue
+		}
+		seen[identity] = struct{}{}
+		remote = append(remote, result.Track)
+		if len(remote) == remaining {
+			break
+		}
+	}
+	return remote
+}
+
+func trackSearchIdentity(track domain.Track) string {
+	return strings.ToLower(strings.Join([]string{
+		strings.TrimSpace(track.Artist), strings.TrimSpace(track.Album), strings.TrimSpace(track.Title),
+	}, "\x00"))
+}
+
+func (h *Handler) canUseClientDiscovery(request *http.Request) bool {
+	return h.discovery != nil && authenticatedUser(request.Context()).HasPermission(domain.PermissionSoulseekClient)
+}
+
+func (h *Handler) discoveredResult(request *http.Request, id string) (domain.TrackSource, bool) {
+	if !h.canUseClientDiscovery(request) {
+		return domain.TrackSource{}, false
+	}
+	return h.discovery.Result(id)
 }
 
 func (h *Handler) getScanStatus(writer http.ResponseWriter, request *http.Request, start bool) {
@@ -624,8 +705,12 @@ func (h *Handler) getSong(writer http.ResponseWriter, request *http.Request) {
 	}
 	track, err := h.catalog.Track(request.Context(), id)
 	if errors.Is(err, ports.ErrNotFound) {
-		h.writeError(writer, request, http.StatusNotFound, 70, "Song not found")
-		return
+		if result, ok := h.discoveredResult(request, id); ok {
+			track, err = result.Track, nil
+		} else {
+			h.writeError(writer, request, http.StatusNotFound, 70, "Song not found")
+			return
+		}
 	}
 	if err != nil {
 		h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to read the music catalog")
@@ -720,6 +805,14 @@ func (h *Handler) stream(writer http.ResponseWriter, request *http.Request) {
 		return
 	}
 	resolved, err := h.streams.Open(request.Context(), id)
+	if errors.Is(err, ports.ErrNotFound) && h.canUseClientDiscovery(request) {
+		if _, addErr := h.discovery.Add(request.Context(), id); addErr == nil {
+			resolved, err = h.streams.Open(request.Context(), id)
+		} else if !errors.Is(addErr, services.ErrDiscoveryResultNotFound) {
+			h.writeError(writer, request, http.StatusInternalServerError, 0, "Failed to add the discovered song")
+			return
+		}
+	}
 	if err != nil {
 		if errors.Is(err, ports.ErrNotFound) {
 			h.writeError(writer, request, http.StatusNotFound, 70, "Song not found")

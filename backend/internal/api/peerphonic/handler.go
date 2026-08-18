@@ -358,7 +358,7 @@ func newHandler(
 		})
 	}
 	mux.HandleFunc("GET /api/v1/providers/soulseek/status", func(writer http.ResponseWriter, request *http.Request) {
-		if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
+		if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSoulseekSearch); !ok {
 			return
 		}
 		status := domain.ProviderStatus{
@@ -373,7 +373,7 @@ func newHandler(
 		})
 	})
 	mux.HandleFunc("POST /api/v1/providers/soulseek/search", func(writer http.ResponseWriter, request *http.Request) {
-		if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
+		if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSoulseekSearch); !ok {
 			return
 		}
 		if providerSearch == nil {
@@ -429,7 +429,7 @@ func newHandler(
 		writeJSON(writer, http.StatusOK, response)
 	})
 	mux.HandleFunc("POST /api/v1/providers/soulseek/tracks/{id}", func(writer http.ResponseWriter, request *http.Request) {
-		if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
+		if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSoulseekAdd); !ok {
 			return
 		}
 		adder, ok := providerSearch.(sourceAdder)
@@ -456,7 +456,7 @@ func newHandler(
 		})
 	})
 	mux.HandleFunc("GET /api/v1/providers/soulseek/albums/{id}", func(writer http.ResponseWriter, request *http.Request) {
-		if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
+		if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSoulseekSearch); !ok {
 			return
 		}
 		browser, ok := providerSearch.(sourceCollectionAdder)
@@ -487,7 +487,7 @@ func newHandler(
 		writeJSON(writer, http.StatusOK, response)
 	})
 	mux.HandleFunc("POST /api/v1/providers/soulseek/albums/{id}", func(writer http.ResponseWriter, request *http.Request) {
-		if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
+		if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSoulseekAdd); !ok {
 			return
 		}
 		adder, ok := providerSearch.(sourceCollectionAdder)

@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"image"
 	"image/color"
@@ -15,6 +16,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	blobfs "github.com/randomtoy/peerphonic/backend/internal/adapters/blob/filesystem"
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/providers/local"
@@ -85,6 +87,46 @@ type scanControllerStub struct {
 	started bool
 	status  scanner.Status
 }
+
+type permissionAuthenticator struct{ user domain.User }
+
+func (a permissionAuthenticator) AuthenticatePassword(
+	context.Context, string, string,
+) (domain.User, error) {
+	return a.user, nil
+}
+
+func (a permissionAuthenticator) AuthenticateToken(
+	context.Context, string, string, string,
+) (domain.User, error) {
+	return a.user, nil
+}
+
+type discoveryProviderStub struct {
+	results []domain.TrackSource
+	media   []byte
+}
+
+func (p *discoveryProviderStub) Name() string { return "soulseek" }
+
+func (p *discoveryProviderStub) Search(
+	context.Context, domain.SearchQuery,
+) ([]domain.TrackSource, error) {
+	return p.results, nil
+}
+
+func (p *discoveryProviderStub) Resolve(
+	context.Context, domain.SourceRef,
+) (ports.ResolvedSource, error) {
+	return ports.ResolvedSource{
+		Content: &memoryReadSeekCloser{Reader: bytes.NewReader(p.media)},
+		Name:    "remote.flac", ContentType: "audio/flac", Size: int64(len(p.media)),
+	}, nil
+}
+
+type memoryReadSeekCloser struct{ *bytes.Reader }
+
+func (*memoryReadSeekCloser) Close() error { return nil }
 
 func (s *scanControllerStub) Start() bool {
 	s.started = true
@@ -676,6 +718,93 @@ func TestSearch3SupportsEmptyQueryAndIndependentCounts(t *testing.T) {
 		if !strings.Contains(response.Body.String(), expected) {
 			t.Errorf("body does not contain %q: %s", expected, response.Body.String())
 		}
+	}
+}
+
+func TestSearch3AddsPermittedSoulseekResultsOnlyWhenPlayed(t *testing.T) {
+	t.Parallel()
+
+	ctx := context.Background()
+	catalog, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "catalog.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { catalog.Close() })
+	localTrack := domain.Track{
+		ID: "local-track", Title: "Shared Song", Artist: "Artist", ArtistID: "local-artist",
+		Album: "Album", AlbumID: "local-album", AlbumArtist: "Artist", Suffix: "mp3", ContentType: "audio/mpeg",
+	}
+	localRoot := t.TempDir()
+	if err := os.WriteFile(filepath.Join(localRoot, "shared.mp3"), []byte("local"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.ReplaceProviderTracks(ctx, local.Name, []domain.TrackSource{{
+		Track: localTrack, Ref: domain.SourceRef{Provider: local.Name, Key: "shared.mp3"},
+	}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	remoteTrack := domain.Track{
+		ID: "remote-track", Title: "Remote Song", Artist: "Remote Artist", ArtistID: "remote-artist",
+		Album: "Remote Album", AlbumID: "remote-album", AlbumArtist: "Remote Artist",
+		Suffix: "flac", ContentType: "audio/flac", Size: 12,
+	}
+	provider := &discoveryProviderStub{media: []byte("remote-media"), results: []domain.TrackSource{
+		{
+			Track: domain.Track{ID: "duplicate", Title: "Shared Song", Artist: "Artist", Album: "Album"},
+			Ref:   domain.SourceRef{Provider: "soulseek", Key: "duplicate"}, DiscoveredAt: time.Now().UTC(),
+		},
+		{
+			Track: remoteTrack, Ref: domain.SourceRef{Provider: "soulseek", Key: "remote"},
+			DiscoveredAt: time.Now().UTC(),
+		},
+	}}
+	discovery := services.NewDiscoveryService(provider, catalog)
+	localProvider, err := local.New(localRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	streams := services.NewStreamingService(catalog, localProvider, provider)
+
+	withoutPermission := NewHandlerWithAuthenticatorAndDiscovery(
+		catalog, streams, nil, permissionAuthenticator{user: domain.User{Role: domain.UserRoleUser}}, discovery,
+	)
+	response := httptest.NewRecorder()
+	withoutPermission.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+		"/rest/search3?u=listener&p=secret&f=json&query=Song&artistCount=0&albumCount=0&songCount=3", nil))
+	if response.Code != http.StatusOK || strings.Contains(response.Body.String(), remoteTrack.ID) {
+		t.Fatalf("search without permission status = %d, body = %s", response.Code, response.Body.String())
+	}
+
+	withPermission := NewHandlerWithAuthenticatorAndDiscovery(
+		catalog, streams, nil, permissionAuthenticator{user: domain.User{
+			Role: domain.UserRoleUser, Permissions: []domain.Permission{domain.PermissionSoulseekClient},
+		}}, discovery,
+	)
+	response = httptest.NewRecorder()
+	withPermission.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+		"/rest/search3?u=listener&p=secret&f=json&query=Song&artistCount=0&albumCount=0&songCount=3", nil))
+	body := response.Body.String()
+	if response.Code != http.StatusOK || !strings.Contains(body, remoteTrack.ID) || strings.Contains(body, "duplicate") ||
+		strings.Index(body, localTrack.ID) > strings.Index(body, remoteTrack.ID) {
+		t.Fatalf("permitted search status = %d, body = %s", response.Code, body)
+	}
+	if _, err := catalog.Track(ctx, remoteTrack.ID); !errors.Is(err, ports.ErrNotFound) {
+		t.Fatalf("remote track persisted before playback: %v", err)
+	}
+	getSong := httptest.NewRecorder()
+	withPermission.ServeHTTP(getSong, httptest.NewRequest(http.MethodGet,
+		"/rest/getSong?u=listener&p=secret&f=json&id="+remoteTrack.ID, nil))
+	if getSong.Code != http.StatusOK || !strings.Contains(getSong.Body.String(), remoteTrack.ID) {
+		t.Fatalf("virtual getSong status = %d, body = %s", getSong.Code, getSong.Body.String())
+	}
+	stream := httptest.NewRecorder()
+	withPermission.ServeHTTP(stream, httptest.NewRequest(http.MethodGet,
+		"/rest/stream?u=listener&p=secret&id="+remoteTrack.ID, nil))
+	if stream.Code != http.StatusOK || stream.Body.String() != "remote-media" {
+		t.Fatalf("remote stream status = %d, body = %q", stream.Code, stream.Body.String())
+	}
+	if persisted, err := catalog.Track(ctx, remoteTrack.ID); err != nil || persisted.Title != remoteTrack.Title {
+		t.Fatalf("persisted remote track = %#v, %v", persisted, err)
 	}
 }
 

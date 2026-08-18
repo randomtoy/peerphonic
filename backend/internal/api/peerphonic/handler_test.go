@@ -40,6 +40,20 @@ type transferSettingsManagerStub struct {
 
 type providerStatusMonitorStub struct{ status domain.ProviderStatus }
 
+type userAuthenticatorStub struct{ user domain.User }
+
+func (s userAuthenticatorStub) AuthenticatePassword(
+	context.Context, string, string,
+) (domain.User, error) {
+	return s.user, nil
+}
+
+func (s userAuthenticatorStub) AuthenticateToken(
+	context.Context, string, string, string,
+) (domain.User, error) {
+	return s.user, nil
+}
+
 type sourceSearcherStub struct {
 	query         domain.SearchQuery
 	results       []domain.TrackSource
@@ -457,6 +471,48 @@ func TestSoulseekSearchValidatesRequestAndRequiresConfiguredProvider(t *testing.
 	configured.ServeHTTP(response, request)
 	if response.Code != http.StatusBadRequest {
 		t.Fatalf("invalid status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestSoulseekDashboardSearchAndAddPermissionsAreIndependent(t *testing.T) {
+	t.Parallel()
+
+	searcher := &sourceSearcherStub{added: domain.Track{ID: "track-1"}}
+	searchOnly := newHandler(
+		nil, nil, nil, nil, nil, nil,
+		userAuthenticatorStub{user: domain.User{Role: domain.UserRoleUser, Permissions: []domain.Permission{
+			domain.PermissionSoulseekSearch,
+		}}}, nil, nil, searcher, nil, nil,
+	)
+	searchRequest := httptest.NewRequest(
+		http.MethodPost, "/api/v1/providers/soulseek/search", strings.NewReader(`{"query":"Massive Attack"}`),
+	)
+	searchRequest.SetBasicAuth("listener", "secret")
+	searchResponse := httptest.NewRecorder()
+	searchOnly.ServeHTTP(searchResponse, searchRequest)
+	if searchResponse.Code != http.StatusOK {
+		t.Fatalf("search status = %d, body = %s", searchResponse.Code, searchResponse.Body.String())
+	}
+	addRequest := httptest.NewRequest(http.MethodPost, "/api/v1/providers/soulseek/tracks/track-1", nil)
+	addRequest.SetBasicAuth("listener", "secret")
+	addResponse := httptest.NewRecorder()
+	searchOnly.ServeHTTP(addResponse, addRequest)
+	if addResponse.Code != http.StatusForbidden {
+		t.Fatalf("search-only add status = %d, want %d", addResponse.Code, http.StatusForbidden)
+	}
+
+	addOnly := newHandler(
+		nil, nil, nil, nil, nil, nil,
+		userAuthenticatorStub{user: domain.User{Role: domain.UserRoleUser, Permissions: []domain.Permission{
+			domain.PermissionSoulseekAdd,
+		}}}, nil, nil, searcher, nil, nil,
+	)
+	addRequest = httptest.NewRequest(http.MethodPost, "/api/v1/providers/soulseek/tracks/track-1", nil)
+	addRequest.SetBasicAuth("listener", "secret")
+	addResponse = httptest.NewRecorder()
+	addOnly.ServeHTTP(addResponse, addRequest)
+	if addResponse.Code != http.StatusCreated {
+		t.Fatalf("add status = %d, body = %s", addResponse.Code, addResponse.Body.String())
 	}
 }
 

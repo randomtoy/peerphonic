@@ -15,6 +15,9 @@ const (
 	PermissionDashboardAccess Permission = "dashboard.access"
 	PermissionMonitoringView  Permission = "monitoring.view"
 	PermissionSourcesManage   Permission = "sources.manage"
+	PermissionSoulseekSearch  Permission = "soulseek.search"
+	PermissionSoulseekAdd     Permission = "soulseek.add"
+	PermissionSoulseekClient  Permission = "soulseek.client-search"
 	PermissionUsersManage     Permission = "users.manage"
 )
 
@@ -22,6 +25,9 @@ var availablePermissions = [...]Permission{
 	PermissionDashboardAccess,
 	PermissionMonitoringView,
 	PermissionSourcesManage,
+	PermissionSoulseekSearch,
+	PermissionSoulseekAdd,
+	PermissionSoulseekClient,
 	PermissionUsersManage,
 }
 
@@ -39,19 +45,26 @@ func (u User) HasPermission(permission Permission) bool {
 	if u.IsAdmin() {
 		return true
 	}
+	hasSourceManagement := false
 	for _, candidate := range u.Permissions {
 		if candidate == permission {
 			return true
 		}
+		if candidate == PermissionSourcesManage {
+			hasSourceManagement = true
+		}
 	}
-	return false
+	return hasSourceManagement && (permission == PermissionSoulseekSearch || permission == PermissionSoulseekAdd)
 }
 
 func (u User) EffectivePermissions() []Permission {
-	if u.IsAdmin() {
-		return append([]Permission(nil), availablePermissions[:]...)
+	permissions := make([]Permission, 0, len(availablePermissions))
+	for _, permission := range availablePermissions {
+		if u.HasPermission(permission) {
+			permissions = append(permissions, permission)
+		}
 	}
-	return append([]Permission(nil), u.Permissions...)
+	return permissions
 }
 
 func ValidPermission(permission Permission) bool {

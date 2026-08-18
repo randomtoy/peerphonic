@@ -75,6 +75,22 @@ func (s *DiscoveryService) Add(ctx context.Context, id string) (domain.Track, er
 	return result.Track, nil
 }
 
+func (s *DiscoveryService) Result(id string) (domain.TrackSource, bool) {
+	now := time.Now().UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	result, ok := s.results[id]
+	if !ok {
+		return domain.TrackSource{}, false
+	}
+	if result.DiscoveredAt.IsZero() || now.Sub(result.DiscoveredAt) > discoveryRetention {
+		delete(s.results, id)
+		delete(s.collections, id)
+		return domain.TrackSource{}, false
+	}
+	return result, true
+}
+
 func (s *DiscoveryService) AddCollection(ctx context.Context, id string) (domain.SourceCollection, error) {
 	collection, err := s.PreviewCollection(ctx, id)
 	if err != nil {
