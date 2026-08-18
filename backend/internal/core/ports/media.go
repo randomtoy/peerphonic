@@ -25,9 +25,13 @@ type ResolvedSource struct {
 	ModTime     time.Time
 }
 
-type SourceProvider interface {
+type SourceSearcher interface {
 	Name() string
 	Search(ctx context.Context, query domain.SearchQuery) ([]domain.TrackSource, error)
+}
+
+type SourceProvider interface {
+	SourceSearcher
 	Resolve(ctx context.Context, ref domain.SourceRef) (ResolvedSource, error)
 }
 

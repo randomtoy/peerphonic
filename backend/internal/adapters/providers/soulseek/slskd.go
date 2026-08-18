@@ -1,18 +1,38 @@
 package soulseek
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
+	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
 )
 
 const Name = "soulseek"
+
+const (
+	searchTimeout  = 5
+	searchMaxLimit = 200
+	searchMaxWait  = 8 * time.Second
+	pollInterval   = 250 * time.Millisecond
+	maxResponse    = 8 << 20
+)
+
+var audioExtensions = map[string]struct{}{
+	"aac": {}, "aiff": {}, "alac": {}, "flac": {}, "m4a": {}, "mp3": {},
+	"ogg": {}, "opus": {}, "wav": {}, "wma": {},
+}
 
 type Client struct {
 	endpoint   *url.URL
@@ -40,14 +60,11 @@ func NewSlskd(endpoint, apiKey string, timeout time.Duration) (*Client, error) {
 	}, nil
 }
 
+func (c *Client) Name() string { return Name }
+
 func (c *Client) ProviderStatus(ctx context.Context) domain.ProviderStatus {
 	status := domain.ProviderStatus{Provider: Name, Configured: true}
-	endpoint := *c.endpoint
-	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + "/api/v0/session"
-	endpoint.RawPath = ""
-	endpoint.RawQuery = ""
-	endpoint.Fragment = ""
-	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint.String(), nil)
+	request, err := c.request(ctx, http.MethodGet, "/api/v0/session", nil)
 	if err != nil {
 		status.Message = "invalid slskd request"
 		return status
@@ -75,4 +92,216 @@ func (c *Client) ProviderStatus(ctx context.Context) domain.ProviderStatus {
 		status.Message = fmt.Sprintf("slskd returned HTTP %d", response.StatusCode)
 	}
 	return status
+}
+
+func (c *Client) Search(ctx context.Context, query domain.SearchQuery) ([]domain.TrackSource, error) {
+	query.Text = strings.TrimSpace(query.Text)
+	if len([]rune(query.Text)) < 3 || len([]rune(query.Text)) > 200 {
+		return nil, errors.New("search query must contain between 3 and 200 characters")
+	}
+	if query.Limit <= 0 {
+		query.Limit = 50
+	}
+	if query.Limit > searchMaxLimit {
+		query.Limit = searchMaxLimit
+	}
+
+	payload := struct {
+		SearchText    string `json:"searchText"`
+		SearchTimeout int    `json:"searchTimeout"`
+		ResponseLimit int    `json:"responseLimit"`
+		FileLimit     int    `json:"fileLimit"`
+	}{
+		SearchText: query.Text, SearchTimeout: searchTimeout,
+		ResponseLimit: query.Limit, FileLimit: query.Limit * 4,
+	}
+	var search slskdSearch
+	if err := c.doJSON(ctx, http.MethodPost, "/api/v0/searches", payload, &search); err != nil {
+		return nil, fmt.Errorf("start slskd search: %w", err)
+	}
+	if search.ID == "" {
+		return nil, errors.New("start slskd search: response did not include an id")
+	}
+	defer c.deleteSearch(search.ID)
+
+	deadline := time.NewTimer(searchMaxWait)
+	defer deadline.Stop()
+	ticker := time.NewTicker(pollInterval)
+	defer ticker.Stop()
+	for {
+		if search.IsComplete {
+			return mapSearchResults(search.Responses, query.Limit), nil
+		}
+		if err := c.doJSON(ctx, http.MethodGet,
+			"/api/v0/searches/"+url.PathEscape(search.ID)+"?includeResponses=true", nil, &search,
+		); err != nil {
+			return nil, fmt.Errorf("poll slskd search: %w", err)
+		}
+		if search.IsComplete {
+			return mapSearchResults(search.Responses, query.Limit), nil
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-deadline.C:
+			return mapSearchResults(search.Responses, query.Limit), nil
+		case <-ticker.C:
+		}
+	}
+}
+
+type slskdSearch struct {
+	ID         string                `json:"id"`
+	IsComplete bool                  `json:"isComplete"`
+	Responses  []slskdSearchResponse `json:"responses"`
+}
+
+type slskdSearchResponse struct {
+	Username          string      `json:"username"`
+	Files             []slskdFile `json:"files"`
+	LockedFiles       []slskdFile `json:"lockedFiles"`
+	HasFreeUploadSlot bool        `json:"hasFreeUploadSlot"`
+	QueueLength       int64       `json:"queueLength"`
+	UploadSpeed       int64       `json:"uploadSpeed"`
+}
+
+type slskdFile struct {
+	Filename  string `json:"filename"`
+	Extension string `json:"extension"`
+	Size      int64  `json:"size"`
+	Length    *int   `json:"length"`
+	BitRate   *int   `json:"bitRate"`
+}
+
+func mapSearchResults(responses []slskdSearchResponse, limit int) []domain.TrackSource {
+	results := make([]domain.TrackSource, 0, limit)
+	discoveredAt := time.Now().UTC()
+	for _, response := range responses {
+		files := make([]struct {
+			file     slskdFile
+			requires bool
+		}, 0, len(response.Files)+len(response.LockedFiles))
+		for _, file := range response.Files {
+			files = append(files, struct {
+				file     slskdFile
+				requires bool
+			}{file: file})
+		}
+		for _, file := range response.LockedFiles {
+			files = append(files, struct {
+				file     slskdFile
+				requires bool
+			}{file: file, requires: true})
+		}
+		for _, candidate := range files {
+			file := candidate.file
+			extension := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(file.Extension), "."))
+			if extension == "" {
+				extension = strings.TrimPrefix(strings.ToLower(filepath.Ext(file.Filename)), ".")
+			}
+			if _, ok := audioExtensions[extension]; !ok || strings.TrimSpace(file.Filename) == "" {
+				continue
+			}
+			displayPath := strings.ReplaceAll(file.Filename, "\\", "/")
+			title := strings.TrimSuffix(filepath.Base(displayPath), filepath.Ext(displayPath))
+			refPayload, _ := json.Marshal(struct {
+				Peer string `json:"peer"`
+				Path string `json:"path"`
+				Size int64  `json:"size"`
+			}{Peer: response.Username, Path: file.Filename, Size: file.Size})
+			track := domain.Track{
+				ID:    domain.StableID(Name, response.Username, file.Filename, strconv.FormatInt(file.Size, 10)),
+				Title: title, Size: file.Size, Suffix: extension,
+			}
+			if file.Length != nil && *file.Length > 0 {
+				track.Duration = time.Duration(*file.Length) * time.Second
+			}
+			if file.BitRate != nil && *file.BitRate > 0 {
+				track.BitRate = *file.BitRate
+			}
+			results = append(results, domain.TrackSource{
+				Track:       track,
+				Ref:         domain.SourceRef{Provider: Name, Key: base64.RawURLEncoding.EncodeToString(refPayload)},
+				DisplayPath: displayPath,
+				Availability: domain.SourceAvailability{
+					Peer: response.Username, UploadSpeed: response.UploadSpeed,
+					QueueLength: response.QueueLength, FreeUploadSlot: response.HasFreeUploadSlot,
+					RequiresApproval: candidate.requires,
+				},
+				DiscoveredAt: discoveredAt,
+			})
+			if len(results) >= limit {
+				return results
+			}
+		}
+	}
+	return results
+}
+
+func (c *Client) request(ctx context.Context, method, path string, body io.Reader) (*http.Request, error) {
+	endpoint := *c.endpoint
+	endpoint.Path = strings.TrimRight(endpoint.Path, "/") + path
+	endpoint.RawPath = ""
+	endpoint.RawQuery = ""
+	if index := strings.Index(endpoint.Path, "?"); index >= 0 {
+		endpoint.RawQuery = endpoint.Path[index+1:]
+		endpoint.Path = endpoint.Path[:index]
+	}
+	endpoint.Fragment = ""
+	request, err := http.NewRequestWithContext(ctx, method, endpoint.String(), body)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Accept", "application/json")
+	request.Header.Set("User-Agent", "Peerphonic")
+	if body != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	if c.apiKey != "" {
+		request.Header.Set("X-API-Key", c.apiKey)
+	}
+	return request, nil
+}
+
+func (c *Client) doJSON(ctx context.Context, method, path string, payload, target any) error {
+	var body io.Reader
+	if payload != nil {
+		encoded, err := json.Marshal(payload)
+		if err != nil {
+			return err
+		}
+		body = bytes.NewReader(encoded)
+	}
+	request, err := c.request(ctx, method, path, body)
+	if err != nil {
+		return err
+	}
+	response, err := c.httpClient.Do(request)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ports.ErrSourceUnavailable, err)
+	}
+	defer response.Body.Close()
+	if response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+		return fmt.Errorf("%w: slskd rejected the API key", ports.ErrSourceUnavailable)
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		message, _ := io.ReadAll(io.LimitReader(response.Body, 64<<10))
+		return fmt.Errorf("slskd returned HTTP %d: %s", response.StatusCode, strings.TrimSpace(string(message)))
+	}
+	if target == nil || response.StatusCode == http.StatusNoContent {
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+		return nil
+	}
+	decoder := json.NewDecoder(io.LimitReader(response.Body, maxResponse))
+	if err := decoder.Decode(target); err != nil {
+		return fmt.Errorf("decode slskd response: %w", err)
+	}
+	return nil
+}
+
+func (c *Client) deleteSearch(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = c.doJSON(ctx, http.MethodDelete, "/api/v0/searches/"+url.PathEscape(id), nil, nil)
 }

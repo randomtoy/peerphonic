@@ -117,7 +117,19 @@ type PlayQueue struct {
 type TrackSource struct {
 	Track        Track
 	Ref          SourceRef
+	DisplayPath  string
+	Availability SourceAvailability
 	DiscoveredAt time.Time
+}
+
+// SourceAvailability describes provider-neutral hints for choosing between
+// remote copies of the same track.
+type SourceAvailability struct {
+	Peer             string
+	UploadSpeed      int64
+	QueueLength      int64
+	FreeUploadSlot   bool
+	RequiresApproval bool
 }
 
 // StableID creates an opaque, deterministic identifier for a domain entity.
