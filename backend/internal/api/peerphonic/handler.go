@@ -175,6 +175,7 @@ type sourceAdder interface {
 
 type sourceCollectionAdder interface {
 	AddCollection(ctx context.Context, id string) (domain.SourceCollection, error)
+	PreviewCollection(ctx context.Context, id string) (domain.SourceCollection, error)
 }
 
 type sourceAddResponse struct {
@@ -185,10 +186,24 @@ type sourceAddResponse struct {
 }
 
 type sourceCollectionAddResponse struct {
-	Name       string `json:"name"`
-	Artist     string `json:"artist"`
-	Tracks     int    `json:"tracks"`
-	CoverArtID string `json:"coverArtId,omitempty"`
+	Name   string `json:"name"`
+	Artist string `json:"artist"`
+	Tracks int    `json:"tracks"`
+}
+
+type sourceCollectionPreviewResponse struct {
+	Name       string                                 `json:"name"`
+	Artist     string                                 `json:"artist"`
+	HasArtwork bool                                   `json:"hasArtwork"`
+	Tracks     []sourceCollectionPreviewTrackResponse `json:"tracks"`
+}
+
+type sourceCollectionPreviewTrackResponse struct {
+	ID              string `json:"id"`
+	Title           string `json:"title"`
+	Size            int64  `json:"size"`
+	DurationSeconds int64  `json:"durationSeconds,omitempty"`
+	Suffix          string `json:"suffix,omitempty"`
 }
 
 func NewHandler(
@@ -419,6 +434,37 @@ func newHandler(
 			ID: track.ID, Title: track.Title, Artist: track.Artist, Album: track.Album,
 		})
 	})
+	mux.HandleFunc("GET /api/v1/providers/soulseek/albums/{id}", func(writer http.ResponseWriter, request *http.Request) {
+		if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
+			return
+		}
+		browser, ok := providerSearch.(sourceCollectionAdder)
+		if !ok {
+			http.Error(writer, "Soulseek album browsing is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		id := strings.TrimSpace(request.PathValue("id"))
+		if id == "" {
+			http.Error(writer, "track ID is required", http.StatusBadRequest)
+			return
+		}
+		collection, err := browser.PreviewCollection(request.Context(), id)
+		if err != nil {
+			writeSourceCollectionError(writer, err, "preview Soulseek album")
+			return
+		}
+		response := sourceCollectionPreviewResponse{
+			Name: collection.Name, Artist: collection.Artist, HasArtwork: collection.CoverArtID != "",
+			Tracks: make([]sourceCollectionPreviewTrackResponse, 0, len(collection.Tracks)),
+		}
+		for _, source := range collection.Tracks {
+			response.Tracks = append(response.Tracks, sourceCollectionPreviewTrackResponse{
+				ID: source.Track.ID, Title: source.Track.Title, Size: source.Track.Size,
+				DurationSeconds: int64(source.Track.Duration / time.Second), Suffix: source.Track.Suffix,
+			})
+		}
+		writeJSON(writer, http.StatusOK, response)
+	})
 	mux.HandleFunc("POST /api/v1/providers/soulseek/albums/{id}", func(writer http.ResponseWriter, request *http.Request) {
 		if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
 			return
@@ -435,19 +481,11 @@ func newHandler(
 		}
 		collection, err := adder.AddCollection(request.Context(), id)
 		if err != nil {
-			switch {
-			case errors.Is(err, services.ErrDiscoveryResultNotFound):
-				http.Error(writer, "search result expired; search again", http.StatusNotFound)
-			case errors.Is(err, ports.ErrSourceUnavailable):
-				http.Error(writer, "Soulseek peer is unavailable", http.StatusBadGateway)
-			default:
-				http.Error(writer, "add Soulseek album to library", http.StatusBadGateway)
-			}
+			writeSourceCollectionError(writer, err, "add Soulseek album to library")
 			return
 		}
 		writeJSON(writer, http.StatusCreated, sourceCollectionAddResponse{
 			Name: collection.Name, Artist: collection.Artist, Tracks: len(collection.Tracks),
-			CoverArtID: collection.CoverArtID,
 		})
 	})
 	if cache != nil {
@@ -689,6 +727,17 @@ func writeDownloadActionError(writer http.ResponseWriter, err error) {
 		return
 	}
 	http.Error(writer, "change track download", http.StatusConflict)
+}
+
+func writeSourceCollectionError(writer http.ResponseWriter, err error, action string) {
+	switch {
+	case errors.Is(err, services.ErrDiscoveryResultNotFound):
+		http.Error(writer, "search result expired; search again", http.StatusNotFound)
+	case errors.Is(err, ports.ErrSourceUnavailable):
+		http.Error(writer, "Soulseek peer is unavailable", http.StatusBadGateway)
+	default:
+		http.Error(writer, action, http.StatusBadGateway)
+	}
 }
 
 func newLibraryScanResponse(status scanner.Status) libraryScanResponse {

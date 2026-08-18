@@ -10,9 +10,10 @@ import (
 )
 
 type discoveryProviderStub struct {
-	results    []domain.TrackSource
-	collection domain.SourceCollection
-	err        error
+	results     []domain.TrackSource
+	collection  domain.SourceCollection
+	err         error
+	browseCalls *int
 }
 
 func (s discoveryProviderStub) Name() string { return "remote" }
@@ -26,6 +27,9 @@ func (s discoveryProviderStub) Search(
 func (s discoveryProviderStub) BrowseCollection(
 	_ context.Context, _ domain.TrackSource,
 ) (domain.SourceCollection, error) {
+	if s.browseCalls != nil {
+		(*s.browseCalls)++
+	}
 	return s.collection, s.err
 }
 
@@ -100,17 +104,22 @@ func TestDiscoveryServiceAddsACollectionAsOneBatch(t *testing.T) {
 		{Track: domain.Track{ID: "track-2"}, Ref: domain.SourceRef{Provider: "remote", Key: "two"}},
 	}}
 	writer := &trackSourceWriterStub{}
+	browseCalls := 0
 	service := NewDiscoveryService(discoveryProviderStub{
-		results: []domain.TrackSource{anchor}, collection: collection,
+		results: []domain.TrackSource{anchor}, collection: collection, browseCalls: &browseCalls,
 	}, writer)
 	if _, err := service.Search(context.Background(), domain.SearchQuery{Text: "Album"}); err != nil {
 		t.Fatal(err)
+	}
+	preview, err := service.PreviewCollection(context.Background(), anchor.Track.ID)
+	if err != nil || preview.Name != "Album" {
+		t.Fatalf("PreviewCollection() = %#v, %v", preview, err)
 	}
 	got, err := service.AddCollection(context.Background(), anchor.Track.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Name != "Album" || len(writer.saved) != 2 || writer.saved[1].Track.ID != "track-2" {
-		t.Fatalf("AddCollection() = %#v, saved = %#v", got, writer.saved)
+	if got.Name != "Album" || len(writer.saved) != 2 || writer.saved[1].Track.ID != "track-2" || browseCalls != 1 {
+		t.Fatalf("AddCollection() = %#v, saved = %#v, browse calls = %d", got, writer.saved, browseCalls)
 	}
 }

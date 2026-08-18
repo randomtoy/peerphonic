@@ -442,10 +442,37 @@ function renderSoulseekResults(items) {
       </dl>
       <div class="search-actions">
         <button class="button secondary search-add" type="button" data-add-soulseek="track" data-source-id="${escapeHTML(item.id)}" ${item.requiresApproval ? "disabled" : ""}>${item.requiresApproval ? "Locked" : "Add track"}</button>
-        <button class="button secondary search-add" type="button" data-add-soulseek="album" data-source-id="${escapeHTML(item.id)}" ${item.requiresApproval ? "disabled" : ""}>Add album</button>
+        <button class="button secondary search-add" type="button" data-preview-soulseek-album data-source-id="${escapeHTML(item.id)}" ${item.requiresApproval ? "disabled" : ""}>Preview album</button>
       </div>
     </article>`;
   }).join("");
+}
+
+function renderSoulseekAlbumPreview(article, album, sourceId) {
+  const tracks = album.tracks || [];
+  const totalSize = tracks.reduce((sum, track) => sum + (Number(track.size) || 0), 0);
+  const totalDuration = tracks.reduce((sum, track) => sum + (Number(track.durationSeconds) || 0), 0);
+  let preview = article.querySelector(".album-preview");
+  if (!preview) {
+    preview = document.createElement("section");
+    preview.className = "album-preview";
+    article.append(preview);
+  }
+  preview.innerHTML = `
+    <div class="album-preview-heading">
+      <div>
+        <span class="card-kicker">Remote album</span>
+        <h4>${escapeHTML(album.artist || "Unknown Artist")} — ${escapeHTML(album.name || "Unknown Album")}</h4>
+        <p>${tracks.length} track${tracks.length === 1 ? "" : "s"} · ${formatBytes(totalSize)} · ${formatDuration(totalDuration)} · ${album.hasArtwork ? "Cover found" : "No cover found"}</p>
+      </div>
+      <button class="button primary" type="button" data-import-soulseek-album data-source-id="${escapeHTML(sourceId)}">Import album</button>
+    </div>
+    <ol class="album-track-list">
+      ${tracks.map((track) => `<li>
+        <span>${escapeHTML(track.title)}</span>
+        <small>${escapeHTML((track.suffix || "audio").toUpperCase())} · ${formatBytes(track.size)} · ${track.durationSeconds ? formatDuration(track.durationSeconds) : "Unknown length"}</small>
+      </li>`).join("")}
+    </ol>`;
 }
 
 async function refresh() {
@@ -595,17 +622,23 @@ elements.soulseekSearchForm.addEventListener("submit", async (event) => {
   }
 });
 elements.soulseekSearchResults.addEventListener("click", async (event) => {
-  const button = event.target.closest("[data-add-soulseek]");
+  const button = event.target.closest("[data-add-soulseek], [data-preview-soulseek-album], [data-import-soulseek-album]");
   if (!button || button.disabled) return;
   const original = button.textContent;
   button.disabled = true;
-  button.textContent = "Adding…";
+  const preview = button.hasAttribute("data-preview-soulseek-album");
+  const album = button.hasAttribute("data-import-soulseek-album");
+  button.textContent = preview ? "Loading…" : "Adding…";
   elements.soulseekSearchMessage.className = "form-message";
   try {
-    const album = button.dataset.addSoulseek === "album";
-    const result = await api(`/api/v1/providers/soulseek/${album ? "albums" : "tracks"}/${encodeURIComponent(button.dataset.sourceId)}`, {
-      method: "POST",
-    });
+    if (preview) {
+      const result = await api(`/api/v1/providers/soulseek/albums/${encodeURIComponent(button.dataset.sourceId)}`);
+      renderSoulseekAlbumPreview(button.closest(".search-result"), result, button.dataset.sourceId);
+      button.textContent = "Preview loaded";
+      elements.soulseekSearchMessage.textContent = `Found ${result.tracks.length} tracks in “${result.name}”. Review them before importing.`;
+      return;
+    }
+    const result = await api(`/api/v1/providers/soulseek/${album ? "albums" : "tracks"}/${encodeURIComponent(button.dataset.sourceId)}`, { method: "POST" });
     button.textContent = "Added";
     elements.soulseekSearchMessage.textContent = album
       ? `Added ${result.tracks} tracks from “${result.name}”. Audio stays remote until you press play.`

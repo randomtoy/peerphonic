@@ -184,6 +184,8 @@ curl -u admin:admin -X POST -H 'Content-Type: application/json' \
   http://localhost:8080/api/v1/providers/soulseek/search
 curl -u admin:admin -X POST \
   http://localhost:8080/api/v1/providers/soulseek/tracks/SEARCH_RESULT_ID
+curl -u admin:admin \
+  http://localhost:8080/api/v1/providers/soulseek/albums/SEARCH_RESULT_ID
 curl -u admin:admin -X POST \
   http://localhost:8080/api/v1/providers/soulseek/albums/SEARCH_RESULT_ID
 ```
@@ -197,8 +199,8 @@ with read/write access. Peerphonic authenticates with the `X-API-Key` header and
 uses slskd's `/api/v0/session` endpoint for readiness checks. Prefer HTTPS or a
 private container/Kubernetes network because the API key is a long-lived
 secret. Peerphonic can search the Soulseek network, add a selected result to the
-catalog without downloading it, or inspect the result's remote directory and
-atomically add all audio files in that album. A matching cover image is resolved
+catalog without downloading it, or preview the result's remote directory and
+atomically add all audio files in that album after confirmation. A matching cover image is resolved
 and cached on its first artwork request. Audio is still enqueued one file at a
 time only when an OpenSubsonic client starts playback. Reads follow slskd's
 growing incomplete file so clients

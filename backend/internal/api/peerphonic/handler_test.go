@@ -165,6 +165,13 @@ func (s *sourceSearcherStub) AddCollection(
 	return s.collection, s.collectionErr
 }
 
+func (s *sourceSearcherStub) PreviewCollection(
+	_ context.Context, id string,
+) (domain.SourceCollection, error) {
+	s.collectionID = id
+	return s.collection, s.collectionErr
+}
+
 func (s *uriImporterStub) ImportURI(_ context.Context, uri string) (domain.SourceImport, error) {
 	s.uri = uri
 	return domain.SourceImport{
@@ -492,14 +499,23 @@ func TestSoulseekAlbumAddReturnsImportedCollection(t *testing.T) {
 		nil, nil, nil, nil, nil, nil,
 		fixedAuthenticator{username: "alice", password: "secret"}, nil, nil, searcher, nil, nil,
 	)
+	previewRequest := httptest.NewRequest(http.MethodGet, "/api/v1/providers/soulseek/albums/anchor", nil)
+	previewRequest.SetBasicAuth("alice", "secret")
+	previewResponse := httptest.NewRecorder()
+	handler.ServeHTTP(previewResponse, previewRequest)
+	if previewResponse.Code != http.StatusOK ||
+		!strings.Contains(previewResponse.Body.String(), `"hasArtwork":true`) ||
+		!strings.Contains(previewResponse.Body.String(), `"tracks":[`) {
+		t.Fatalf("preview status = %d, body = %s", previewResponse.Code, previewResponse.Body.String())
+	}
+
 	request := httptest.NewRequest(http.MethodPost, "/api/v1/providers/soulseek/albums/anchor", nil)
 	request.SetBasicAuth("alice", "secret")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 	if response.Code != http.StatusCreated || searcher.collectionID != "anchor" ||
 		!strings.Contains(response.Body.String(), `"name":"Mezzanine"`) ||
-		!strings.Contains(response.Body.String(), `"tracks":3`) ||
-		!strings.Contains(response.Body.String(), `"coverArtId":"remote-cover"`) {
+		!strings.Contains(response.Body.String(), `"tracks":3`) {
 		t.Fatalf("status = %d, id = %q, body = %s", response.Code, searcher.collectionID, response.Body.String())
 	}
 }

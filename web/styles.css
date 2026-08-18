@@ -184,6 +184,14 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .search-peer-facts div { min-width: 0; }
 .search-peer-facts dt { color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
 .search-peer-facts dd { margin: 4px 0 0; overflow: hidden; text-overflow: ellipsis; font-size: 11px; font-weight: 700; }
+.album-preview { grid-column: 1 / -1; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+.album-preview-heading { display: flex; align-items: center; justify-content: space-between; gap: 18px; }
+.album-preview-heading h4 { margin: 5px 0; font-size: 14px; }
+.album-preview-heading p { margin: 0; color: var(--muted); font-size: 10px; }
+.album-preview-heading .button { width: auto; white-space: nowrap; }
+.album-track-list { max-height: 280px; margin: 14px 0 0; padding: 0; overflow: auto; list-style: none; border-top: 1px solid var(--line); }
+.album-track-list li { padding: 9px 2px; display: flex; justify-content: space-between; gap: 18px; border-bottom: 1px solid var(--line); font-size: 11px; }
+.album-track-list small { flex: none; color: var(--muted); }
 
 .card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .transfer-card, .source-row { border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
@@ -238,6 +246,8 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
   .search-form { grid-template-columns: minmax(0, 1fr) 110px; }
   .search-form .button.primary { grid-column: 1 / -1; width: 100%; }
   .search-peer-facts { min-width: 0; }
+  .album-preview-heading { align-items: stretch; flex-direction: column; }
+  .album-preview-heading .button { width: 100%; }
 }
 
 @media (max-width: 520px) {
