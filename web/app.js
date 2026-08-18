@@ -3,6 +3,7 @@ const state = {
   activePage: sessionStorage.getItem("peerphonic.activePage") || "overview",
   refreshTimer: 0,
   session: null,
+  downloadSamples: new Map(),
 };
 
 const elements = {
@@ -106,12 +107,12 @@ const pages = {
   activity: {
     eyebrow: "LIVE STATUS",
     title: "Activity",
-    description: "Follow on-demand downloads, cache progress and peer transfers.",
+    description: "See what is moving, what is waiting, and whether peers or seeds are available.",
   },
   search: {
     eyebrow: "REMOTE DISCOVERY",
     title: "Soulseek search",
-    description: "Find tracks across connected peers before adding them to your library.",
+    description: "Find tracks or review and add a complete album from a connected peer.",
   },
   users: {
     eyebrow: "ACCESS CONTROL",
@@ -281,14 +282,96 @@ function renderImports(items) {
   }).join("");
 }
 
-function renderDownloads(items, canManageSources = false) {
-  elements.downloadCount.textContent = `${items.length} total`;
+function groupTrackDownloads(items) {
+  const rank = { cached: 0, downloading: 1, queued: 2, failed: 3, cancelled: 4, evicted: 5 };
+  const groups = new Map();
+  items.forEach((item) => {
+    const key = `${item.provider || "unknown"}:${item.trackId || item.id}`;
+    const group = groups.get(key) || [];
+    group.push(item);
+    groups.set(key, group);
+  });
+  return [...groups.values()].map((attempts) => {
+    attempts.sort((left, right) =>
+      (rank[left.state] ?? 99) - (rank[right.state] ?? 99) ||
+      new Date(right.updatedAt || 0) - new Date(left.updatedAt || 0)
+    );
+    return {
+      ...attempts[0],
+      attemptCount: attempts.length,
+      failedAttempts: attempts.filter((item) => item.state === "failed").length,
+    };
+  }).sort((left, right) =>
+    (rank[left.state] ?? 99) - (rank[right.state] ?? 99) ||
+    new Date(right.updatedAt || 0) - new Date(left.updatedAt || 0)
+  );
+}
+
+function relativeTime(value, now = Date.now()) {
+  const timestamp = new Date(value || 0).getTime();
+  if (!Number.isFinite(timestamp) || timestamp <= 0) return "unknown";
+  const seconds = Math.max(0, Math.round((now - timestamp) / 1000));
+  if (seconds < 5) return "just now";
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  return `${Math.floor(hours / 24)}d ago`;
+}
+
+function sampleDownload(item, now = Date.now()) {
+  const previous = state.downloadSamples.get(item.id);
+  const active = item.state === "queued" || item.state === "downloading";
+  let rate = 0;
+  let lastProgressAt = previous?.lastProgressAt || now;
+  if (previous && active) {
+    const elapsed = Math.max(1, now - previous.sampledAt);
+    const delta = Math.max(0, (Number(item.completedBytes) || 0) - previous.bytes);
+    rate = delta * 1000 / elapsed;
+    if (delta > 0) lastProgressAt = now;
+  }
+  state.downloadSamples.set(item.id, {
+    bytes: Number(item.completedBytes) || 0,
+    sampledAt: now,
+    lastProgressAt,
+  });
+  return { rate, measuring: !previous && active, stalled: active && now - lastProgressAt >= 30_000, lastProgressAt };
+}
+
+function downloadNetworkSummary(item, transfer, sample, now) {
+  const attempts = item.attemptCount > 1
+    ? ` · ${item.attemptCount} source attempts${item.failedAttempts ? `, ${item.failedAttempts} failed` : ""}`
+    : "";
+  if (item.state === "cached") return `Ready in local cache${attempts}`;
+  if (item.state === "failed") return `Source failed${attempts}`;
+  if (item.state === "cancelled") return `Download was cancelled${attempts}`;
+  if (item.state === "evicted") return `Removed from cache; playback will fetch it again${attempts}`;
+  if (sample.stalled) return `No new data since ${relativeTime(sample.lastProgressAt, now)}${attempts}`;
+  if (item.provider === "torrent") {
+    if (!transfer) return `Connecting to torrent swarm${attempts}`;
+    if ((transfer.connectedSeeders || 0) > 0) {
+      return `${transfer.connectedSeeders} connected seed${transfer.connectedSeeders === 1 ? "" : "s"} · ${transfer.activePeers || 0}/${transfer.peers || 0} active peers${attempts}`;
+    }
+    if ((transfer.peers || 0) > 0) return `Peers connected, but no complete seed is available${attempts}`;
+    return `No peers connected; waiting for the swarm${attempts}`;
+  }
+  return `${item.state === "queued" ? "Waiting for" : "Receiving from"} Soulseek peer ${item.sourceId || "unknown"}${attempts}`;
+}
+
+function renderDownloads(items, transfers = [], canManageSources = false) {
+  const grouped = groupTrackDownloads(items);
+  const activeCount = grouped.filter((item) => item.state === "queued" || item.state === "downloading").length;
+  const attentionCount = grouped.filter((item) => item.state === "failed" || item.state === "cancelled").length;
+  elements.downloadCount.textContent = `${grouped.length} tracks · ${activeCount} active${attentionCount ? ` · ${attentionCount} attention` : ""}`;
   elements.downloads.replaceChildren();
-  if (!items.length) {
+  if (!grouped.length) {
     elements.downloads.append(empty("Play a torrent or Soulseek track to start caching it in the background."));
     return;
   }
-  elements.downloads.innerHTML = items.map((item) => {
+  const transferBySource = new Map(transfers.map((item) => [`${item.provider}:${item.id}`, item]));
+  const now = Date.now();
+  elements.downloads.innerHTML = grouped.map((item) => {
     const percent = item.totalBytes ? Math.min(100, Math.round((item.completedBytes / item.totalBytes) * 100)) : 0;
     const stateLabels = {
       queued: "Queued",
@@ -299,17 +382,27 @@ function renderDownloads(items, canManageSources = false) {
       evicted: "Evicted",
     };
     const stateLabel = stateLabels[item.state] || item.state;
+    const transfer = transferBySource.get(`${item.provider}:${item.sourceId}`);
+    const sample = sampleDownload(item, now);
+    const active = item.state === "queued" || item.state === "downloading";
+    const speed = !active ? "—" : sample.measuring ? "Measuring…" : sample.rate > 0 ? `${formatBytes(sample.rate)}/s` : "0 B/s";
+    const networkSummary = downloadNetworkSummary(item, transfer, sample, now);
     const canControl = canManageSources && item.provider === "soulseek";
     const canCancel = canControl && (item.state === "queued" || item.state === "downloading");
     const canRetry = canControl && ["failed", "cancelled", "evicted"].includes(item.state);
-    return `<article class="transfer-card">
+    const networkFacts = item.provider === "torrent"
+      ? `<div class="fact"><span>Peers</span><strong>${transfer?.activePeers || 0} / ${transfer?.peers || 0}</strong></div><div class="fact"><span>Connected seeds</span><strong>${transfer?.connectedSeeders || 0}</strong></div>`
+      : `<div class="fact fact-wide"><span>Soulseek peer</span><strong title="${escapeHTML(item.sourceId || "Unknown")}">${escapeHTML(item.sourceId || "Unknown")}</strong></div>`;
+    return `<article class="transfer-card download-card ${item.state === "downloading" || item.state === "queued" ? "active" : ""}">
       <div class="card-title"><div><h3>${escapeHTML(item.name || item.trackId)}</h3><p class="download-provider">${escapeHTML(item.provider || "unknown provider")}</p></div><span class="status ${item.state === "failed" || item.state === "cancelled" ? "failed" : ""}">${escapeHTML(stateLabel)}</span></div>
       <div class="progress" aria-label="${percent}% complete"><span style="width:${percent}%"></span></div>
-      <div class="facts">
+      <p class="download-status-detail ${sample.stalled ? "stalled" : ""}">${escapeHTML(networkSummary)}</p>
+      <div class="facts download-facts">
         <div class="fact"><span>Complete</span><strong>${percent}%</strong></div>
-        <div class="fact"><span>Cached</span><strong>${formatBytes(item.completedBytes)}</strong></div>
-        <div class="fact"><span>Total</span><strong>${formatBytes(item.totalBytes)}</strong></div>
+        <div class="fact"><span>Current speed</span><strong>${speed}</strong></div>
+        ${networkFacts}
       </div>
+      <p class="download-timing">${formatBytes(item.completedBytes)} of ${formatBytes(item.totalBytes)} cached · started ${relativeTime(item.startedAt, now)} · status updated ${relativeTime(item.updatedAt, now)}</p>
       ${item.error ? `<p class="form-error">${escapeHTML(item.error)}</p>` : ""}
       ${canCancel || canRetry ? `<div class="download-actions">
         ${canCancel ? `<button class="button danger" type="button" data-download-action="cancel" data-download-id="${escapeHTML(item.id)}">Cancel</button>` : ""}
@@ -317,6 +410,8 @@ function renderDownloads(items, canManageSources = false) {
       </div>` : ""}
     </article>`;
   }).join("");
+  const visibleIDs = new Set(grouped.map((item) => item.id));
+  [...state.downloadSamples.keys()].forEach((id) => { if (!visibleIDs.has(id)) state.downloadSamples.delete(id); });
 }
 
 function renderTransfers(items) {
@@ -330,9 +425,10 @@ function renderTransfers(items) {
     return `<article class="transfer-card">
       <div class="card-title"><h3>${escapeHTML(item.name || item.id)}</h3><span class="status">${item.seeding ? "Seeding" : "Attached"}</span></div>
       <div class="progress" aria-label="${percent}% complete"><span style="width:${percent}%"></span></div>
-      <div class="facts">
+      <div class="facts transfer-facts">
         <div class="fact"><span>Complete</span><strong>${percent}%</strong></div>
         <div class="fact"><span>Peers</span><strong>${item.activePeers || 0} / ${item.peers || 0}</strong></div>
+        <div class="fact"><span>Connected seeds</span><strong>${item.connectedSeeders || 0}</strong></div>
         <div class="fact"><span>Uploaded</span><strong>${formatBytes(item.uploadedBytes)}</strong></div>
       </div>
     </article>`;
@@ -469,7 +565,7 @@ function renderSoulseekResults(items, collections = [], canAdd = false) {
         <div><dt>Queue</dt><dd>${Number(group.queueLength) || 0}</dd></div>
       </dl>
       <div class="search-actions">
-        <button class="button secondary search-add" type="button" data-preview-soulseek-album data-source-id="${escapeHTML(group.id)}" ${group.requiresApproval ? "disabled" : ""}>Preview album</button>
+        <button class="button primary search-add" type="button" data-preview-soulseek-album data-source-id="${escapeHTML(group.id)}" ${group.requiresApproval ? "disabled" : ""}>${canAdd ? "Review & add whole album" : "View full album"}</button>
       </div>
       ${trackList}
     </article>`;
@@ -538,7 +634,7 @@ async function refresh() {
     configureNavigation(session);
     renderSummary(cache, imports, downloads, transfers, sources, users, session);
     renderImports(imports);
-    renderDownloads(downloads, canManageSources);
+    renderDownloads(downloads, transfers, canManageSources);
     renderTransfers(transfers);
     renderSources(sources);
     renderUsers(users, session);

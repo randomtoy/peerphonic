@@ -20,11 +20,14 @@ without exposing the API key to the browser. The Search workspace queries
 connected Soulseek peers, shows audio files, queues, upload speeds, and free
 slots, and lets an authorized user add one unlocked result or preview the track
 list, duration, size, and cover availability of its remote album before importing
-the directory without starting audio downloads. Matching cover artwork is
+the directory without starting audio downloads. The search card exposes this as
+an explicit “Review & add whole album” action. Matching cover artwork is
 cached on demand. Search matches from the same peer and directory are grouped
 into one album card, with individual track controls retained inside it. Playback later starts the single-file transfer and reuses
 the completed file from the shared cache. The Activity workspace combines
-torrent and Soulseek jobs, including queued and cancelled states. Accounts with
+torrent and Soulseek jobs, groups multiple source attempts for one logical track,
+and shows sampled speed, stalled progress, connected torrent peers and seeders,
+including queued and cancelled states. Accounts with
 source-management access can cancel an active Soulseek transfer or retry a
 failed, cancelled, or evicted one. Active Soulseek job monitoring resumes after
 a Peerphonic restart without enqueueing a duplicate slskd transfer.

@@ -176,7 +176,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .search-form .button.primary { width: auto; min-width: 92px; }
 .search-results { margin-top: 18px; }
 .search-result { grid-template-columns: minmax(0, 1fr) minmax(240px, auto) auto; align-items: start; }
-.search-result .search-add { align-self: center; white-space: nowrap; }
+.search-result .search-add { width: auto; align-self: center; white-space: nowrap; }
 .search-actions { display: flex; align-items: center; gap: 7px; }
 .search-result-title { display: flex; align-items: start; justify-content: space-between; gap: 14px; }
 .search-path { margin: 7px 0 0; overflow-wrap: anywhere; color: var(--muted); font-size: 11px; line-height: 1.45; }
@@ -206,6 +206,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .transfer-card, .source-row { border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
 .transfer-card { padding: 19px; }
+.download-card.active { border-color: rgb(200 255 90 / 32%); box-shadow: inset 3px 0 0 var(--accent); }
 .card-title { display: flex; justify-content: space-between; gap: 14px; margin-bottom: 17px; }
 .card-title h3, .source-copy h3 { margin: 0; overflow-wrap: anywhere; font-size: 14px; }
 .download-provider { margin: 5px 0 0; color: var(--muted); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
@@ -214,9 +215,14 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .status.failed { color: var(--danger); }
 .progress { height: 5px; overflow: hidden; border-radius: 99px; background: var(--line); }
 .progress > span { display: block; height: 100%; background: var(--accent); }
+.download-status-detail { min-height: 18px; margin: 11px 0 0; color: var(--muted); font-size: 10px; line-height: 1.5; }
+.download-status-detail.stalled { color: var(--warning); }
+.download-timing { margin: 13px 0 0; color: #68716e; font-size: 9px; line-height: 1.5; }
 .facts { margin-top: 15px; display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+.download-facts, .transfer-facts { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .fact span { display: block; color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .05em; }
-.fact strong { font-size: 12px; }
+.fact strong { display: block; overflow: hidden; text-overflow: ellipsis; font-size: 12px; }
+.fact-wide { grid-column: span 2; }
 
 .source-list { display: grid; gap: 8px; }
 .source-row { padding: 16px 18px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 18px; align-items: center; }
@@ -260,6 +266,7 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
   .album-preview-heading .button { width: 100%; }
   .search-match-list li { align-items: stretch; flex-direction: column; }
   .search-match-list .button { width: 100%; }
+  .download-facts, .transfer-facts { grid-template-columns: 1fr 1fr; }
 }
 
 @media (max-width: 520px) {
