@@ -265,8 +265,9 @@ the shared media cache and provider-managed data such as complete and partial
 torrent and Soulseek files. The response includes a component breakdown and
 counts partial entries separately. Physical disk allocation is used for sparse
 torrent files. Unpinned and inactive media and torrent entries are evicted by
-least recent access when the combined configured size limit is exceeded;
-completed Soulseek files are currently retained until explicitly managed.
+least recent access when the combined configured size limit is exceeded.
+Completed Soulseek files participate in the same limit and LRU policy, while
+files backing active playback streams are protected until those streams close.
 
 Place `.torrent` files in the configured torrent directory and start a library
 scan. Audio entries and references to included cover images appear in the catalog

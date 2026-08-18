@@ -213,3 +213,83 @@ func (c *Client) CacheUsage(ctx context.Context) (domain.CacheUsage, error) {
 	}
 	return usage, nil
 }
+
+func (c *Client) Evict(ctx context.Context, bytesToFree int64) (int64, error) {
+	if c.downloads == nil || bytesToFree <= 0 {
+		return 0, nil
+	}
+	return c.downloads.evict(ctx, bytesToFree)
+}
+
+type soulseekCacheCandidate struct {
+	job          *downloadJob
+	key          string
+	path         string
+	lastAccessed time.Time
+}
+
+func (c *downloadCoordinator) evict(ctx context.Context, bytesToFree int64) (int64, error) {
+	c.cacheMu.Lock()
+	defer c.cacheMu.Unlock()
+
+	c.mu.Lock()
+	candidates := make([]soulseekCacheCandidate, 0, len(c.records))
+	for _, job := range c.records {
+		job.mu.Lock()
+		state := job.download.State
+		updatedAt := job.download.UpdatedAt
+		key, finalPath := job.key, job.finalPath
+		job.mu.Unlock()
+		if state == domain.DownloadStateCached && c.active[key] == 0 {
+			candidates = append(candidates, soulseekCacheCandidate{
+				job: job, key: key, path: finalPath, lastAccessed: updatedAt,
+			})
+		}
+	}
+	c.mu.Unlock()
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].lastAccessed.Before(candidates[j].lastAccessed)
+	})
+
+	var freed int64
+	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return freed, err
+		}
+		info, err := os.Stat(candidate.path)
+		if errors.Is(err, os.ErrNotExist) {
+			if err := c.markEvicted(candidate.job); err != nil {
+				return freed, err
+			}
+			continue
+		}
+		if err != nil {
+			return freed, fmt.Errorf("inspect cached Soulseek file for eviction: %w", err)
+		}
+		if err := os.Remove(candidate.path); err != nil {
+			return freed, fmt.Errorf("evict cached Soulseek file: %w", err)
+		}
+		_ = os.Remove(filepath.Dir(candidate.path))
+		freed += info.Size()
+		if err := c.markEvicted(candidate.job); err != nil {
+			return freed, err
+		}
+		if freed >= bytesToFree {
+			break
+		}
+	}
+	return freed, nil
+}
+
+func (c *downloadCoordinator) markEvicted(job *downloadJob) error {
+	job.mu.Lock()
+	job.download.State = domain.DownloadStateEvicted
+	job.download.CompletedBytes = 0
+	job.download.Error = ""
+	job.download.UpdatedAt = time.Now().UTC()
+	job.mu.Unlock()
+	if err := c.persistJob(job); err != nil {
+		return fmt.Errorf("persist evicted Soulseek download: %w", err)
+	}
+	return nil
+}

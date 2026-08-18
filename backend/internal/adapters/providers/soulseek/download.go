@@ -45,10 +45,12 @@ type downloadCoordinator struct {
 	loadErrors    []error
 
 	mu        sync.Mutex
+	cacheMu   sync.Mutex
 	persistMu sync.Mutex
 	monitorWG sync.WaitGroup
 	jobs      map[string]*downloadJob
 	records   map[string]*downloadJob
+	active    map[string]int
 }
 
 type downloadJob struct {
@@ -132,6 +134,7 @@ func newDownloadCoordinator(
 		client: client, downloadsDir: downloadsDir, incompleteDir: incompleteDir,
 		stateDir: stateDir, ctx: coordinatorContext, stop: cancel,
 		jobs: make(map[string]*downloadJob), records: make(map[string]*downloadJob),
+		active: make(map[string]int),
 	}
 	coordinator.loadErrors = coordinator.loadRecords()
 	return coordinator, nil
@@ -174,26 +177,35 @@ func (c *downloadCoordinator) resolve(
 	trackID := domain.StableID(Name, remote.Peer, remote.Path, strconv.FormatInt(remote.Size, 10))
 	name := sanitizedFilename(remote.Path)
 	finalPath := filepath.Join(c.downloadsDir, trackID, name)
+	c.cacheMu.Lock()
 	if info, err := os.Stat(finalPath); err == nil {
 		if info.Size() != remote.Size {
+			c.cacheMu.Unlock()
 			return ports.ResolvedSource{}, fmt.Errorf("cached Soulseek file has size %d, want %d", info.Size(), remote.Size)
 		}
 		file, err := os.Open(finalPath)
 		if err != nil {
+			c.cacheMu.Unlock()
 			return ports.ResolvedSource{}, fmt.Errorf("open cached Soulseek file: %w", err)
 		}
 		c.rememberCached(key, trackID, name, remote, info)
-		return resolvedRemoteSource(file, name, remote.Size, info.ModTime()), nil
+		c.beginRead(key)
+		c.cacheMu.Unlock()
+		return resolvedRemoteSource(c.trackReader(key, file), name, remote.Size, info.ModTime()), nil
 	} else if !errors.Is(err, os.ErrNotExist) {
+		c.cacheMu.Unlock()
 		return ports.ResolvedSource{}, fmt.Errorf("inspect cached Soulseek file: %w", err)
 	}
+	c.beginRead(key)
+	c.cacheMu.Unlock()
 
 	job, err := c.ensureDownload(ctx, key, trackID, name, remote)
 	if err != nil {
+		c.endRead(key)
 		return ports.ResolvedSource{}, err
 	}
 	reader := newGrowingFile(job, remote.Size)
-	return resolvedRemoteSource(reader, name, remote.Size, time.Now()), nil
+	return resolvedRemoteSource(c.trackReader(key, reader), name, remote.Size, time.Now()), nil
 }
 
 func resolvedRemoteSource(
@@ -509,7 +521,7 @@ func (c *downloadCoordinator) rememberCached(
 		existing.download.CompletedBytes = remote.Size
 		existing.download.TotalBytes = remote.Size
 		existing.download.Error = ""
-		existing.download.UpdatedAt = info.ModTime().UTC()
+		existing.download.UpdatedAt = time.Now().UTC()
 		existing.mu.Unlock()
 		_ = c.persistJob(existing)
 		return
@@ -528,6 +540,44 @@ func (c *downloadCoordinator) rememberCached(
 	}
 	c.records[id] = job
 	_ = c.persistJob(job)
+}
+
+func (c *downloadCoordinator) beginRead(key string) {
+	c.mu.Lock()
+	c.active[key]++
+	c.mu.Unlock()
+}
+
+func (c *downloadCoordinator) endRead(key string) {
+	c.mu.Lock()
+	if c.active[key] <= 1 {
+		delete(c.active, key)
+	} else {
+		c.active[key]--
+	}
+	c.mu.Unlock()
+}
+
+func (c *downloadCoordinator) trackReader(key string, reader ports.ReadSeekCloser) ports.ReadSeekCloser {
+	return &trackedReader{ReadSeekCloser: reader, onClose: func() {
+		c.endRead(key)
+		c.client.notifyCacheChanged()
+	}}
+}
+
+type trackedReader struct {
+	ports.ReadSeekCloser
+	onClose func()
+	once    sync.Once
+	err     error
+}
+
+func (r *trackedReader) Close() error {
+	r.once.Do(func() {
+		r.err = r.ReadSeekCloser.Close()
+		r.onClose()
+	})
+	return r.err
 }
 
 func sanitizedFilename(path string) string {

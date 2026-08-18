@@ -593,6 +593,124 @@ func TestSlskdDownloadCanBeCancelledAndRetried(t *testing.T) {
 	}
 }
 
+func TestSlskdCacheEvictionUsesLRUAndProtectsActiveStreams(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	downloadsDir := filepath.Join(root, "downloads")
+	client, err := NewSlskd("http://slskd:5030", "key", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	if err := client.SetMediaDirectories(downloadsDir, filepath.Join(root, "incomplete")); err != nil {
+		t.Fatal(err)
+	}
+
+	type cachedTrack struct {
+		remote remoteFileRef
+		key    string
+		path   string
+		reader ports.ReadSeekCloser
+	}
+	makeCached := func(name, contents string) cachedTrack {
+		t.Helper()
+		remote := remoteFileRef{Peer: "peer-one", Path: `Album\` + name, Size: int64(len(contents))}
+		encoded, err := json.Marshal(remote)
+		if err != nil {
+			t.Fatal(err)
+		}
+		key := base64.RawURLEncoding.EncodeToString(encoded)
+		trackID := domain.StableID(Name, remote.Peer, remote.Path, strconv.FormatInt(remote.Size, 10))
+		path := filepath.Join(downloadsDir, trackID, name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(contents), 0o640); err != nil {
+			t.Fatal(err)
+		}
+		resolved, err := client.Resolve(context.Background(), domain.SourceRef{Provider: Name, Key: key})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return cachedTrack{remote: remote, key: key, path: path, reader: resolved.Content}
+	}
+
+	oldestActive := makeCached("active.mp3", "active-data")
+	oldInactive := makeCached("old.mp3", "old-data")
+	newInactive := makeCached("new.mp3", "new-data")
+	if err := oldInactive.reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := newInactive.reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	now := time.Now().UTC()
+	for _, item := range []struct {
+		track cachedTrack
+		age   time.Duration
+	}{
+		{track: oldestActive, age: 3 * time.Hour},
+		{track: oldInactive, age: 2 * time.Hour},
+		{track: newInactive, age: time.Hour},
+	} {
+		id := domain.StableID("download", Name, item.track.key)
+		job := client.downloads.records[id]
+		if job == nil {
+			t.Fatalf("missing cached record %q", id)
+		}
+		job.mu.Lock()
+		job.download.UpdatedAt = now.Add(-item.age)
+		job.mu.Unlock()
+	}
+
+	freed, err := client.Evict(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if freed != oldInactive.remote.Size {
+		t.Fatalf("first eviction freed %d bytes, want %d", freed, oldInactive.remote.Size)
+	}
+	if _, err := os.Stat(oldInactive.path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("old inactive cache file still exists: %v", err)
+	}
+	if _, err := os.Stat(oldestActive.path); err != nil {
+		t.Fatalf("active cache file was evicted: %v", err)
+	}
+
+	if err := oldestActive.reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	freed, err = client.Evict(context.Background(), 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if freed != oldestActive.remote.Size {
+		t.Fatalf("second eviction freed %d bytes, want %d", freed, oldestActive.remote.Size)
+	}
+	if _, err := os.Stat(oldestActive.path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("closed oldest cache file still exists: %v", err)
+	}
+	if _, err := os.Stat(newInactive.path); err != nil {
+		t.Fatalf("newest cache file was evicted: %v", err)
+	}
+
+	downloads, err := client.TrackDownloads(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	states := make(map[string]domain.DownloadState, len(downloads))
+	for _, download := range downloads {
+		states[download.Name] = download.State
+	}
+	if states["active.mp3"] != domain.DownloadStateEvicted ||
+		states["old.mp3"] != domain.DownloadStateEvicted ||
+		states["new.mp3"] != domain.DownloadStateCached {
+		t.Fatalf("download states = %#v", states)
+	}
+}
+
 func TestSlskdDownloadResumesMonitoringAfterClientRestart(t *testing.T) {
 	t.Parallel()
 

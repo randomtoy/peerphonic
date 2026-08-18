@@ -146,6 +146,16 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 			logger.Warn("media cache pruning failed", "error", err)
 		}
 	})
+	if soulseekClient != nil {
+		soulseekClient.SetCacheChangedHandler(func() {
+			if err := cacheStatus.Prune(context.WithoutCancel(ctx)); err != nil {
+				logger.Warn("media cache pruning failed", "provider", soulseekprovider.Name, "error", err)
+			}
+		})
+	}
+	if err := cacheStatus.Prune(ctx); err != nil {
+		return fail(fmt.Errorf("prune provider cache: %w", err))
+	}
 	localScanner := scanner.New(cfg.MusicDir, catalog, metadata.TagExtractor{}, artwork)
 	torrentScanner := torrentscanner.NewWithEnrichment(
 		cfg.TorrentDir, catalog, torrentProvider, metadata.TagExtractor{}, artwork,

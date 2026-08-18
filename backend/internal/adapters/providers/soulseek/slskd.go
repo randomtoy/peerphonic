@@ -47,6 +47,7 @@ type Client struct {
 
 	completedMu      sync.RWMutex
 	completedHandler func(CompletedFile)
+	cacheChanged     func()
 	searchCleanupCtx context.Context
 	searchCleanupEnd context.CancelFunc
 	searchCleanupMu  sync.Mutex
@@ -94,12 +95,28 @@ func (c *Client) SetCompletedHandler(handler func(CompletedFile)) {
 	c.completedMu.Unlock()
 }
 
+func (c *Client) SetCacheChangedHandler(handler func()) {
+	c.completedMu.Lock()
+	c.cacheChanged = handler
+	c.completedMu.Unlock()
+}
+
 func (c *Client) notifyCompleted(file CompletedFile) {
 	c.completedMu.RLock()
 	handler := c.completedHandler
 	c.completedMu.RUnlock()
 	if handler != nil {
 		handler(file)
+	}
+	c.notifyCacheChanged()
+}
+
+func (c *Client) notifyCacheChanged() {
+	c.completedMu.RLock()
+	cacheChanged := c.cacheChanged
+	c.completedMu.RUnlock()
+	if cacheChanged != nil {
+		cacheChanged()
 	}
 }
 
