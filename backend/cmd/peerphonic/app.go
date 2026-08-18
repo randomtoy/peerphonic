@@ -105,7 +105,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	streaming := services.NewStreamingService(catalog, provider, torrentProvider)
 	mux := http.NewServeMux()
 	mux.Handle("/rest/", opensubsonic.NewHandler(catalog, streaming, artwork, cfg.Username, cfg.Password, scanManager))
-	mux.Handle("/", peerphonic.NewHandler(cacheStatus, torrentImporter, cfg.Username, cfg.Password))
+	mux.Handle("/", peerphonic.NewHandler(cacheStatus, torrentImporter, torrentProvider, cfg.Username, cfg.Password))
 	return &application{handler: mux, catalog: catalog, torrentProvider: torrentProvider}, nil
 }
 

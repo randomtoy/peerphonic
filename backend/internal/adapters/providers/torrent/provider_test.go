@@ -572,6 +572,10 @@ func TestStreamingProviderReadsPersistedTorrentFileAndArtwork(t *testing.T) {
 	if provider.client != nil {
 		t.Fatal("torrent client started while reading metadata")
 	}
+	transfers, err := provider.Transfers(context.Background())
+	if err != nil || len(transfers) != 0 {
+		t.Fatalf("Transfers() before open = %#v, %v", transfers, err)
+	}
 	if err := os.WriteFile(filepath.Join(metadataRoot, catalog.InfoHash+".torrent"), data, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -596,10 +600,21 @@ func TestStreamingProviderReadsPersistedTorrentFileAndArtwork(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	transfers, err = provider.Transfers(ctx)
+	if err != nil || len(transfers) != 1 || transfers[0].Provider != Name ||
+		transfers[0].ID != catalog.InfoHash || transfers[0].Name != info.Name ||
+		transfers[0].TotalBytes != info.TotalLength() || transfers[0].ActiveStreams != 1 {
+		t.Fatalf("Transfers() while open = %#v, %v", transfers, err)
+	}
 	streamed, err := io.ReadAll(resolved.Content)
 	resolved.Content.Close()
 	if err != nil || !bytes.Equal(streamed, media) {
 		t.Fatalf("streamed %d bytes, err = %v", len(streamed), err)
+	}
+	transfers, err = provider.Transfers(ctx)
+	if err != nil || len(transfers) != 1 || transfers[0].CompletedBytes < int64(len(media)) ||
+		transfers[0].CompletedBytes > transfers[0].TotalBytes || transfers[0].ActiveStreams != 0 {
+		t.Fatalf("Transfers() after read = %#v, %v", transfers, err)
 	}
 	if _, err := os.Stat(filepath.Join(legacyRoot, "01 Song.mp3")); !os.IsNotExist(err) {
 		t.Fatalf("legacy track stat error = %v, want not exist after migration", err)

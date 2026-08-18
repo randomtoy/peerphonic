@@ -55,6 +55,7 @@ type Provider struct {
 	cacheMu        sync.Mutex
 	cacheFiles     map[string]cacheFile
 	active         map[string]int
+	streams        map[string]int
 	lastAccessed   map[string]time.Time
 	onCacheChanged func()
 
@@ -111,6 +112,7 @@ func New() *Provider {
 		trackIDs:     make(map[string]string),
 		cacheFiles:   make(map[string]cacheFile),
 		active:       make(map[string]int),
+		streams:      make(map[string]int),
 		lastAccessed: make(map[string]time.Time),
 	}
 }
@@ -231,6 +233,53 @@ func (p *Provider) CacheUsage(ctx context.Context) (domain.CacheUsage, error) {
 		return domain.CacheUsage{}, fmt.Errorf("inspect torrent cache: %w", err)
 	}
 	return usage, nil
+}
+
+// Transfers returns a point-in-time snapshot of torrents attached by media or
+// artwork requests. It does not join inactive catalog torrents to collect data.
+func (p *Provider) Transfers(ctx context.Context) ([]domain.SourceTransfer, error) {
+	p.operation.RLock()
+	defer p.operation.RUnlock()
+
+	p.clientMu.Lock()
+	client := p.client
+	p.clientMu.Unlock()
+	if client == nil {
+		return []domain.SourceTransfer{}, nil
+	}
+	p.cacheMu.Lock()
+	streams := make(map[string]int, len(p.streams))
+	for infoHash, count := range p.streams {
+		streams[infoHash] = count
+	}
+	p.cacheMu.Unlock()
+
+	torrents := client.Torrents()
+	transfers := make([]domain.SourceTransfer, 0, len(torrents))
+	for _, torrent := range torrents {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		stats := torrent.Stats()
+		infoHash := torrent.InfoHash().HexString()
+		transfers = append(transfers, domain.SourceTransfer{
+			Provider: Name, ID: infoHash, Name: torrent.Name(),
+			CompletedBytes: torrent.BytesCompleted(), TotalBytes: torrent.Length(),
+			DownloadedBytes: stats.BytesReadUsefulData.Int64(),
+			UploadedBytes:   stats.BytesWrittenData.Int64(),
+			Peers:           stats.TotalPeers, ActivePeers: stats.ActivePeers,
+			ConnectedSeeders: stats.ConnectedSeeders,
+			ActiveStreams:    streams[infoHash],
+			Seeding:          torrent.Seeding(),
+		})
+	}
+	sort.Slice(transfers, func(i, j int) bool {
+		if transfers[i].Name == transfers[j].Name {
+			return transfers[i].ID < transfers[j].ID
+		}
+		return transfers[i].Name < transfers[j].Name
+	})
+	return transfers, nil
 }
 
 // Evict removes least recently accessed torrent files. Active torrents are
@@ -426,7 +475,7 @@ func (p *Provider) open(ctx context.Context, ref domain.SourceRef) (ports.Resolv
 		reader := file.NewReader()
 		reader.SetContext(ctx)
 		reader.SetReadahead(streamReadahead)
-		p.retain(infoHash, ref.Key)
+		p.retainStream(infoHash, ref.Key)
 		return ports.ResolvedSource{
 			Content: &boundedReader{
 				ReadSeekCloser: reader,
@@ -435,7 +484,7 @@ func (p *Provider) open(ctx context.Context, ref domain.SourceRef) (ports.Resolv
 				onComplete: func() {
 					p.notifyCompleted(ref, logicalPath)
 				},
-				onClose: func() { p.release(infoHash) },
+				onClose: func() { p.releaseStream(infoHash) },
 			},
 			Name: path.Base(logicalPath), ContentType: contentType(logicalPath),
 			Size: file.Length(), ModTime: time.Time{},
@@ -575,17 +624,40 @@ func (p *Provider) retain(infoHash, key string) {
 	p.cacheMu.Unlock()
 }
 
+func (p *Provider) retainStream(infoHash, key string) {
+	p.cacheMu.Lock()
+	p.active[infoHash]++
+	p.streams[infoHash]++
+	p.lastAccessed[key] = time.Now().UTC()
+	p.cacheMu.Unlock()
+}
+
 func (p *Provider) release(infoHash string) {
 	p.cacheMu.Lock()
-	if p.active[infoHash] <= 1 {
-		delete(p.active, infoHash)
-	} else {
-		p.active[infoHash]--
-	}
+	decrementCount(p.active, infoHash)
 	handler := p.onCacheChanged
 	p.cacheMu.Unlock()
 	if handler != nil {
 		handler()
+	}
+}
+
+func (p *Provider) releaseStream(infoHash string) {
+	p.cacheMu.Lock()
+	decrementCount(p.active, infoHash)
+	decrementCount(p.streams, infoHash)
+	handler := p.onCacheChanged
+	p.cacheMu.Unlock()
+	if handler != nil {
+		handler()
+	}
+}
+
+func decrementCount(counts map[string]int, key string) {
+	if counts[key] <= 1 {
+		delete(counts, key)
+	} else {
+		counts[key]--
 	}
 }
 

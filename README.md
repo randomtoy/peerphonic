@@ -24,6 +24,7 @@ changing the client-facing streaming flow.
 - background tag enrichment after a torrent track has been streamed completely;
 - persistent favorites, ratings, and playback history per OpenSubsonic user;
 - persistent cross-client OpenSubsonic play queues;
+- authenticated live source transfer status for download, upload, peer, and seeding visibility;
 - a small Peerphonic health endpoint at `/api/v1/health`.
 
 The implemented OpenSubsonic endpoints are:
@@ -156,6 +157,16 @@ Verified downloaded pieces are uploaded to other peers by default while the
 torrent remains attached. Set `torrent_seed` to `false` to disable seeding. A
 stable listen port makes manual router forwarding possible; alternatively,
 enable `torrent_port_forwarding` to let Peerphonic request UPnP/NAT-PMP mapping.
+
+Live transfer state is available without attaching inactive catalog sources:
+
+```bash
+curl -u admin:admin http://localhost:8080/api/v1/transfers
+```
+
+The response reports persistent completed bytes and current-process download
+and upload counters, peers, active streams, and seeding state for each attached
+source. An empty list means no source has been opened since server startup.
 
 Torrent cache cleanup never removes data from an actively streamed torrent.
 Before removing inactive torrent files, Peerphonic detaches that torrent from
