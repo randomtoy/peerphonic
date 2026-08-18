@@ -287,6 +287,104 @@ func (p *Provider) Transfers(ctx context.Context) ([]domain.SourceTransfer, erro
 	return transfers, nil
 }
 
+func (p *Provider) ManagedSources(ctx context.Context) ([]domain.ManagedSource, error) {
+	p.operation.RLock()
+	defer p.operation.RUnlock()
+	entries, err := os.ReadDir(p.metadataRoot)
+	if os.IsNotExist(err) {
+		return []domain.ManagedSource{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read torrent metadata directory: %w", err)
+	}
+	result := make([]domain.ManagedSource, 0, len(entries))
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".torrent") {
+			continue
+		}
+		file, err := os.Open(filepath.Join(p.metadataRoot, entry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("open torrent metadata %q: %w", entry.Name(), err)
+		}
+		catalog, readErr := p.ReadCatalog(file)
+		closeErr := file.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("read torrent metadata %q: %w", entry.Name(), readErr)
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("close torrent metadata %q: %w", entry.Name(), closeErr)
+		}
+		result = append(result, domain.ManagedSource{
+			Provider: Name, ID: catalog.InfoHash, Name: catalog.Name, Tracks: len(catalog.Tracks),
+			Attached: p.torrentAttached(catalog.InfoHash),
+			Paused:   p.sourceMarkerExists(catalog.InfoHash, "paused"),
+			Pinned:   p.sourceMarkerExists(catalog.InfoHash, "pinned"),
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Name == result[j].Name {
+			return result[i].ID < result[j].ID
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result, nil
+}
+
+func (p *Provider) PauseSource(_ context.Context, id string) error {
+	return p.setSourcePaused(id, true)
+}
+
+func (p *Provider) ResumeSource(_ context.Context, id string) error {
+	return p.setSourcePaused(id, false)
+}
+
+func (p *Provider) PinSource(_ context.Context, id string, pinned bool) error {
+	p.operation.RLock()
+	defer p.operation.RUnlock()
+	if err := p.validateSourceID(id); err != nil {
+		return err
+	}
+	return p.setSourceMarker(id, "pinned", pinned)
+}
+
+func (p *Provider) RemoveSource(ctx context.Context, id string, deleteData bool) error {
+	p.operation.Lock()
+	defer p.operation.Unlock()
+	if err := p.validateSourceID(id); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	p.cacheMu.Lock()
+	active := p.active[id]
+	p.cacheMu.Unlock()
+	if active > 0 {
+		return ports.ErrSourceBusy
+	}
+	p.dropTorrent(id)
+	if err := os.Remove(filepath.Join(p.metadataRoot, id+".torrent")); err != nil {
+		if os.IsNotExist(err) {
+			return ports.ErrNotFound
+		}
+		return fmt.Errorf("remove torrent metadata: %w", err)
+	}
+	for _, state := range []string{"paused", "pinned"} {
+		if err := os.Remove(p.sourceMarkerPath(id, state)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove torrent %s marker: %w", state, err)
+		}
+	}
+	if deleteData {
+		if err := os.RemoveAll(filepath.Join(p.dataRoot, id)); err != nil {
+			return fmt.Errorf("remove torrent cache data: %w", err)
+		}
+	}
+	return nil
+}
+
 // Evict removes least recently accessed torrent files. Active torrents are
 // skipped, and an inactive torrent is dropped from the client before any of
 // its files are removed so piece completion is re-evaluated on the next open.
@@ -313,7 +411,7 @@ func (p *Provider) Evict(ctx context.Context, bytes int64) (int64, error) {
 		p.cacheMu.Lock()
 		active := p.active[candidate.infoHash]
 		p.cacheMu.Unlock()
-		if active > 0 {
+		if active > 0 || p.sourceMarkerExists(candidate.infoHash, "pinned") {
 			continue
 		}
 		if !dropped[candidate.infoHash] {
@@ -424,6 +522,9 @@ func (p *Provider) open(ctx context.Context, ref domain.SourceRef) (ports.Resolv
 	infoHash, logicalPath, err := parseSourceKey(ref.Key)
 	if err != nil {
 		return ports.ResolvedSource{}, err
+	}
+	if p.sourceMarkerExists(infoHash, "paused") {
+		return ports.ResolvedSource{}, fmt.Errorf("%w: torrent source is paused", ports.ErrSourceUnavailable)
 	}
 	client, err := p.ensureClient()
 	if err != nil {
@@ -553,6 +654,89 @@ func (p *Provider) dropTorrent(infoHash string) {
 	if torrent, ok := client.Torrent(hash); ok {
 		torrent.Drop()
 	}
+}
+
+func (p *Provider) torrentAttached(infoHash string) bool {
+	hash := metainfo.NewHashFromHex(infoHash)
+	p.clientMu.Lock()
+	client := p.client
+	p.clientMu.Unlock()
+	if client == nil {
+		return false
+	}
+	_, ok := client.Torrent(hash)
+	return ok
+}
+
+func (p *Provider) setSourcePaused(id string, paused bool) error {
+	p.operation.RLock()
+	defer p.operation.RUnlock()
+	if err := p.validateSourceID(id); err != nil {
+		return err
+	}
+	if err := p.setSourceMarker(id, "paused", paused); err != nil {
+		return err
+	}
+	hash := metainfo.NewHashFromHex(id)
+	p.clientMu.Lock()
+	client := p.client
+	p.clientMu.Unlock()
+	if client == nil {
+		return nil
+	}
+	torrent, ok := client.Torrent(hash)
+	if !ok {
+		return nil
+	}
+	if paused {
+		torrent.DisallowDataDownload()
+		torrent.DisallowDataUpload()
+	} else {
+		torrent.AllowDataDownload()
+		torrent.AllowDataUpload()
+	}
+	return nil
+}
+
+func (p *Provider) validateSourceID(id string) error {
+	if len(id) != 40 {
+		return fmt.Errorf("invalid torrent info hash")
+	}
+	if _, err := hex.DecodeString(id); err != nil {
+		return fmt.Errorf("invalid torrent info hash: %w", err)
+	}
+	if _, err := os.Stat(filepath.Join(p.metadataRoot, id+".torrent")); err != nil {
+		if os.IsNotExist(err) {
+			return ports.ErrNotFound
+		}
+		return fmt.Errorf("stat torrent metadata: %w", err)
+	}
+	return nil
+}
+
+func (p *Provider) sourceMarkerPath(id, state string) string {
+	return filepath.Join(p.metadataRoot, id+"."+state)
+}
+
+func (p *Provider) sourceMarkerExists(id, state string) bool {
+	return fileExists(p.sourceMarkerPath(id, state))
+}
+
+func (p *Provider) setSourceMarker(id, state string, enabled bool) error {
+	markerPath := p.sourceMarkerPath(id, state)
+	if !enabled {
+		if err := os.Remove(markerPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove torrent %s marker: %w", state, err)
+		}
+		return nil
+	}
+	if err := os.MkdirAll(p.metadataRoot, 0o755); err != nil {
+		return fmt.Errorf("create torrent metadata directory: %w", err)
+	}
+	if err := os.WriteFile(markerPath, nil, 0o600); err != nil {
+		return fmt.Errorf("write torrent %s marker: %w", state, err)
+	}
+	return nil
 }
 
 func (p *Provider) ensureClient() (*torrentclient.Client, error) {

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strconv"
 
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
@@ -37,6 +38,20 @@ type transfersResponse struct {
 	Transfers []transferResponse `json:"transfers"`
 }
 
+type managedSourceResponse struct {
+	Provider string `json:"provider"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	Tracks   int    `json:"tracks"`
+	Attached bool   `json:"attached"`
+	Paused   bool   `json:"paused"`
+	Pinned   bool   `json:"pinned"`
+}
+
+type managedSourcesResponse struct {
+	Sources []managedSourceResponse `json:"sources"`
+}
+
 type cacheComponentResponse struct {
 	Name           string `json:"name"`
 	SizeBytes      int64  `json:"sizeBytes"`
@@ -56,6 +71,7 @@ type cacheStatusResponse struct {
 func NewHandler(
 	cache cacheStatus,
 	torrentImporter ports.SourceImporter,
+	sources ports.SourceManager,
 	transfers ports.SourceTransferMonitor,
 	username, password string,
 ) http.Handler {
@@ -122,6 +138,67 @@ func NewHandler(
 			}{ID: result.SourceID, Name: result.Name, Tracks: result.Tracks})
 		})
 	}
+	if sources != nil {
+		mux.HandleFunc("GET /api/v1/torrents", func(writer http.ResponseWriter, request *http.Request) {
+			if !requireBasicAuthentication(writer, request, username, password) {
+				return
+			}
+			items, err := sources.ManagedSources(request.Context())
+			if err != nil {
+				http.Error(writer, "read torrent sources", http.StatusInternalServerError)
+				return
+			}
+			response := managedSourcesResponse{Sources: make([]managedSourceResponse, 0, len(items))}
+			for _, item := range items {
+				response.Sources = append(response.Sources, managedSourceResponse{
+					Provider: item.Provider, ID: item.ID, Name: item.Name, Tracks: item.Tracks,
+					Attached: item.Attached, Paused: item.Paused, Pinned: item.Pinned,
+				})
+			}
+			writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+			_ = json.NewEncoder(writer).Encode(response)
+		})
+		for action, update := range map[string]func(context.Context, string) error{
+			"pause":  sources.PauseSource,
+			"resume": sources.ResumeSource,
+			"pin": func(ctx context.Context, id string) error {
+				return sources.PinSource(ctx, id, true)
+			},
+			"unpin": func(ctx context.Context, id string) error {
+				return sources.PinSource(ctx, id, false)
+			},
+		} {
+			mux.HandleFunc("POST /api/v1/torrents/{id}/"+action, func(writer http.ResponseWriter, request *http.Request) {
+				if !requireBasicAuthentication(writer, request, username, password) {
+					return
+				}
+				if err := update(request.Context(), request.PathValue("id")); err != nil {
+					writeSourceManagementError(writer, err)
+					return
+				}
+				writer.WriteHeader(http.StatusNoContent)
+			})
+		}
+		mux.HandleFunc("DELETE /api/v1/torrents/{id}", func(writer http.ResponseWriter, request *http.Request) {
+			if !requireBasicAuthentication(writer, request, username, password) {
+				return
+			}
+			deleteData := false
+			if value := request.URL.Query().Get("deleteData"); value != "" {
+				parsed, err := strconv.ParseBool(value)
+				if err != nil {
+					http.Error(writer, "deleteData must be a boolean", http.StatusBadRequest)
+					return
+				}
+				deleteData = parsed
+			}
+			if err := sources.RemoveSource(request.Context(), request.PathValue("id"), deleteData); err != nil {
+				writeSourceManagementError(writer, err)
+				return
+			}
+			writer.WriteHeader(http.StatusNoContent)
+		})
+	}
 	if transfers != nil {
 		mux.HandleFunc("GET /api/v1/transfers", func(writer http.ResponseWriter, request *http.Request) {
 			if !basicAuthenticated(request, username, password) {
@@ -161,4 +238,24 @@ func basicAuthenticated(request *http.Request, username, password string) bool {
 	}
 	return subtle.ConstantTimeCompare([]byte(providedUsername), []byte(username)) == 1 &&
 		subtle.ConstantTimeCompare([]byte(providedPassword), []byte(password)) == 1
+}
+
+func requireBasicAuthentication(writer http.ResponseWriter, request *http.Request, username, password string) bool {
+	if basicAuthenticated(request, username, password) {
+		return true
+	}
+	writer.Header().Set("WWW-Authenticate", `Basic realm="Peerphonic"`)
+	http.Error(writer, "authentication required", http.StatusUnauthorized)
+	return false
+}
+
+func writeSourceManagementError(writer http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ports.ErrNotFound):
+		http.Error(writer, "torrent source not found", http.StatusNotFound)
+	case errors.Is(err, ports.ErrSourceBusy), errors.Is(err, scanner.ErrScanInProgress):
+		http.Error(writer, err.Error(), http.StatusConflict)
+	default:
+		http.Error(writer, "manage torrent source", http.StatusInternalServerError)
+	}
 }

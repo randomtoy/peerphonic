@@ -91,6 +91,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	)
 	scanManager := scanner.NewManager(ctx, scanner.NewGroup(localScanner, torrentScanner))
 	torrentImporter := torrentscanner.NewImporter(cfg.TorrentDir, torrentProvider, scanManager)
+	torrentManager := torrentscanner.NewSourceManager(torrentProvider, scanManager)
 	if cfg.Scan {
 		report, err := scanManager.ScanNow(ctx)
 		if err != nil {
@@ -109,7 +110,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	streaming := services.NewStreamingService(catalog, provider, torrentProvider)
 	mux := http.NewServeMux()
 	mux.Handle("/rest/", opensubsonic.NewHandler(catalog, streaming, artwork, cfg.Username, cfg.Password, scanManager))
-	mux.Handle("/", peerphonic.NewHandler(cacheStatus, torrentImporter, torrentProvider, cfg.Username, cfg.Password))
+	mux.Handle("/", peerphonic.NewHandler(cacheStatus, torrentImporter, torrentManager, torrentProvider, cfg.Username, cfg.Password))
 	return &application{handler: mux, catalog: catalog, torrentProvider: torrentProvider}, nil
 }
 

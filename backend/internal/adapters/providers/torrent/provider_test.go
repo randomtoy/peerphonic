@@ -550,6 +550,80 @@ func TestEvictSkipsActiveTorrent(t *testing.T) {
 	}
 }
 
+func TestManagedSourcesPersistPausePinAndRemove(t *testing.T) {
+	t.Parallel()
+
+	metadataRoot := t.TempDir()
+	dataRoot := t.TempDir()
+	provider, err := NewStreaming(metadataRoot, dataRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data := torrentBytes(t, metainfo.Info{
+		Name: "Artist - Managed Album", PieceLength: 16 * 1024, Pieces: make([]byte, 20),
+		Files: []metainfo.FileInfo{{Length: 4096, Path: []string{"01 Song.mp3"}}},
+	})
+	catalog, err := provider.ReadCatalog(bytes.NewReader(data))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(metadataRoot, catalog.InfoHash+".torrent"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	sources, err := provider.ManagedSources(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(sources) != 1 || sources[0].ID != catalog.InfoHash || sources[0].Tracks != 1 ||
+		sources[0].Paused || sources[0].Pinned {
+		t.Fatalf("ManagedSources() = %#v", sources)
+	}
+
+	if err := provider.PauseSource(context.Background(), catalog.InfoHash); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := provider.Resolve(context.Background(), catalog.Tracks[0].Ref); !errors.Is(err, ports.ErrSourceUnavailable) {
+		t.Fatalf("Resolve() paused error = %v, want ErrSourceUnavailable", err)
+	}
+	if err := provider.ResumeSource(context.Background(), catalog.InfoHash); err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.PinSource(context.Background(), catalog.InfoHash, true); err != nil {
+		t.Fatal(err)
+	}
+
+	cachePath := provider.cachePath(catalog.InfoHash, strings.Join([]string{catalog.Name, "01 Song.mp3"}, "/"))
+	if err := os.MkdirAll(filepath.Dir(cachePath), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(cachePath, bytes.Repeat([]byte("x"), 4096), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	freed, err := provider.Evict(context.Background(), 4096)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if freed != 0 {
+		t.Fatalf("Evict() freed pinned source bytes = %d, want 0", freed)
+	}
+
+	provider.retain(catalog.InfoHash, catalog.Tracks[0].Ref.Key)
+	if err := provider.RemoveSource(context.Background(), catalog.InfoHash, true); !errors.Is(err, ports.ErrSourceBusy) {
+		t.Fatalf("RemoveSource() active error = %v, want ErrSourceBusy", err)
+	}
+	provider.release(catalog.InfoHash)
+	if err := provider.RemoveSource(context.Background(), catalog.InfoHash, true); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(metadataRoot, catalog.InfoHash+".torrent")); !os.IsNotExist(err) {
+		t.Fatalf("torrent metadata stat error = %v, want not exist", err)
+	}
+	if _, err := os.Stat(filepath.Join(dataRoot, catalog.InfoHash)); !os.IsNotExist(err) {
+		t.Fatalf("torrent data stat error = %v, want not exist", err)
+	}
+}
+
 func TestStreamingProviderReadsPersistedTorrentFileAndArtwork(t *testing.T) {
 	t.Parallel()
 

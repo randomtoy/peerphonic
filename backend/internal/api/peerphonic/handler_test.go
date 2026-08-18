@@ -20,6 +20,17 @@ type sourceImporterStub struct {
 
 type transferMonitorStub struct{}
 
+type sourceManagerStub struct {
+	sources         []domain.ManagedSource
+	pausedID        string
+	resumedID       string
+	pinnedID        string
+	pinned          bool
+	removedID       string
+	removedData     bool
+	managementError error
+}
+
 func (s *sourceImporterStub) Import(_ context.Context, source io.Reader) (ports.SourceImportResult, error) {
 	contents, err := io.ReadAll(source)
 	if err != nil {
@@ -45,11 +56,37 @@ func (transferMonitorStub) Transfers(context.Context) ([]domain.SourceTransfer, 
 	}}, nil
 }
 
+func (s *sourceManagerStub) ManagedSources(context.Context) ([]domain.ManagedSource, error) {
+	return s.sources, s.managementError
+}
+
+func (s *sourceManagerStub) PauseSource(_ context.Context, id string) error {
+	s.pausedID = id
+	return s.managementError
+}
+
+func (s *sourceManagerStub) ResumeSource(_ context.Context, id string) error {
+	s.resumedID = id
+	return s.managementError
+}
+
+func (s *sourceManagerStub) PinSource(_ context.Context, id string, pinned bool) error {
+	s.pinnedID = id
+	s.pinned = pinned
+	return s.managementError
+}
+
+func (s *sourceManagerStub) RemoveSource(_ context.Context, id string, deleteData bool) error {
+	s.removedID = id
+	s.removedData = deleteData
+	return s.managementError
+}
+
 func TestHealth(t *testing.T) {
 	t.Parallel()
 
 	response := httptest.NewRecorder()
-	NewHandler(nil, nil, nil, "", "").ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
+	NewHandler(nil, nil, nil, nil, "", "").ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/health", nil))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"status":"ok"`) {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -59,7 +96,7 @@ func TestRootIsReachableForClientDiscovery(t *testing.T) {
 	t.Parallel()
 
 	response := httptest.NewRecorder()
-	NewHandler(nil, nil, nil, "", "").ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
+	NewHandler(nil, nil, nil, nil, "", "").ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/", nil))
 	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"service":"peerphonic"`) {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
 	}
@@ -69,7 +106,7 @@ func TestUnknownRouteIsNotFound(t *testing.T) {
 	t.Parallel()
 
 	response := httptest.NewRecorder()
-	NewHandler(nil, nil, nil, "", "").ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/unknown", nil))
+	NewHandler(nil, nil, nil, nil, "", "").ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/unknown", nil))
 	if response.Code != http.StatusNotFound {
 		t.Fatalf("status = %d, want %d", response.Code, http.StatusNotFound)
 	}
@@ -79,7 +116,7 @@ func TestCacheStatus(t *testing.T) {
 	t.Parallel()
 
 	response := httptest.NewRecorder()
-	NewHandler(cacheStatusStub{}, nil, nil, "", "").ServeHTTP(response,
+	NewHandler(cacheStatusStub{}, nil, nil, nil, "", "").ServeHTTP(response,
 		httptest.NewRequest(http.MethodGet, "/api/v1/cache/status", nil))
 	if response.Code != http.StatusOK ||
 		!strings.Contains(response.Body.String(), `"capacityBytes":100`) ||
@@ -93,7 +130,7 @@ func TestTorrentImportRequiresBasicAuthentication(t *testing.T) {
 	t.Parallel()
 
 	importer := &sourceImporterStub{}
-	handler := NewHandler(nil, importer, nil, "alice", "secret")
+	handler := NewHandler(nil, importer, nil, nil, "alice", "secret")
 	unauthorized := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorized,
 		httptest.NewRequest(http.MethodPost, "/api/v1/torrents", strings.NewReader("torrent")))
@@ -115,7 +152,7 @@ func TestTorrentImportRequiresBasicAuthentication(t *testing.T) {
 func TestTransferStatusRequiresAuthentication(t *testing.T) {
 	t.Parallel()
 
-	handler := NewHandler(nil, nil, transferMonitorStub{}, "alice", "secret")
+	handler := NewHandler(nil, nil, nil, transferMonitorStub{}, "alice", "secret")
 	unauthorized := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/v1/transfers", nil))
 	if unauthorized.Code != http.StatusUnauthorized {
@@ -137,5 +174,76 @@ func TestTransferStatusRequiresAuthentication(t *testing.T) {
 		!strings.Contains(body, `"activeStreams":1`) ||
 		!strings.Contains(body, `"seeding":true`) {
 		t.Fatalf("status = %d, body = %s", response.Code, body)
+	}
+}
+
+func TestTorrentManagementRequiresAuthenticationAndReturnsSources(t *testing.T) {
+	t.Parallel()
+
+	manager := &sourceManagerStub{sources: []domain.ManagedSource{{
+		Provider: "torrent", ID: "abc", Name: "Album", Tracks: 12,
+		Attached: true, Paused: false, Pinned: true,
+	}}}
+	handler := NewHandler(nil, nil, manager, nil, "alice", "secret")
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/v1/torrents", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d, want %d", unauthorized.Code, http.StatusUnauthorized)
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/api/v1/torrents", nil)
+	request.SetBasicAuth("alice", "secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	body := response.Body.String()
+	if response.Code != http.StatusOK || !strings.Contains(body, `"name":"Album"`) ||
+		!strings.Contains(body, `"tracks":12`) || !strings.Contains(body, `"pinned":true`) {
+		t.Fatalf("status = %d, body = %s", response.Code, body)
+	}
+}
+
+func TestTorrentManagementActions(t *testing.T) {
+	t.Parallel()
+
+	manager := &sourceManagerStub{}
+	handler := NewHandler(nil, nil, manager, nil, "alice", "secret")
+	for _, test := range []struct {
+		path string
+		want func() bool
+	}{
+		{path: "/api/v1/torrents/source-a/pause", want: func() bool { return manager.pausedID == "source-a" }},
+		{path: "/api/v1/torrents/source-a/resume", want: func() bool { return manager.resumedID == "source-a" }},
+		{path: "/api/v1/torrents/source-a/pin", want: func() bool { return manager.pinnedID == "source-a" && manager.pinned }},
+		{path: "/api/v1/torrents/source-a/unpin", want: func() bool { return manager.pinnedID == "source-a" && !manager.pinned }},
+	} {
+		request := httptest.NewRequest(http.MethodPost, test.path, nil)
+		request.SetBasicAuth("alice", "secret")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusNoContent || !test.want() {
+			t.Fatalf("POST %s status = %d, manager = %#v", test.path, response.Code, manager)
+		}
+	}
+
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/torrents/source-a?deleteData=true", nil)
+	request.SetBasicAuth("alice", "secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusNoContent || manager.removedID != "source-a" || !manager.removedData {
+		t.Fatalf("DELETE status = %d, manager = %#v", response.Code, manager)
+	}
+}
+
+func TestTorrentManagementReportsConflicts(t *testing.T) {
+	t.Parallel()
+
+	manager := &sourceManagerStub{managementError: ports.ErrSourceBusy}
+	handler := NewHandler(nil, nil, manager, nil, "alice", "secret")
+	request := httptest.NewRequest(http.MethodDelete, "/api/v1/torrents/source-a", nil)
+	request.SetBasicAuth("alice", "secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want %d", response.Code, http.StatusConflict)
 	}
 }

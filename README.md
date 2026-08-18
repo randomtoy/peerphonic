@@ -26,6 +26,7 @@ changing the client-facing streaming flow.
 - persistent favorites, ratings, and playback history per OpenSubsonic user;
 - persistent cross-client OpenSubsonic play queues;
 - authenticated live source transfer status for download, upload, peer, and seeding visibility;
+- authenticated torrent source management with persistent pause and cache pinning;
 - a small Peerphonic health endpoint at `/api/v1/health`.
 
 The implemented OpenSubsonic endpoints are:
@@ -200,6 +201,24 @@ credentials as OpenSubsonic:
 curl -u admin:admin --data-binary @album.torrent \
   http://localhost:8080/api/v1/torrents
 ```
+
+Imported torrents can be listed and managed without restarting the server:
+
+```bash
+curl -u admin:admin http://localhost:8080/api/v1/torrents
+curl -u admin:admin -X POST http://localhost:8080/api/v1/torrents/INFO_HASH/pause
+curl -u admin:admin -X POST http://localhost:8080/api/v1/torrents/INFO_HASH/resume
+curl -u admin:admin -X POST http://localhost:8080/api/v1/torrents/INFO_HASH/pin
+curl -u admin:admin -X POST http://localhost:8080/api/v1/torrents/INFO_HASH/unpin
+curl -u admin:admin -X DELETE \
+  'http://localhost:8080/api/v1/torrents/INFO_HASH?deleteData=true'
+```
+
+Pause state and whole-torrent cache pins survive restarts. A pinned source is
+excluded from automatic cache eviction. Removing a source always removes its
+catalog metadata and triggers a library synchronization; `deleteData=true` also
+removes its cached media. Active streams return HTTP 409 instead of being
+interrupted.
 
 ## Development
 

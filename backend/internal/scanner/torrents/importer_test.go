@@ -51,3 +51,37 @@ func TestImporterStoresMetainfoByInfoHashAndStartsScan(t *testing.T) {
 		t.Fatal("stored metainfo differs from upload")
 	}
 }
+
+func TestSourceManagerRemovesTorrentAndSynchronizesCatalog(t *testing.T) {
+	t.Parallel()
+
+	fixturePath := filepath.Join(t.TempDir(), "fixture.torrent")
+	writeTorrent(t, fixturePath, metainfo.Info{
+		Name: "Artist - Album", PieceLength: 16 * 1024, Pieces: make([]byte, 20),
+		Files: []metainfo.FileInfo{{Length: 100, Path: []string{"Song.mp3"}}},
+	})
+	contents, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	metadataRoot := t.TempDir()
+	provider, err := torrentprovider.NewStreaming(metadataRoot, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	catalog, err := provider.ReadCatalog(bytes.NewReader(contents))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(metadataRoot, catalog.InfoHash+".torrent"), contents, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	scans := &scanControllerStub{}
+	manager := NewSourceManager(provider, scans)
+	if err := manager.RemoveSource(context.Background(), catalog.InfoHash, false); err != nil {
+		t.Fatal(err)
+	}
+	if scans.calls != 1 {
+		t.Fatalf("scan calls = %d, want 1", scans.calls)
+	}
+}
