@@ -402,6 +402,38 @@ func TestBrowseAndStreamRange(t *testing.T) {
 	}
 }
 
+func TestDownloadReturnsOriginalTrackAsAttachment(t *testing.T) {
+	t.Parallel()
+
+	handler, track := newTestHandler(t)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+		"/rest/download.view?u=alice&p=secret&id="+track.ID, nil))
+
+	if response.Code != http.StatusOK || response.Body.String() != "0123456789" {
+		t.Fatalf("download status = %d, body = %q", response.Code, response.Body.String())
+	}
+	if got := response.Header().Get("Content-Disposition"); got != `attachment; filename=song.mp3` {
+		t.Fatalf("Content-Disposition = %q", got)
+	}
+	if got := response.Header().Get("Content-Type"); got != "audio/mpeg" {
+		t.Fatalf("Content-Type = %q", got)
+	}
+}
+
+func TestStreamDoesNotForceAttachmentDisposition(t *testing.T) {
+	t.Parallel()
+
+	handler, track := newTestHandler(t)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet,
+		"/rest/stream.view?u=alice&p=secret&id="+track.ID, nil))
+
+	if got := response.Header().Get("Content-Disposition"); got != "" {
+		t.Fatalf("Content-Disposition = %q", got)
+	}
+}
+
 func TestMetadataOnlyTorrentTrackIsTemporarilyUnavailable(t *testing.T) {
 	t.Parallel()
 

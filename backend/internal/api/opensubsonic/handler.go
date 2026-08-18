@@ -9,6 +9,7 @@ import (
 	"encoding/xml"
 	"errors"
 	"fmt"
+	"mime"
 	"net/http"
 	"path"
 	"sort"
@@ -191,8 +192,10 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.getScanStatus(writer, request, false)
 	case "startScan":
 		h.getScanStatus(writer, request, true)
-	case "stream", "download":
-		h.stream(writer, request)
+	case "stream":
+		h.serveTrack(writer, request, false)
+	case "download":
+		h.serveTrack(writer, request, true)
 	default:
 		h.writeError(writer, request, http.StatusNotFound, 0, "Endpoint not implemented")
 	}
@@ -803,7 +806,7 @@ func (h *Handler) getMusicDirectory(writer http.ResponseWriter, request *http.Re
 	h.write(writer, request, http.StatusOK, response{Directory: directory})
 }
 
-func (h *Handler) stream(writer http.ResponseWriter, request *http.Request) {
+func (h *Handler) serveTrack(writer http.ResponseWriter, request *http.Request, download bool) {
 	id := request.Form.Get("id")
 	if id == "" {
 		h.writeError(writer, request, http.StatusBadRequest, 10, "Required parameter id is missing")
@@ -848,6 +851,11 @@ func (h *Handler) stream(writer http.ResponseWriter, request *http.Request) {
 	defer resolved.Content.Close()
 	if resolved.ContentType != "" {
 		writer.Header().Set("Content-Type", resolved.ContentType)
+	}
+	if download {
+		writer.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{
+			"filename": resolved.Name,
+		}))
 	}
 	http.ServeContent(writer, request, resolved.Name, resolved.ModTime, resolved.Content)
 }
