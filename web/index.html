@@ -48,16 +48,20 @@
             <span class="nav-icon" aria-hidden="true">02</span>
             <span><strong>Sources</strong><small>Import and manage</small></span>
           </button>
-          <button class="nav-item" type="button" data-page="activity" data-required-permission="monitoring.view">
+          <button class="nav-item" type="button" data-page="search" data-required-permission="sources.manage">
             <span class="nav-icon" aria-hidden="true">03</span>
+            <span><strong>Search</strong><small>Find on Soulseek</small></span>
+          </button>
+          <button class="nav-item" type="button" data-page="activity" data-required-permission="monitoring.view">
+            <span class="nav-icon" aria-hidden="true">04</span>
             <span><strong>Activity</strong><small>Downloads and peers</small></span>
           </button>
           <button class="nav-item" type="button" data-page="users" data-required-permission="users.manage">
-            <span class="nav-icon" aria-hidden="true">04</span>
+            <span class="nav-icon" aria-hidden="true">05</span>
             <span><strong>Users</strong><small>Accounts and access</small></span>
           </button>
           <button class="nav-item" type="button" data-page="settings" data-required-permission="sources.manage">
-            <span class="nav-icon" aria-hidden="true">05</span>
+            <span class="nav-icon" aria-hidden="true">06</span>
             <span><strong>Settings</strong><small>Transfer limits</small></span>
           </button>
         </nav>
@@ -129,6 +133,22 @@
               <span id="import-count" class="pill"></span>
             </div>
             <div id="imports" class="source-list"></div>
+          </section>
+        </section>
+
+        <section class="dashboard-page" data-page-panel="search" hidden>
+          <section class="panel" aria-labelledby="soulseek-search-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">SOULSEEK NETWORK</p><h2 id="soulseek-search-title">Find remote music</h2><p class="section-description">Search connected Soulseek peers without downloading anything. Adding a result to the library comes in the next milestone.</p></div>
+              <span id="search-result-count" class="pill">No search</span>
+            </div>
+            <form id="soulseek-search-form" class="search-form">
+              <label>Artist, album or track<input id="soulseek-query" name="query" type="search" minlength="3" maxlength="200" placeholder="Massive Attack Mezzanine" autocomplete="off" required></label>
+              <label>Result limit<input id="soulseek-limit" name="limit" type="number" min="1" max="200" value="50" required></label>
+              <button class="button primary" type="submit">Search</button>
+            </form>
+            <p id="soulseek-search-message" class="form-message" role="status"></p>
+            <div id="soulseek-search-results" class="source-list search-results" aria-live="polite"></div>
           </section>
         </section>
 

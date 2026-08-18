@@ -48,6 +48,12 @@ const elements = {
   soulseekConfigured: document.querySelector("#soulseek-configured"),
   soulseekReachable: document.querySelector("#soulseek-reachable"),
   soulseekAuthenticated: document.querySelector("#soulseek-authenticated"),
+  soulseekSearchForm: document.querySelector("#soulseek-search-form"),
+  soulseekQuery: document.querySelector("#soulseek-query"),
+  soulseekLimit: document.querySelector("#soulseek-limit"),
+  soulseekSearchMessage: document.querySelector("#soulseek-search-message"),
+  soulseekSearchResults: document.querySelector("#soulseek-search-results"),
+  soulseekSearchCount: document.querySelector("#search-result-count"),
   updatedAt: document.querySelector("#updated-at"),
   addSourceSection: document.querySelector("#add-source-section"),
   downloadsSection: document.querySelector("#downloads-section"),
@@ -94,6 +100,11 @@ const pages = {
     eyebrow: "LIVE STATUS",
     title: "Activity",
     description: "Follow on-demand downloads, cache progress and peer transfers.",
+  },
+  search: {
+    eyebrow: "REMOTE DISCOVERY",
+    title: "Soulseek search",
+    description: "Find tracks across connected peers before adding them to your library.",
   },
   users: {
     eyebrow: "ACCESS CONTROL",
@@ -376,6 +387,48 @@ function renderSoulseekStatus(status) {
   elements.soulseekAuthenticated.textContent = status.authenticated ? "Granted" : "No";
 }
 
+function formatDuration(seconds = 0) {
+  const total = Math.max(0, Math.round(Number(seconds) || 0));
+  const minutes = Math.floor(total / 60);
+  return `${minutes}:${String(total % 60).padStart(2, "0")}`;
+}
+
+function renderSoulseekResults(items) {
+  const results = [...items].sort((left, right) =>
+    Number(right.freeUploadSlot) - Number(left.freeUploadSlot) ||
+    Number(left.requiresApproval) - Number(right.requiresApproval) ||
+    (left.queueLength || 0) - (right.queueLength || 0) ||
+    (right.uploadSpeedBytesPerSecond || 0) - (left.uploadSpeedBytesPerSecond || 0)
+  );
+  elements.soulseekSearchCount.textContent = `${results.length} result${results.length === 1 ? "" : "s"}`;
+  elements.soulseekSearchResults.replaceChildren();
+  if (!results.length) {
+    elements.soulseekSearchResults.append(empty("No audio results arrived. Try a broader query or search again."));
+    return;
+  }
+  elements.soulseekSearchResults.innerHTML = results.map((item) => {
+    const availability = item.requiresApproval ? "Locked" : item.freeUploadSlot ? "Free slot" : "Queued";
+    const facts = [
+      item.suffix ? item.suffix.toUpperCase() : "Audio",
+      formatBytes(item.size),
+      item.durationSeconds ? formatDuration(item.durationSeconds) : "Unknown length",
+      item.bitRate ? `${item.bitRate} kbps` : "Unknown bitrate",
+    ];
+    return `<article class="source-row search-result">
+      <div class="source-copy">
+        <div class="search-result-title"><h3>${escapeHTML(item.title || item.path)}</h3><span class="status ${item.requiresApproval ? "failed" : ""}">${availability}</span></div>
+        <p class="search-path">${escapeHTML(item.path)}</p>
+        <p class="source-meta">${facts.map((fact) => `<span>${escapeHTML(fact)}</span>`).join("")}</p>
+      </div>
+      <dl class="search-peer-facts">
+        <div><dt>Peer</dt><dd>${escapeHTML(item.peer || "Unknown")}</dd></div>
+        <div><dt>Upload</dt><dd>${formatBytes(item.uploadSpeedBytesPerSecond)}/s</dd></div>
+        <div><dt>Queue</dt><dd>${Number(item.queueLength) || 0}</dd></div>
+      </dl>
+    </article>`;
+  }).join("");
+}
+
 async function refresh() {
   if (!state.authorization) return;
   elements.refresh.disabled = true;
@@ -489,6 +542,37 @@ elements.transferSettingsForm.addEventListener("submit", async (event) => {
     elements.transferSettingsMessage.textContent = error.message;
   } finally {
     button.disabled = false;
+  }
+});
+elements.soulseekSearchForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = elements.soulseekSearchForm.querySelector("button[type=submit]");
+  button.disabled = true;
+  button.textContent = "Searching…";
+  elements.soulseekSearchMessage.className = "form-message";
+  elements.soulseekSearchMessage.textContent = "Waiting for Soulseek peers. This usually takes 5–8 seconds…";
+  elements.soulseekSearchCount.textContent = "Searching";
+  try {
+    const payload = await api("/api/v1/providers/soulseek/search", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        query: elements.soulseekQuery.value,
+        limit: Number(elements.soulseekLimit.value),
+      }),
+    });
+    const results = payload.results || [];
+    renderSoulseekResults(results);
+    elements.soulseekSearchMessage.textContent = results.length
+      ? `Found ${results.length} audio result${results.length === 1 ? "" : "s"} for “${payload.query}”.`
+      : `No audio results found for “${payload.query}”.`;
+  } catch (error) {
+    elements.soulseekSearchMessage.className = "form-message error";
+    elements.soulseekSearchMessage.textContent = error.message;
+    elements.soulseekSearchCount.textContent = "Failed";
+  } finally {
+    button.disabled = false;
+    button.textContent = "Search";
   }
 });
 elements.navigation.addEventListener("click", (event) => {

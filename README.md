@@ -30,7 +30,7 @@ changing the client-facing streaming flow.
 - persistent cross-client OpenSubsonic play queues;
 - authenticated live source transfer status for download, upload, peer, and seeding visibility;
 - authenticated torrent source management with persistent pause and cache pinning;
-- optional authenticated slskd connectivity checks behind a generic provider-status port;
+- optional authenticated Soulseek search through a slskd source-provider adapter;
 - an optional containerized administration dashboard for cache, transfers, and torrent sources;
 - a small Peerphonic health endpoint at `/api/v1/health`.
 
@@ -177,6 +177,9 @@ curl -u admin:admin -X PUT -H 'Content-Type: application/json' \
   -d '{"downloadLimitBytesPerSecond":10485760,"uploadLimitBytesPerSecond":2097152}' \
   http://localhost:8080/api/v1/settings/transfers
 curl -u admin:admin http://localhost:8080/api/v1/providers/soulseek/status
+curl -u admin:admin -X POST -H 'Content-Type: application/json' \
+  -d '{"query":"Massive Attack Mezzanine","limit":50}' \
+  http://localhost:8080/api/v1/providers/soulseek/search
 ```
 
 Library scans started through the Peerphonic API run in the background. Their
@@ -187,8 +190,10 @@ To prepare Soulseek integration, configure the slskd base URL and an API key
 with read/write access. Peerphonic authenticates with the `X-API-Key` header and
 uses slskd's `/api/v0/session` endpoint for readiness checks. Prefer HTTPS or a
 private container/Kubernetes network because the API key is a long-lived
-secret. Search and on-demand downloads are implemented as later provider
-capabilities; the current integration only validates connectivity.
+secret. Peerphonic can search the Soulseek network and returns generic track and
+availability metadata without exposing slskd response types. Search does not
+download or add results to the library yet; selecting and resolving one remote
+track is the next provider capability.
 
 ## Architecture
 

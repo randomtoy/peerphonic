@@ -171,6 +171,18 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
 .integration-hint { margin: 14px 2px 0; color: var(--muted); font-size: 11px; line-height: 1.55; }
 .integration-hint code { padding: 2px 5px; color: var(--text); border: 1px solid var(--line); border-radius: 5px; background: var(--bg); }
 
+.search-form { margin-bottom: 4px; padding: 18px; display: grid; grid-template-columns: minmax(220px, 1fr) 120px auto; gap: 10px; align-items: end; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+.search-form label { margin: 0; }
+.search-form .button.primary { width: auto; min-width: 92px; }
+.search-results { margin-top: 18px; }
+.search-result { align-items: start; }
+.search-result-title { display: flex; align-items: start; justify-content: space-between; gap: 14px; }
+.search-path { margin: 7px 0 0; overflow-wrap: anywhere; color: var(--muted); font-size: 11px; line-height: 1.45; }
+.search-peer-facts { min-width: 270px; margin: 0; display: grid; grid-template-columns: minmax(90px, 1.4fr) repeat(2, minmax(58px, .7fr)); gap: 14px; }
+.search-peer-facts div { min-width: 0; }
+.search-peer-facts dt { color: var(--muted); font-size: 9px; text-transform: uppercase; letter-spacing: .06em; }
+.search-peer-facts dd { margin: 4px 0 0; overflow: hidden; text-overflow: ellipsis; font-size: 11px; font-weight: 700; }
+
 .card-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .transfer-card, .source-row { border: 1px solid var(--line); border-radius: 13px; background: var(--surface); }
 .transfer-card { padding: 19px; }
@@ -219,6 +231,9 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
   .import-grid, .card-grid { grid-template-columns: 1fr; }
   .source-row { grid-template-columns: 1fr; }
   .source-actions { justify-content: flex-start; }
+  .search-form { grid-template-columns: minmax(0, 1fr) 110px; }
+  .search-form .button.primary { grid-column: 1 / -1; width: 100%; }
+  .search-peer-facts { min-width: 0; }
 }
 
 @media (max-width: 520px) {
@@ -239,6 +254,9 @@ input:focus, textarea:focus, select:focus { border-color: var(--accent); box-sha
   .settings-submit { display: grid; }
   .settings-submit .button.primary { width: 100%; }
   .provider-facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; }
+  .search-form { grid-template-columns: 1fr; }
+  .search-form .button.primary { grid-column: auto; }
+  .search-peer-facts { grid-template-columns: 1fr 1fr 1fr; }
   .create-user-panel summary small { display: none; }
   .facts { gap: 7px; }
 }
