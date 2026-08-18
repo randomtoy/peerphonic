@@ -144,6 +144,31 @@ type providerStatusResponse struct {
 	Message       string `json:"message"`
 }
 
+type sourceSearchRequest struct {
+	Query string `json:"query"`
+	Limit int    `json:"limit,omitempty"`
+}
+
+type sourceSearchResultResponse struct {
+	ID                        string `json:"id"`
+	Title                     string `json:"title"`
+	Path                      string `json:"path"`
+	Size                      int64  `json:"size"`
+	DurationSeconds           int64  `json:"durationSeconds,omitempty"`
+	BitRate                   int    `json:"bitRate,omitempty"`
+	Suffix                    string `json:"suffix,omitempty"`
+	Peer                      string `json:"peer"`
+	UploadSpeedBytesPerSecond int64  `json:"uploadSpeedBytesPerSecond"`
+	QueueLength               int64  `json:"queueLength"`
+	FreeUploadSlot            bool   `json:"freeUploadSlot"`
+	RequiresApproval          bool   `json:"requiresApproval"`
+}
+
+type sourceSearchResponse struct {
+	Query   string                       `json:"query"`
+	Results []sourceSearchResultResponse `json:"results"`
+}
+
 func NewHandler(
 	cache cacheStatus,
 	torrentImporter ports.SourceImporter,
@@ -160,7 +185,7 @@ func NewHandler(
 	}
 	return newHandler(
 		cache, torrentImporter, uriImporter, sources, transfers, downloads,
-		fixedAuthenticator{username: username, password: password}, nil, nil, nil, scan,
+		fixedAuthenticator{username: username, password: password}, nil, nil, nil, nil, scan,
 	)
 }
 
@@ -174,6 +199,7 @@ func NewHandlerWithAuthenticator(
 	authenticator ports.Authenticator,
 	users ports.UserManager,
 	providerStatus ports.ProviderStatusMonitor,
+	providerSearch ports.SourceSearcher,
 	settings ports.TransferSettingsManager,
 	scans ...scanController,
 ) http.Handler {
@@ -183,7 +209,7 @@ func NewHandlerWithAuthenticator(
 	}
 	return newHandler(
 		cache, torrentImporter, uriImporter, sources, transfers, downloads,
-		authenticator, users, providerStatus, settings, scan,
+		authenticator, users, providerStatus, providerSearch, settings, scan,
 	)
 }
 
@@ -197,6 +223,7 @@ func newHandler(
 	authenticator ports.Authenticator,
 	users ports.UserManager,
 	providerStatus ports.ProviderStatusMonitor,
+	providerSearch ports.SourceSearcher,
 	settings ports.TransferSettingsManager,
 	scans scanController,
 ) http.Handler {
@@ -288,6 +315,60 @@ func newHandler(
 			Provider: status.Provider, Configured: status.Configured, Reachable: status.Reachable,
 			Authenticated: status.Authenticated, Message: status.Message,
 		})
+	})
+	mux.HandleFunc("POST /api/v1/providers/soulseek/search", func(writer http.ResponseWriter, request *http.Request) {
+		if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
+			return
+		}
+		if providerSearch == nil {
+			http.Error(writer, "Soulseek provider is not configured", http.StatusServiceUnavailable)
+			return
+		}
+		request.Body = http.MaxBytesReader(writer, request.Body, 16<<10)
+		decoder := json.NewDecoder(request.Body)
+		decoder.DisallowUnknownFields()
+		var payload sourceSearchRequest
+		if err := decoder.Decode(&payload); err != nil {
+			http.Error(writer, "invalid search request", http.StatusBadRequest)
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			http.Error(writer, "invalid search request", http.StatusBadRequest)
+			return
+		}
+		payload.Query = strings.TrimSpace(payload.Query)
+		if length := len([]rune(payload.Query)); length < 3 || length > 200 || payload.Limit < 0 || payload.Limit > 200 {
+			http.Error(writer, "query must contain 3-200 characters and limit must not exceed 200", http.StatusBadRequest)
+			return
+		}
+		if payload.Limit == 0 {
+			payload.Limit = 50
+		}
+		results, err := providerSearch.Search(request.Context(), domain.SearchQuery{
+			Text: payload.Query, Limit: payload.Limit,
+		})
+		if err != nil {
+			if errors.Is(err, ports.ErrSourceUnavailable) {
+				http.Error(writer, "Soulseek provider is unavailable", http.StatusServiceUnavailable)
+				return
+			}
+			http.Error(writer, "search Soulseek provider", http.StatusBadGateway)
+			return
+		}
+		response := sourceSearchResponse{
+			Query: payload.Query, Results: make([]sourceSearchResultResponse, 0, len(results)),
+		}
+		for _, result := range results {
+			response.Results = append(response.Results, sourceSearchResultResponse{
+				ID: result.Track.ID, Title: result.Track.Title, Path: result.DisplayPath,
+				Size: result.Track.Size, DurationSeconds: int64(result.Track.Duration / time.Second),
+				BitRate: result.Track.BitRate, Suffix: result.Track.Suffix,
+				Peer: result.Availability.Peer, UploadSpeedBytesPerSecond: result.Availability.UploadSpeed,
+				QueueLength: result.Availability.QueueLength, FreeUploadSlot: result.Availability.FreeUploadSlot,
+				RequiresApproval: result.Availability.RequiresApproval,
+			})
+		}
+		writeJSON(writer, http.StatusOK, response)
 	})
 	if cache != nil {
 		mux.HandleFunc("GET /api/v1/cache/status", func(writer http.ResponseWriter, request *http.Request) {

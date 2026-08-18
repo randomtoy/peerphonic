@@ -80,13 +80,16 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		return fail(fmt.Errorf("initialize transfer settings: %w", err))
 	}
 	var soulseekMonitor ports.ProviderStatusMonitor
+	var soulseekSearch ports.SourceSearcher
 	if cfg.SlskdURL != "" {
-		soulseekMonitor, err = soulseekprovider.NewSlskd(
+		soulseekClient, clientErr := soulseekprovider.NewSlskd(
 			cfg.SlskdURL, cfg.SlskdAPIKey, time.Duration(cfg.SlskdTimeoutSeconds)*time.Second,
 		)
-		if err != nil {
-			return fail(fmt.Errorf("initialize slskd client: %w", err))
+		if clientErr != nil {
+			return fail(fmt.Errorf("initialize slskd client: %w", clientErr))
 		}
+		soulseekMonitor = soulseekClient
+		soulseekSearch = soulseekClient
 	}
 	blobs, err := filesystem.New(cfg.CacheDir)
 	if err != nil {
@@ -150,7 +153,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	))
 	mux.Handle("/", peerphonic.NewHandlerWithAuthenticator(
 		cacheStatus, torrentImporter, magnetImporter, torrentManager, torrentProvider, torrentProvider,
-		userService, userService, soulseekMonitor, transferSettings, scanManager,
+		userService, userService, soulseekMonitor, soulseekSearch, transferSettings, scanManager,
 	))
 	return &application{
 		handler: mux, catalog: catalog, torrentProvider: torrentProvider, magnetImporter: magnetImporter,

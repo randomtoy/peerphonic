@@ -35,6 +35,12 @@ type transferSettingsManagerStub struct {
 
 type providerStatusMonitorStub struct{ status domain.ProviderStatus }
 
+type sourceSearcherStub struct {
+	query   domain.SearchQuery
+	results []domain.TrackSource
+	err     error
+}
+
 type uriImporterStub struct {
 	uri   string
 	items []domain.SourceImport
@@ -110,6 +116,15 @@ func (s *transferSettingsManagerStub) UpdateLimits(
 
 func (s providerStatusMonitorStub) ProviderStatus(context.Context) domain.ProviderStatus {
 	return s.status
+}
+
+func (s *sourceSearcherStub) Name() string { return "soulseek" }
+
+func (s *sourceSearcherStub) Search(
+	_ context.Context, query domain.SearchQuery,
+) ([]domain.TrackSource, error) {
+	s.query = query
+	return s.results, s.err
 }
 
 func (s *uriImporterStub) ImportURI(_ context.Context, uri string) (domain.SourceImport, error) {
@@ -246,7 +261,7 @@ func TestTransferSettingsRequireAuthenticationAndUpdate(t *testing.T) {
 	}}
 	handler := newHandler(
 		nil, nil, nil, nil, nil, nil,
-		fixedAuthenticator{username: "alice", password: "secret"}, nil, nil, settings, nil,
+		fixedAuthenticator{username: "alice", password: "secret"}, nil, nil, nil, settings, nil,
 	)
 	unauthorized := httptest.NewRecorder()
 	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/v1/settings/transfers", nil))
@@ -284,7 +299,7 @@ func TestSoulseekProviderStatus(t *testing.T) {
 	}}
 	handler := newHandler(
 		nil, nil, nil, nil, nil, nil,
-		fixedAuthenticator{username: "alice", password: "secret"}, nil, monitor, nil, nil,
+		fixedAuthenticator{username: "alice", password: "secret"}, nil, monitor, nil, nil, nil,
 	)
 	request := httptest.NewRequest(http.MethodGet, "/api/v1/providers/soulseek/status", nil)
 	request.SetBasicAuth("alice", "secret")
@@ -304,6 +319,79 @@ func TestSoulseekProviderStatus(t *testing.T) {
 	if disabledResponse.Code != http.StatusOK ||
 		!strings.Contains(disabledResponse.Body.String(), `"configured":false`) {
 		t.Fatalf("disabled status = %d, body = %s", disabledResponse.Code, disabledResponse.Body.String())
+	}
+}
+
+func TestSoulseekSearchRequiresPermissionAndReturnsGenericResults(t *testing.T) {
+	t.Parallel()
+
+	searcher := &sourceSearcherStub{results: []domain.TrackSource{{
+		Track: domain.Track{
+			ID: "soulseek_opaque", Title: "Angel", Size: 12_000, Duration: 6 * time.Minute,
+			BitRate: 320, Suffix: "mp3",
+		},
+		DisplayPath: "Massive Attack/Mezzanine/01 Angel.mp3",
+		Availability: domain.SourceAvailability{
+			Peer: "peer-one", UploadSpeed: 1_048_576, QueueLength: 2, FreeUploadSlot: true,
+		},
+	}}}
+	handler := newHandler(
+		nil, nil, nil, nil, nil, nil,
+		fixedAuthenticator{username: "alice", password: "secret"}, nil, nil, searcher, nil, nil,
+	)
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(
+		http.MethodPost, "/api/v1/providers/soulseek/search", strings.NewReader(`{"query":"Massive Attack"}`),
+	))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d", unauthorized.Code)
+	}
+
+	request := httptest.NewRequest(
+		http.MethodPost, "/api/v1/providers/soulseek/search",
+		strings.NewReader(`{"query":" Massive Attack ","limit":25}`),
+	)
+	request.SetBasicAuth("alice", "secret")
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK || searcher.query.Text != "Massive Attack" || searcher.query.Limit != 25 ||
+		!strings.Contains(response.Body.String(), `"id":"soulseek_opaque"`) ||
+		!strings.Contains(response.Body.String(), `"path":"Massive Attack/Mezzanine/01 Angel.mp3"`) ||
+		!strings.Contains(response.Body.String(), `"uploadSpeedBytesPerSecond":1048576`) ||
+		!strings.Contains(response.Body.String(), `"durationSeconds":360`) {
+		t.Fatalf("status = %d, query = %#v, body = %s", response.Code, searcher.query, response.Body.String())
+	}
+}
+
+func TestSoulseekSearchValidatesRequestAndRequiresConfiguredProvider(t *testing.T) {
+	t.Parallel()
+
+	handler := NewHandler(nil, nil, nil, nil, nil, nil, "alice", "secret")
+	for _, payload := range []string{`{"query":"ab"}`, `{"query":"valid","limit":201}`, `{"query":"valid","extra":true}`} {
+		request := httptest.NewRequest(
+			http.MethodPost, "/api/v1/providers/soulseek/search", strings.NewReader(payload),
+		)
+		request.SetBasicAuth("alice", "secret")
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusServiceUnavailable {
+			t.Fatalf("disabled status = %d, body = %s", response.Code, response.Body.String())
+		}
+	}
+
+	searcher := &sourceSearcherStub{}
+	configured := newHandler(
+		nil, nil, nil, nil, nil, nil,
+		fixedAuthenticator{username: "alice", password: "secret"}, nil, nil, searcher, nil, nil,
+	)
+	request := httptest.NewRequest(
+		http.MethodPost, "/api/v1/providers/soulseek/search", strings.NewReader(`{"query":"ab"}`),
+	)
+	request.SetBasicAuth("alice", "secret")
+	response := httptest.NewRecorder()
+	configured.ServeHTTP(response, request)
+	if response.Code != http.StatusBadRequest {
+		t.Fatalf("invalid status = %d, body = %s", response.Code, response.Body.String())
 	}
 }
 
