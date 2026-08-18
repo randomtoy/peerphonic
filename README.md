@@ -392,4 +392,5 @@ go vet ./...
 The static administration dashboard lives in `web/`; the backend does not
 depend on it. The container deployment serves the dashboard on port `8081` and
 the OpenSubsonic backend on port `8080`. See `deploy/README.md` for startup
-instructions.
+instructions. A Kubernetes chart with an optional colocated slskd sidecar is
+available under `deploy/helm/peerphonic`.

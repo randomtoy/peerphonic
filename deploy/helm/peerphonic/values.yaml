@@ -1,0 +1,134 @@
+nameOverride: ""
+fullnameOverride: ""
+
+peerphonic:
+  image:
+    repository: peerphonic
+    tag: latest
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+  cacheSizeBytes: "10737418240"
+  scanOnStart: true
+  scanIntervalSeconds: 300
+  torrent:
+    seed: true
+    port: 42069
+    portForwarding: false
+  service:
+    type: ClusterIP
+    port: 8080
+  torrentService:
+    enabled: true
+    type: ClusterIP
+    annotations: {}
+    nodePort: null
+    externalTrafficPolicy: null
+  resources: {}
+  podSecurityContext:
+    fsGroup: 65532
+    fsGroupChangePolicy: OnRootMismatch
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+
+web:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: peerphonic-web
+    tag: latest
+    pullPolicy: IfNotPresent
+  service:
+    type: ClusterIP
+    port: 80
+  resources: {}
+  podSecurityContext: {}
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    runAsNonRoot: true
+    runAsUser: 101
+    runAsGroup: 101
+
+slskd:
+  enabled: true
+  image:
+    repository: slskd/slskd
+    tag: latest
+    pullPolicy: IfNotPresent
+  apiKey: ""
+  webUsername: slskd
+  webPassword: ""
+  soulseekUsername: ""
+  soulseekPassword: ""
+  remoteConfiguration: false
+  listenPort: 50300
+  service:
+    port: 5030
+  networkService:
+    enabled: true
+    type: ClusterIP
+    annotations: {}
+    nodePort: null
+    externalTrafficPolicy: null
+  resources: {}
+  securityContext:
+    allowPrivilegeEscalation: false
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+
+auth:
+  existingSecret: ""
+  adminUsername: admin
+  adminPassword: ""
+  keys:
+    adminUsername: admin-username
+    adminPassword: admin-password
+    slskdApiKey: slskd-api-key
+    slskdWebUsername: slskd-web-username
+    slskdWebPassword: slskd-web-password
+    soulseekUsername: soulseek-username
+    soulseekPassword: soulseek-password
+
+persistence:
+  enabled: true
+  existingClaim: ""
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 20Gi
+  annotations: {}
+
+music:
+  existingClaim: ""
+  hostPath: ""
+  hostPathType: Directory
+  readOnly: true
+
+initContainer:
+  image:
+    repository: busybox
+    tag: "1.37"
+    pullPolicy: IfNotPresent
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: peerphonic.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

@@ -24,7 +24,7 @@ services:
       context: ..
       dockerfile: web/Dockerfile
     ports:
-      - "${PEERPHONIC_WEB_PORT:-8081}:80"
+      - "${PEERPHONIC_WEB_PORT:-8081}:8080"
     depends_on:
       - peerphonic
     restart: unless-stopped

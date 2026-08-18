@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: "{{ include "peerphonic.fullname" . }}-test-connectivity"
+  labels:
+    {{- include "peerphonic.labels" . | nindent 4 }}
+  annotations:
+    "helm.sh/hook": test
+    "helm.sh/hook-delete-policy": before-hook-creation,hook-succeeded
+spec:
+  automountServiceAccountToken: false
+  restartPolicy: Never
+  containers:
+    - name: wget
+      image: "{{ .Values.initContainer.image.repository }}:{{ .Values.initContainer.image.tag }}"
+      imagePullPolicy: {{ .Values.initContainer.image.pullPolicy }}
+      securityContext:
+        allowPrivilegeEscalation: false
+        capabilities:
+          drop: ["ALL"]
+        runAsNonRoot: true
+        runAsUser: 65532
+        runAsGroup: 65532
+      command: ["sh", "-ec"]
+      args:
+        {{- if .Values.web.enabled }}
+        - wget -qO- http://{{ include "peerphonic.fullname" . }}-web:{{ .Values.web.service.port }}/ >/dev/null;
+          wget -qO- http://{{ include "peerphonic.fullname" . }}-web:{{ .Values.web.service.port }}/api/v1/health;
+        {{- else }}
+        - wget -qO- http://{{ include "peerphonic.fullname" . }}:{{ .Values.peerphonic.service.port }}/api/v1/health;
+        {{- end }}

@@ -27,3 +27,9 @@ For playback, slskd must mount `deploy/data/cache/soulseek` and use its
 `downloads` and `incomplete` children as `SLSKD_DOWNLOADS_DIR` and
 `SLSKD_INCOMPLETE_DIR`. Peerphonic reads incomplete files from that shared
 storage while they grow and reuses completed downloads as its Soulseek cache.
+
+For Kubernetes, use the chart in `deploy/helm/peerphonic`. It runs slskd as a
+sidecar of the Peerphonic backend so both processes always mount the same PVC.
+The chart also creates separate configurable Services for BitTorrent TCP/UDP
+and the inbound Soulseek TCP port; see the chart README for ingress, secrets,
+storage, and port-forwarding examples.
