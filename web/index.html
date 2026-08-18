@@ -82,6 +82,19 @@
         </section>
 
         <section class="dashboard-page" data-page-panel="sources" hidden>
+          <section id="library-scan-section" class="sync-card" aria-labelledby="library-scan-title">
+            <div class="sync-icon" aria-hidden="true">↻</div>
+            <div class="sync-copy">
+              <p class="eyebrow">CATALOG SYNC</p>
+              <h2 id="library-scan-title">Library scan</h2>
+              <p id="scan-summary" class="section-description">Loading scan status…</p>
+            </div>
+            <div class="sync-actions">
+              <span id="scan-state" class="pill">Unknown</span>
+              <button id="scan-now" class="button primary" type="button">Scan now</button>
+            </div>
+          </section>
+
           <section id="sources-section" class="panel" aria-labelledby="sources-title">
             <div class="section-heading">
               <div><p class="eyebrow">LIBRARY SOURCES</p><h2 id="sources-title">Imported torrents</h2><p class="section-description">Pause, pin or remove sources already connected to the library.</p></div>

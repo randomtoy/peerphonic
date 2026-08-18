@@ -11,6 +11,7 @@ import (
 
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
+	"github.com/randomtoy/peerphonic/backend/internal/scanner"
 )
 
 type cacheStatusStub struct{}
@@ -22,6 +23,11 @@ type sourceImporterStub struct {
 type transferMonitorStub struct{}
 
 type downloadMonitorStub struct{}
+
+type scanControllerStub struct {
+	status scanner.Status
+	starts int
+}
 
 type uriImporterStub struct {
 	uri   string
@@ -71,6 +77,17 @@ func (downloadMonitorStub) TrackDownloads(context.Context) ([]domain.TrackDownlo
 		CompletedBytes: 50, TotalBytes: 100,
 	}}, nil
 }
+
+func (s *scanControllerStub) Start() bool {
+	s.starts++
+	if s.status.Scanning {
+		return false
+	}
+	s.status.Scanning = true
+	return true
+}
+
+func (s *scanControllerStub) Status() scanner.Status { return s.status }
 
 func (s *uriImporterStub) ImportURI(_ context.Context, uri string) (domain.SourceImport, error) {
 	s.uri = uri
@@ -152,6 +169,49 @@ func TestCacheStatus(t *testing.T) {
 		!strings.Contains(response.Body.String(), `"pinnedEntries":1`) ||
 		!strings.Contains(response.Body.String(), `"partialEntries":1`) {
 		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+}
+
+func TestLibraryScanStatusAndStartRequireAuthentication(t *testing.T) {
+	t.Parallel()
+
+	startedAt := time.Date(2026, time.August, 18, 7, 0, 0, 0, time.UTC)
+	finishedAt := startedAt.Add(time.Minute)
+	scans := &scanControllerStub{status: scanner.Status{
+		Count: 507, LastStartedAt: startedAt, LastFinishedAt: finishedAt,
+	}}
+	handler := NewHandler(nil, nil, nil, nil, nil, nil, "alice", "secret", scans)
+	unauthorized := httptest.NewRecorder()
+	handler.ServeHTTP(unauthorized, httptest.NewRequest(http.MethodGet, "/api/v1/library/scan", nil))
+	if unauthorized.Code != http.StatusUnauthorized {
+		t.Fatalf("unauthorized status = %d, want %d", unauthorized.Code, http.StatusUnauthorized)
+	}
+
+	statusRequest := httptest.NewRequest(http.MethodGet, "/api/v1/library/scan", nil)
+	statusRequest.SetBasicAuth("alice", "secret")
+	statusResponse := httptest.NewRecorder()
+	handler.ServeHTTP(statusResponse, statusRequest)
+	if statusResponse.Code != http.StatusOK ||
+		!strings.Contains(statusResponse.Body.String(), `"tracks":507`) ||
+		!strings.Contains(statusResponse.Body.String(), `"lastFinishedAt":"2026-08-18T07:01:00Z"`) {
+		t.Fatalf("status = %d, body = %s", statusResponse.Code, statusResponse.Body.String())
+	}
+
+	startRequest := httptest.NewRequest(http.MethodPost, "/api/v1/library/scan", nil)
+	startRequest.SetBasicAuth("alice", "secret")
+	startResponse := httptest.NewRecorder()
+	handler.ServeHTTP(startResponse, startRequest)
+	if startResponse.Code != http.StatusAccepted || scans.starts != 1 ||
+		!strings.Contains(startResponse.Body.String(), `"scanning":true`) {
+		t.Fatalf("status = %d, starts = %d, body = %s", startResponse.Code, scans.starts, startResponse.Body.String())
+	}
+
+	secondRequest := httptest.NewRequest(http.MethodPost, "/api/v1/library/scan", nil)
+	secondRequest.SetBasicAuth("alice", "secret")
+	secondResponse := httptest.NewRecorder()
+	handler.ServeHTTP(secondResponse, secondRequest)
+	if secondResponse.Code != http.StatusOK || scans.starts != 2 {
+		t.Fatalf("second status = %d, starts = %d", secondResponse.Code, scans.starts)
 	}
 }
 

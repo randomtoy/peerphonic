@@ -162,7 +162,13 @@ curl -u admin:admin -H 'Content-Type: application/json' \
 curl -u admin:admin -X PUT -H 'Content-Type: application/json' \
   -d '{"permissions":["dashboard.access","monitoring.view"]}' \
   http://localhost:8080/api/v1/users/listener/permissions
+curl -u admin:admin http://localhost:8080/api/v1/library/scan
+curl -u admin:admin -X POST http://localhost:8080/api/v1/library/scan
 ```
+
+Library scans started through the Peerphonic API run in the background. Their
+status includes the indexed track count and the last start, completion, or
+error; the same controls are available in the dashboard Sources workspace.
 
 ## Architecture
 

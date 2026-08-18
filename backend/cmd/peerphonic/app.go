@@ -135,7 +135,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	))
 	mux.Handle("/", peerphonic.NewHandlerWithAuthenticator(
 		cacheStatus, torrentImporter, magnetImporter, torrentManager, torrentProvider, torrentProvider,
-		userService, userService,
+		userService, userService, scanManager,
 	))
 	return &application{
 		handler: mux, catalog: catalog, torrentProvider: torrentProvider, magnetImporter: magnetImporter,

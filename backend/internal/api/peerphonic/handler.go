@@ -20,6 +20,11 @@ type cacheStatus interface {
 	Stats(ctx context.Context) (domain.CacheStats, error)
 }
 
+type scanController interface {
+	Start() bool
+	Status() scanner.Status
+}
+
 type transferResponse struct {
 	Provider         string `json:"provider"`
 	ID               string `json:"id"`
@@ -117,6 +122,14 @@ type cacheStatusResponse struct {
 	Components      []cacheComponentResponse `json:"components"`
 }
 
+type libraryScanResponse struct {
+	Scanning       bool   `json:"scanning"`
+	Tracks         int    `json:"tracks"`
+	LastError      string `json:"lastError,omitempty"`
+	LastStartedAt  string `json:"lastStartedAt,omitempty"`
+	LastFinishedAt string `json:"lastFinishedAt,omitempty"`
+}
+
 func NewHandler(
 	cache cacheStatus,
 	torrentImporter ports.SourceImporter,
@@ -125,10 +138,15 @@ func NewHandler(
 	transfers ports.SourceTransferMonitor,
 	downloads ports.TrackDownloadMonitor,
 	username, password string,
+	scans ...scanController,
 ) http.Handler {
+	var scan scanController
+	if len(scans) > 0 {
+		scan = scans[0]
+	}
 	return newHandler(
 		cache, torrentImporter, uriImporter, sources, transfers, downloads,
-		fixedAuthenticator{username: username, password: password}, nil,
+		fixedAuthenticator{username: username, password: password}, nil, scan,
 	)
 }
 
@@ -141,8 +159,13 @@ func NewHandlerWithAuthenticator(
 	downloads ports.TrackDownloadMonitor,
 	authenticator ports.Authenticator,
 	users ports.UserManager,
+	scans ...scanController,
 ) http.Handler {
-	return newHandler(cache, torrentImporter, uriImporter, sources, transfers, downloads, authenticator, users)
+	var scan scanController
+	if len(scans) > 0 {
+		scan = scans[0]
+	}
+	return newHandler(cache, torrentImporter, uriImporter, sources, transfers, downloads, authenticator, users, scan)
 }
 
 func newHandler(
@@ -154,6 +177,7 @@ func newHandler(
 	downloads ports.TrackDownloadMonitor,
 	authenticator ports.Authenticator,
 	users ports.UserManager,
+	scans scanController,
 ) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(writer http.ResponseWriter, _ *http.Request) {
@@ -170,6 +194,24 @@ func newHandler(
 			"service": "peerphonic",
 		})
 	})
+	if scans != nil {
+		mux.HandleFunc("GET /api/v1/library/scan", func(writer http.ResponseWriter, request *http.Request) {
+			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
+				return
+			}
+			writeJSON(writer, http.StatusOK, newLibraryScanResponse(scans.Status()))
+		})
+		mux.HandleFunc("POST /api/v1/library/scan", func(writer http.ResponseWriter, request *http.Request) {
+			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
+				return
+			}
+			status := http.StatusAccepted
+			if !scans.Start() {
+				status = http.StatusOK
+			}
+			writeJSON(writer, status, newLibraryScanResponse(scans.Status()))
+		})
+	}
 	if cache != nil {
 		mux.HandleFunc("GET /api/v1/cache/status", func(writer http.ResponseWriter, request *http.Request) {
 			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionMonitoringView); !ok {
@@ -379,6 +421,19 @@ func newHandler(
 		registerUserRoutes(mux, authenticator, users)
 	}
 	return mux
+}
+
+func newLibraryScanResponse(status scanner.Status) libraryScanResponse {
+	response := libraryScanResponse{
+		Scanning: status.Scanning, Tracks: status.Count, LastError: status.LastError,
+	}
+	if !status.LastStartedAt.IsZero() {
+		response.LastStartedAt = status.LastStartedAt.Format(time.RFC3339)
+	}
+	if !status.LastFinishedAt.IsZero() {
+		response.LastFinishedAt = status.LastFinishedAt.Format(time.RFC3339)
+	}
+	return response
 }
 
 func newSourceImportResponse(item domain.SourceImport) sourceImportResponse {

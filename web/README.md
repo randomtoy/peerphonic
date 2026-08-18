@@ -11,7 +11,9 @@ adding magnet links or `.torrent` files. Administrators can also create users,
 reset their passwords, remove accounts, and delegate individual dashboard,
 monitoring, source-management, and user-management capabilities. The workspace
 separates overview, source management, live activity, and user access into
-permission-aware navigation areas.
+permission-aware navigation areas. Users with source-management access can also
+start a background library scan and follow its last result from the Sources
+workspace.
 
 For local frontend work, serve this directory through a web server that proxies
 the API paths to the backend. Opening `index.html` directly does not provide an

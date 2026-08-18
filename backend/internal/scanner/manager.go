@@ -14,9 +14,11 @@ type Runner interface {
 }
 
 type Status struct {
-	Scanning  bool
-	Count     int
-	LastError string
+	Scanning       bool
+	Count          int
+	LastError      string
+	LastStartedAt  time.Time
+	LastFinishedAt time.Time
 }
 
 type Manager struct {
@@ -84,6 +86,7 @@ func (m *Manager) begin() bool {
 	}
 	m.status.Scanning = true
 	m.status.LastError = ""
+	m.status.LastStartedAt = time.Now().UTC()
 	return true
 }
 
@@ -91,6 +94,7 @@ func (m *Manager) finish(report Report, err error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.status.Scanning = false
+	m.status.LastFinishedAt = time.Now().UTC()
 	if err != nil {
 		m.status.LastError = err.Error()
 		return

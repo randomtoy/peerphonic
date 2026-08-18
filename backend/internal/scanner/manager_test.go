@@ -46,7 +46,9 @@ func TestManagerScanNowRecordsStatus(t *testing.T) {
 		t.Fatalf("ScanNow() = %#v, %v", report, err)
 	}
 	status := manager.Status()
-	if status.Scanning || status.Count != 42 || status.LastError != "" {
+	if status.Scanning || status.Count != 42 || status.LastError != "" ||
+		status.LastStartedAt.IsZero() || status.LastFinishedAt.IsZero() ||
+		status.LastFinishedAt.Before(status.LastStartedAt) {
 		t.Fatalf("Status() = %#v", status)
 	}
 }

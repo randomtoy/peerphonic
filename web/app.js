@@ -34,6 +34,9 @@ const elements = {
   transfers: document.querySelector("#transfers"),
   sources: document.querySelector("#sources"),
   sourceCount: document.querySelector("#source-count"),
+  scanButton: document.querySelector("#scan-now"),
+  scanState: document.querySelector("#scan-state"),
+  scanSummary: document.querySelector("#scan-summary"),
   updatedAt: document.querySelector("#updated-at"),
   addSourceSection: document.querySelector("#add-source-section"),
   downloadsSection: document.querySelector("#downloads-section"),
@@ -310,6 +313,30 @@ function renderSources(items) {
   </article>`).join("");
 }
 
+function renderLibraryScan(status) {
+  const failed = Boolean(status.lastError);
+  elements.scanButton.disabled = Boolean(status.scanning);
+  elements.scanButton.textContent = status.scanning ? "Scanning…" : "Scan now";
+  elements.scanState.className = `pill${status.scanning ? " active" : failed ? " failed" : ""}`;
+  elements.scanState.textContent = status.scanning ? "Running" : failed ? "Failed" : "Idle";
+  if (status.scanning) {
+    elements.scanSummary.textContent = "Checking local files and connected sources in the background.";
+    return;
+  }
+  if (failed) {
+    elements.scanSummary.textContent = `Last scan failed: ${status.lastError}`;
+    return;
+  }
+  if (status.lastFinishedAt) {
+    const finished = new Date(status.lastFinishedAt).toLocaleString([], {
+      dateStyle: "medium", timeStyle: "short",
+    });
+    elements.scanSummary.textContent = `Last completed ${finished} · ${status.tracks || 0} tracks indexed.`;
+    return;
+  }
+  elements.scanSummary.textContent = "No library scan has completed since the server started.";
+}
+
 async function refresh() {
   if (!state.authorization) return;
   elements.refresh.disabled = true;
@@ -319,13 +346,14 @@ async function refresh() {
     const canMonitor = allowed.has(permissions.monitoring);
     const canManageSources = allowed.has(permissions.sources);
     const canManageUsers = allowed.has(permissions.users);
-    const [cache, importPayload, downloadPayload, transferPayload, sourcePayload, userPayload] = await Promise.all([
+    const [cache, importPayload, downloadPayload, transferPayload, sourcePayload, userPayload, scanStatus] = await Promise.all([
       canMonitor ? api("/api/v1/cache/status") : Promise.resolve({}),
       canManageSources ? api("/api/v1/imports") : Promise.resolve({ imports: [] }),
       canMonitor ? api("/api/v1/downloads") : Promise.resolve({ downloads: [] }),
       canMonitor ? api("/api/v1/transfers") : Promise.resolve({ transfers: [] }),
       canManageSources ? api("/api/v1/torrents") : Promise.resolve({ sources: [] }),
       canManageUsers ? api("/api/v1/users") : Promise.resolve({ users: [] }),
+      canManageSources ? api("/api/v1/library/scan") : Promise.resolve({}),
     ]);
     const imports = importPayload.imports || [];
     const downloads = downloadPayload.downloads || [];
@@ -344,11 +372,12 @@ async function refresh() {
     renderTransfers(transfers);
     renderSources(sources);
     renderUsers(users, session);
+    if (canManageSources) renderLibraryScan(scanStatus);
     elements.updatedAt.textContent = `Updated ${new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
     elements.loginError.textContent = "";
     showDashboard(true);
     const active = imports.some((item) => item.state === "fetching_metadata" || item.state === "scanning") ||
-      downloads.some((item) => item.state === "downloading");
+      downloads.some((item) => item.state === "downloading") || scanStatus.scanning;
     window.clearTimeout(state.refreshTimer);
     if (active) state.refreshTimer = window.setTimeout(refresh, 3000);
   } catch (error) {
@@ -378,6 +407,22 @@ elements.loginForm.addEventListener("submit", (event) => {
 });
 
 elements.refresh.addEventListener("click", refresh);
+elements.scanButton.addEventListener("click", async () => {
+  elements.scanButton.disabled = true;
+  elements.scanButton.textContent = "Starting…";
+  try {
+    const status = await api("/api/v1/library/scan", { method: "POST" });
+    renderLibraryScan(status);
+    window.clearTimeout(state.refreshTimer);
+    state.refreshTimer = window.setTimeout(refresh, 1000);
+  } catch (error) {
+    elements.scanButton.disabled = false;
+    elements.scanButton.textContent = "Scan now";
+    elements.scanState.className = "pill failed";
+    elements.scanState.textContent = "Failed";
+    elements.scanSummary.textContent = error.message;
+  }
+});
 elements.navigation.addEventListener("click", (event) => {
   const item = event.target.closest("[data-page]");
   if (!item || item.hidden) return;
