@@ -33,7 +33,9 @@ const elements = {
   userCount: document.querySelector("#user-count"),
   downloads: document.querySelector("#downloads"),
   downloadCount: document.querySelector("#download-count"),
+  activitySummary: document.querySelector("#activity-summary"),
   transfers: document.querySelector("#transfers"),
+  transferCount: document.querySelector("#transfer-count"),
   sources: document.querySelector("#sources"),
   sourceCount: document.querySelector("#source-count"),
   scanButton: document.querySelector("#scan-now"),
@@ -60,6 +62,7 @@ const elements = {
   updatedAt: document.querySelector("#updated-at"),
   addSourceSection: document.querySelector("#add-source-section"),
   downloadsSection: document.querySelector("#downloads-section"),
+  prefetchSection: document.querySelector("#prefetch-section"),
   prefetchForm: document.querySelector("#prefetch-form"),
   prefetchType: document.querySelector("#prefetch-type"),
   prefetchID: document.querySelector("#prefetch-id"),
@@ -152,9 +155,26 @@ const pages = {
 
 const mebibyte = 1024 * 1024;
 const activeDownloadStates = new Set(["waiting", "queued", "downloading", "transcoding"]);
+const runningDownloadStates = new Set(["downloading", "transcoding"]);
+const queuedDownloadStates = new Set(["waiting", "queued"]);
+const attentionDownloadStates = new Set(["failed", "cancelled"]);
+const audioDownloadExtensions = new Set([
+  "aac", "aif", "aiff", "alac", "ape", "flac", "m4a", "m4b", "mp3", "mpc",
+  "oga", "ogg", "opus", "wav", "wma", "wv",
+]);
 
 function isActiveDownload(item) {
   return activeDownloadStates.has(item.state);
+}
+
+function downloadExtension(item) {
+  const match = String(item.name || "").toLowerCase().match(/\.([^.]+)$/);
+  return match ? match[1] : "";
+}
+
+function isAudioDownload(item) {
+  return item.provider === "soulseek" || item.provider === "transcode" ||
+    audioDownloadExtensions.has(downloadExtension(item));
 }
 
 function api(path, options = {}) {
@@ -393,85 +413,194 @@ function downloadNetworkSummary(item, transfer, sample, now) {
   return `${item.state === "waiting" || item.state === "queued" ? "Waiting for" : "Receiving from"} Soulseek peer ${item.sourceId || "unknown"}${attempts}`;
 }
 
-function renderDownloads(items, transfers = [], canManageSources = false) {
-  const grouped = groupTrackDownloads(items);
-  const activeCount = grouped.filter(isActiveDownload).length;
-  const attentionCount = grouped.filter((item) => item.state === "failed" || item.state === "cancelled").length;
-  elements.downloadCount.textContent = `${grouped.length} tracks · ${activeCount} active${attentionCount ? ` · ${attentionCount} attention` : ""}`;
-  elements.downloads.replaceChildren();
-  if (!grouped.length) {
-    elements.downloads.append(empty("Play a torrent or Soulseek track to start caching it in the background."));
-    return;
-  }
-  const transferBySource = new Map(transfers.map((item) => [`${item.provider}:${item.id}`, item]));
-  const now = Date.now();
-  elements.downloads.innerHTML = grouped.map((item) => {
-    const percent = item.totalBytes ? Math.min(100, Math.round((item.completedBytes / item.totalBytes) * 100)) : 0;
-    const stateLabels = {
-      waiting: "Waiting",
-      queued: "Queued",
-      downloading: "Downloading",
-      transcoding: "Transcoding",
-      cached: "Cached",
-      failed: "Failed",
-      cancelled: "Cancelled",
-      evicted: "Evicted",
-    };
-    const stateLabel = stateLabels[item.state] || item.state;
-    const transfer = transferBySource.get(`${item.provider}:${item.sourceId}`);
-    const sample = sampleDownload(item, now);
-    const active = isActiveDownload(item);
-    const speed = !active ? "—" : sample.measuring ? "Measuring…" : sample.rate > 0 ? `${formatBytes(sample.rate)}/s` : "0 B/s";
-    const networkSummary = downloadNetworkSummary(item, transfer, sample, now);
-    const canControl = canManageSources && item.provider === "soulseek";
-    const canCancel = canControl && ["waiting", "queued", "downloading"].includes(item.state);
-    const canRetry = canControl && ["failed", "cancelled", "evicted"].includes(item.state);
-    const networkFacts = item.provider === "torrent"
-      ? `<div class="fact"><span>Peers</span><strong>${transfer?.activePeers || 0} / ${transfer?.peers || 0}</strong></div><div class="fact"><span>Connected seeds</span><strong>${transfer?.connectedSeeders || 0}</strong></div>`
-      : item.provider === "transcode"
-        ? `<div class="fact fact-wide"><span>Output</span><strong>Reusable MP3 cache</strong></div>`
-        : `<div class="fact fact-wide"><span>Soulseek peer</span><strong title="${escapeHTML(item.sourceId || "Unknown")}">${escapeHTML(item.sourceId || "Unknown")}</strong></div>`;
-    const indeterminate = active && !item.totalBytes;
-    return `<article class="transfer-card download-card ${active ? "active" : ""}">
-      <div class="card-title"><div><h3>${escapeHTML(item.name || item.trackId)}</h3><p class="download-provider">${escapeHTML(item.provider || "unknown provider")}</p></div><span class="status ${item.state === "failed" || item.state === "cancelled" ? "failed" : ""}">${escapeHTML(stateLabel)}</span></div>
-      <div class="progress ${indeterminate ? "indeterminate" : ""}" aria-label="${indeterminate ? "In progress" : `${percent}% complete`}"><span style="width:${indeterminate ? 35 : percent}%"></span></div>
-      <p class="download-status-detail ${sample.stalled ? "stalled" : ""}">${escapeHTML(networkSummary)}</p>
-      <div class="facts download-facts">
-        <div class="fact"><span>Complete</span><strong>${percent}%</strong></div>
-        <div class="fact"><span>Current speed</span><strong>${speed}</strong></div>
-        ${networkFacts}
+function downloadStateLabel(state) {
+  return ({
+    waiting: "Waiting",
+    queued: "Queued",
+    downloading: "Downloading",
+    transcoding: "Transcoding",
+    cached: "Cached",
+    failed: "Failed",
+    cancelled: "Cancelled",
+    evicted: "Not cached",
+  })[state] || state;
+}
+
+function downloadActions(item, canManageSources) {
+  const canControl = canManageSources && item.provider === "soulseek";
+  const canCancel = canControl && ["waiting", "queued", "downloading"].includes(item.state);
+  const canRetry = canControl && ["failed", "cancelled", "evicted"].includes(item.state);
+  if (!canCancel && !canRetry) return "";
+  return `<div class="download-actions">
+    ${canCancel ? `<button class="button danger" type="button" data-download-action="cancel" data-download-id="${escapeHTML(item.id)}">Cancel</button>` : ""}
+    ${canRetry ? `<button class="button secondary" type="button" data-download-action="retry" data-download-id="${escapeHTML(item.id)}">Retry</button>` : ""}
+  </div>`;
+}
+
+function renderLiveDownload(item, transfer, canManageSources, now) {
+  const percent = item.totalBytes ? Math.min(100, Math.round((item.completedBytes / item.totalBytes) * 100)) : 0;
+  const sample = sampleDownload(item, now);
+  const active = isActiveDownload(item);
+  const speed = !active ? "—" : sample.measuring ? "Measuring…" : sample.rate > 0 ? `${formatBytes(sample.rate)}/s` : "0 B/s";
+  const indeterminate = active && !item.totalBytes;
+  const providerDetail = item.provider === "torrent"
+    ? `${transfer?.activePeers || 0} active peers · ${transfer?.connectedSeeders || 0} connected seeds`
+    : item.provider === "transcode" ? "Reusable MP3 variant" : `Peer ${item.sourceId || "unknown"}`;
+  const tone = attentionDownloadStates.has(item.state) ? "danger" : sample.stalled ? "warning" : "accent";
+  return `<article class="activity-download activity-download-${tone}">
+    <div class="activity-download-heading">
+      <span class="provider-mark" aria-hidden="true">${item.provider === "torrent" ? "T" : item.provider === "soulseek" ? "S" : "MP3"}</span>
+      <div class="activity-download-copy">
+        <h3>${escapeHTML(item.name || item.trackId)}</h3>
+        <p>${escapeHTML(item.provider || "unknown provider")} · ${escapeHTML(providerDetail)}</p>
       </div>
-      <p class="download-timing">${formatBytes(item.completedBytes)} of ${formatBytes(item.totalBytes)} cached · started ${relativeTime(item.startedAt, now)} · status updated ${relativeTime(item.updatedAt, now)}</p>
-      ${item.error ? `<p class="form-error">${escapeHTML(item.error)}</p>` : ""}
-      ${canCancel || canRetry ? `<div class="download-actions">
-        ${canCancel ? `<button class="button danger" type="button" data-download-action="cancel" data-download-id="${escapeHTML(item.id)}">Cancel</button>` : ""}
-        ${canRetry ? `<button class="button secondary" type="button" data-download-action="retry" data-download-id="${escapeHTML(item.id)}">Retry</button>` : ""}
-      </div>` : ""}
+      <span class="state-chip state-${escapeHTML(item.state)}">${escapeHTML(downloadStateLabel(item.state))}</span>
+    </div>
+    <div class="progress ${indeterminate ? "indeterminate" : ""}" aria-label="${indeterminate ? "In progress" : `${percent}% complete`}"><span style="width:${indeterminate ? 35 : percent}%"></span></div>
+    <p class="download-status-detail ${sample.stalled ? "stalled" : ""}">${escapeHTML(downloadNetworkSummary(item, transfer, sample, now))}</p>
+    <div class="activity-download-metrics">
+      <span><small>Progress</small><strong>${item.totalBytes ? `${percent}%` : "Preparing"}</strong></span>
+      <span><small>Speed</small><strong>${speed}</strong></span>
+      <span><small>Cached</small><strong>${formatBytes(item.completedBytes)}${item.totalBytes ? ` / ${formatBytes(item.totalBytes)}` : ""}</strong></span>
+      <span><small>Updated</small><strong>${relativeTime(item.updatedAt, now)}</strong></span>
+    </div>
+    ${item.error ? `<p class="activity-error">${escapeHTML(item.error)}</p>` : ""}
+    ${downloadActions(item, canManageSources)}
+  </article>`;
+}
+
+function renderDownloadHistoryItem(item, canManageSources, now) {
+  const failed = attentionDownloadStates.has(item.state);
+  return `<article class="activity-history-row">
+    <span class="history-kind" aria-hidden="true">♪</span>
+    <div class="activity-history-copy">
+      <h3>${escapeHTML(item.name || item.trackId)}</h3>
+      <p>${escapeHTML(item.provider || "unknown")} · ${formatBytes(item.totalBytes || item.completedBytes)} · updated ${relativeTime(item.updatedAt, now)}</p>
+      ${item.error ? `<p class="activity-error">${escapeHTML(item.error)}</p>` : ""}
+    </div>
+    <span class="state-chip ${failed ? "state-failed" : `state-${escapeHTML(item.state)}`}">${escapeHTML(downloadStateLabel(item.state))}</span>
+    ${downloadActions(item, canManageSources)}
+  </article>`;
+}
+
+function renderSupportingFiles(items, transferBySource, now) {
+  const groups = new Map();
+  items.forEach((item) => {
+    const key = `${item.provider}:${item.sourceId || "unknown"}`;
+    const current = groups.get(key) || { provider: item.provider, sourceId: item.sourceId, items: [] };
+    current.items.push(item);
+    groups.set(key, current);
+  });
+  return [...groups.values()].map((group) => {
+    const transfer = transferBySource.get(`${group.provider}:${group.sourceId}`);
+    const bytes = group.items.reduce((total, item) => total + (Number(item.completedBytes) || 0), 0);
+    const active = group.items.filter(isActiveDownload).length;
+    const failed = group.items.filter((item) => attentionDownloadStates.has(item.state)).length;
+    const status = failed ? `${failed} failed` : active ? `${active} active` : "Cached";
+    const newest = group.items.reduce((latest, item) =>
+      new Date(item.updatedAt || 0) > new Date(latest || 0) ? item.updatedAt : latest, "");
+    return `<article class="support-file-row">
+      <div><h3>${escapeHTML(transfer?.name || `${group.provider || "Unknown"} source`)}</h3><p>${group.items.length} artwork or metadata files · ${formatBytes(bytes)} · updated ${relativeTime(newest, now)}</p></div>
+      <span class="state-chip ${failed ? "state-failed" : "state-cached"}">${escapeHTML(status)}</span>
     </article>`;
   }).join("");
+}
+
+function renderActivitySummary(downloads, transfers) {
+  const running = downloads.filter((item) => runningDownloadStates.has(item.state)).length;
+  const queued = downloads.filter((item) => queuedDownloadStates.has(item.state)).length;
+  const attention = downloads.filter((item) => attentionDownloadStates.has(item.state)).length;
+  const peers = transfers.reduce((total, item) => total + (Number(item.activePeers) || 0), 0);
+  const seeds = transfers.reduce((total, item) => total + (Number(item.connectedSeeders) || 0), 0);
+  const streams = transfers.reduce((total, item) => total + (Number(item.activeStreams) || 0), 0);
+  const metrics = [
+    ["Running", running, running ? "accent" : "", running ? "receiving audio now" : "nothing moving"],
+    ["Waiting", queued, queued ? "warning" : "", queued ? "queued for a slot" : "queue is clear"],
+    ["Needs attention", attention, attention ? "danger" : "", attention ? "review failed items" : "all healthy"],
+    ["Connected peers", peers, "", `${seeds} seeds · ${streams} streams`],
+  ];
+  elements.activitySummary.innerHTML = metrics.map(([label, value, tone, detail]) => `<article class="activity-stat ${tone}">
+    <span>${label}</span><strong>${value}</strong><small>${detail}</small>
+  </article>`).join("");
+}
+
+function renderDownloads(items, transfers = [], canManageSources = false) {
+  const grouped = groupTrackDownloads(items);
+  const music = grouped.filter(isAudioDownload);
+  const supporting = grouped.filter((item) => !isAudioDownload(item));
+  const running = music.filter((item) => runningDownloadStates.has(item.state));
+  const queued = music.filter((item) => queuedDownloadStates.has(item.state));
+  const attention = music.filter((item) => attentionDownloadStates.has(item.state));
+  const history = music.filter((item) => !isActiveDownload(item) && !attentionDownloadStates.has(item.state));
+  const transferBySource = new Map(transfers.map((item) => [`${item.provider}:${item.id}`, item]));
+  const now = Date.now();
+  renderActivitySummary(music, transfers);
+  elements.downloadCount.textContent = `${music.length} music · ${supporting.length} support files`;
+  const sections = [];
+  const addLiveSection = (kind, title, description, sectionItems) => {
+    if (!sectionItems.length) return;
+    sections.push(`<section class="activity-group activity-group-${kind}">
+      <div class="activity-group-heading"><div><h3>${title}</h3><p>${description}</p></div><span>${sectionItems.length}</span></div>
+      <div class="activity-download-list">${sectionItems.map((item) => renderLiveDownload(
+        item, transferBySource.get(`${item.provider}:${item.sourceId}`), canManageSources, now
+      )).join("")}</div>
+    </section>`);
+  };
+  addLiveSection("running", "In progress", "Playback and offline downloads currently receiving data.", running);
+  addLiveSection("queued", "Waiting", "Ready to start when a provider or download slot becomes available.", queued);
+  addLiveSection("attention", "Needs attention", "Failed or cancelled downloads that may need another source.", attention);
+  if (!running.length && !queued.length && !attention.length) {
+    sections.push(`<div class="activity-calm"><span aria-hidden="true"></span><div><strong>Everything is quiet</strong><p>No music is downloading or waiting right now.</p></div></div>`);
+  }
+  if (history.length) {
+    sections.push(`<details class="activity-history">
+      <summary><span><strong>Music history</strong><small>Completed and evicted audio</small></span><span>${history.length}</span></summary>
+      <div class="activity-history-list">${history.map((item) => renderDownloadHistoryItem(item, canManageSources, now)).join("")}</div>
+    </details>`);
+  }
+  if (supporting.length) {
+    sections.push(`<details class="activity-history support-history">
+      <summary><span><strong>Supporting files</strong><small>Artwork and metadata kept separate from music</small></span><span>${supporting.length}</span></summary>
+      <div class="support-file-list">${renderSupportingFiles(supporting, transferBySource, now)}</div>
+    </details>`);
+  }
+  if (!grouped.length) {
+    elements.downloads.replaceChildren(empty("Play a torrent or Soulseek track to start caching it in the background."));
+  } else {
+    elements.downloads.innerHTML = sections.join("");
+  }
   const visibleIDs = new Set(grouped.map((item) => item.id));
   [...state.downloadSamples.keys()].forEach((id) => { if (!visibleIDs.has(id)) state.downloadSamples.delete(id); });
 }
 
 function renderTransfers(items) {
+  elements.transferCount.textContent = `${items.length} source${items.length === 1 ? "" : "s"}`;
   elements.transfers.replaceChildren();
   if (!items.length) {
-    elements.transfers.append(empty("No torrent has been opened since the server started."));
+    elements.transfers.append(empty("No torrent source is connected yet."));
     return;
   }
-  elements.transfers.innerHTML = items.map((item) => {
-    const percent = item.totalBytes ? Math.min(100, Math.round((item.completedBytes / item.totalBytes) * 100)) : 0;
-    return `<article class="transfer-card">
-      <div class="card-title"><h3>${escapeHTML(item.name || item.id)}</h3><span class="status">${item.seeding ? "Seeding" : "Attached"}</span></div>
-      <div class="progress" aria-label="${percent}% complete"><span style="width:${percent}%"></span></div>
-      <div class="facts transfer-facts">
-        <div class="fact"><span>Complete</span><strong>${percent}%</strong></div>
-        <div class="fact"><span>Peers</span><strong>${item.activePeers || 0} / ${item.peers || 0}</strong></div>
-        <div class="fact"><span>Connected seeds</span><strong>${item.connectedSeeders || 0}</strong></div>
-        <div class="fact"><span>Uploaded</span><strong>${formatBytes(item.uploadedBytes)}</strong></div>
-      </div>
+  const peers = items.reduce((total, item) => total + (Number(item.activePeers) || 0), 0);
+  const seeds = items.reduce((total, item) => total + (Number(item.connectedSeeders) || 0), 0);
+  const streams = items.reduce((total, item) => total + (Number(item.activeStreams) || 0), 0);
+  const uploaded = items.reduce((total, item) => total + (Number(item.uploadedBytes) || 0), 0);
+  const sourceRows = items.map((item) => {
+    const label = item.activeStreams ? "Streaming" : item.activePeers ? "Connected" : item.seeding ? "Sharing" : "Idle";
+    return `<article class="network-source-row">
+      <div class="network-source-copy"><span class="network-dot ${item.activePeers || item.activeStreams ? "online" : ""}" aria-hidden="true"></span><div><h3>${escapeHTML(item.name || item.id)}</h3><p>${formatBytes(item.completedBytes)} cached locally · ${formatBytes(item.totalBytes)} available</p></div></div>
+      <div class="network-source-facts"><span><small>Peers</small><strong>${item.activePeers || 0} / ${item.peers || 0}</strong></span><span><small>Seeds</small><strong>${item.connectedSeeders || 0}</strong></span><span><small>Uploaded</small><strong>${formatBytes(item.uploadedBytes)}</strong></span></div>
+      <span class="state-chip state-${item.activePeers || item.activeStreams ? "cached" : "idle"}">${label}</span>
     </article>`;
   }).join("");
+  const list = items.length > 6
+    ? `<details class="network-source-drawer"><summary><span>Source details</span><span>${items.length}</span></summary><div class="network-source-list">${sourceRows}</div></details>`
+    : `<div class="network-source-list">${sourceRows}</div>`;
+  elements.transfers.innerHTML = `<div class="network-stats">
+    <span><small>Active peers</small><strong>${peers}</strong></span>
+    <span><small>Connected seeds</small><strong>${seeds}</strong></span>
+    <span><small>Active streams</small><strong>${streams}</strong></span>
+    <span><small>Uploaded</small><strong>${formatBytes(uploaded)}</strong></span>
+  </div>${list}`;
 }
 
 function renderAudit(items) {
@@ -720,6 +849,7 @@ async function refresh() {
     elements.sourcesSection.hidden = !canManageSources;
     elements.downloadsSection.hidden = !canMonitor;
     elements.transfersSection.hidden = !canMonitor;
+    elements.prefetchSection.hidden = !canManageSources;
     elements.usersSection.hidden = !canManageUsers;
     configureNavigation(session);
     renderSummary(cache, imports, downloads, transfers, sources, users, session);
