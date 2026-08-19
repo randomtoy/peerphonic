@@ -67,6 +67,37 @@ func TestRunBackupCreatesTimestampedArchiveInDirectory(t *testing.T) {
 	}
 }
 
+func TestRunRestoreRestoresBackupOffline(t *testing.T) {
+	t.Parallel()
+
+	root := t.TempDir()
+	sourceDatabase := filepath.Join(root, "source.db")
+	catalog, err := sqlite.Open(context.Background(), sourceDatabase)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := catalog.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sourceDatabase+".auth.key", make([]byte, 32), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(root, "backup.tar.gz")
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if err := run([]string{"backup", "--database", sourceDatabase, "--output", archive}, logger); err != nil {
+		t.Fatal(err)
+	}
+	targetDatabase := filepath.Join(root, "restored", "peerphonic.db")
+	if err := run([]string{"restore", "--input", archive, "--database", targetDatabase}, logger); err != nil {
+		t.Fatalf("run(restore) error = %v", err)
+	}
+	restored, err := sqlite.Open(context.Background(), targetDatabase)
+	if err != nil {
+		t.Fatalf("open restored database: %v", err)
+	}
+	_ = restored.Close()
+}
+
 func TestShutdownHTTPServerGracefullyStopsIdleServer(t *testing.T) {
 	t.Parallel()
 

@@ -29,16 +29,63 @@ func main() {
 
 func run(args []string, logger *slog.Logger) error {
 	if len(args) == 0 {
-		return errors.New("usage: peerphonic <serve|backup>")
+		return errors.New("usage: peerphonic <serve|backup|restore>")
 	}
 	switch args[0] {
 	case "serve":
 		return runServe(args[1:], logger)
 	case "backup":
 		return runBackup(args[1:], logger)
+	case "restore":
+		return runRestore(args[1:], logger)
 	default:
-		return fmt.Errorf("unknown command %q (use serve or backup)", args[0])
+		return fmt.Errorf("unknown command %q (use serve, backup, or restore)", args[0])
 	}
+}
+
+func runRestore(args []string, logger *slog.Logger) error {
+	databasePath := "peerphonic.db"
+	if configured, ok := os.LookupEnv("PEERPHONIC_DATABASE"); ok {
+		databasePath = configured
+	}
+	var inputPath, credentialKeyPath string
+	var force bool
+	flags := flag.NewFlagSet("restore", flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.StringVar(&inputPath, "input", "", "backup archive path")
+	flags.StringVar(&databasePath, "database", databasePath, "SQLite database path")
+	flags.StringVar(&credentialKeyPath, "credential-key", "", "credential encryption key path")
+	flags.BoolVar(&force, "force", false, "replace existing files after preserving recovery copies")
+	if err := flags.Parse(args); err != nil {
+		return err
+	}
+	if flags.NArg() != 0 || inputPath == "" {
+		return errors.New("restore requires --input and accepts no positional arguments")
+	}
+	var err error
+	if inputPath, err = filepath.Abs(inputPath); err != nil {
+		return fmt.Errorf("resolve backup input path: %w", err)
+	}
+	if databasePath, err = filepath.Abs(databasePath); err != nil {
+		return fmt.Errorf("resolve database path: %w", err)
+	}
+	if credentialKeyPath == "" {
+		credentialKeyPath = databasePath + ".auth.key"
+	} else if credentialKeyPath, err = filepath.Abs(credentialKeyPath); err != nil {
+		return fmt.Errorf("resolve credential key path: %w", err)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	result, err := backup.Restore(ctx, backup.RestoreOptions{
+		InputPath: inputPath, DatabasePath: databasePath,
+		CredentialKeyPath: credentialKeyPath, Force: force,
+	})
+	if err != nil {
+		return err
+	}
+	logger.Info("backup restored", "path", inputPath, "database", databasePath,
+		"created_at", result.Manifest.CreatedAt, "recovery_copies", result.Replaced)
+	return nil
 }
 
 func runServe(args []string, logger *slog.Logger) error {
