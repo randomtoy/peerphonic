@@ -12,7 +12,8 @@ changing the client-facing streaming flow.
 - periodic background synchronization of local music and torrent metadata with
   a bounded maintenance log and warning details in the dashboard;
 - tag extraction with directory/filename fallbacks and conservative repair of legacy Cyrillic encodings;
-- a migrated SQLite metadata catalog;
+- migrated SQLite and PostgreSQL metadata catalogs selected through the same
+  core storage ports;
 - provider-independent artist, album, and logical track identities with local,
   torrent, and Soulseek sources aggregated behind one catalog item;
 - XML and JSON OpenSubsonic responses;
@@ -146,6 +147,9 @@ then CLI flags.
 | `address` | `PEERPHONIC_ADDRESS` | `--address` | `:8080` |
 | `music_dir` | `PEERPHONIC_MUSIC_DIR` | `--music` | required |
 | `database` | `PEERPHONIC_DATABASE` | `--database` | `peerphonic.db` |
+| `metadata_driver` | `PEERPHONIC_METADATA_DRIVER` | `--metadata-driver` | `sqlite` |
+| `database_url` | `PEERPHONIC_DATABASE_URL` | `--database-url` | empty |
+| `credential_key_path` | `PEERPHONIC_CREDENTIAL_KEY_PATH` | `--credential-key` | `<database>.auth.key` |
 | `cache_dir` | `PEERPHONIC_CACHE_DIR` | `--cache` | `cache` |
 | `cache_size_bytes` | `PEERPHONIC_CACHE_SIZE_BYTES` | `--cache-size` | `10737418240` (10 GiB) |
 | `torrent_dir` | `PEERPHONIC_TORRENT_DIR` | `--torrents` | `torrents` |
@@ -200,6 +204,10 @@ and a manifest with sizes and SHA-256 checksums. Existing output files are never
 overwritten. Treat the archive as a secret because its key can decrypt stored
 OpenSubsonic credentials. Music, cached media, and `.torrent` files remain on
 their configured storage and are not duplicated in this metadata archive.
+
+The `backup` and `restore` commands operate on SQLite. The Helm deployment uses
+`pg_dump` for PostgreSQL and stores the dump together with the credential key on
+the Peerphonic data PVC.
 
 Restore is deliberately offline and refuses to overwrite an existing database
 unless `--force` is supplied. Stop Peerphonic first; forced restores preserve
@@ -465,8 +473,8 @@ go vet ./...
 The static administration dashboard lives in `web/`; the backend does not
 depend on it. The container deployment serves the dashboard on port `8081` and
 the OpenSubsonic backend on port `8080`. See `deploy/README.md` for startup
-instructions. A Kubernetes chart with an optional colocated slskd sidecar is
-available under `deploy/helm/peerphonic`.
+instructions. A Kubernetes chart with a separate PostgreSQL StatefulSet and an
+optional colocated slskd sidecar is available under `deploy/helm/peerphonic`.
 
 GitHub Actions validate the Go backend, dashboard JavaScript, container builds,
 and Helm chart on every push and pull request. Pushing a `vX.Y.Z` tag publishes

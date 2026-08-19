@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
@@ -75,7 +74,7 @@ func (c *Catalog) migrateLogicalTracks(ctx context.Context) error {
 	return nil
 }
 
-func migrationTracks(ctx context.Context, tx *sql.Tx) ([]domain.Track, error) {
+func migrationTracks(ctx context.Context, tx *transaction) ([]domain.Track, error) {
 	rows, err := tx.QueryContext(ctx, "SELECT "+trackColumns+" FROM tracks")
 	if err != nil {
 		return nil, fmt.Errorf("query tracks for logical migration: %w", err)
@@ -95,7 +94,7 @@ func migrationTracks(ctx context.Context, tx *sql.Tx) ([]domain.Track, error) {
 	return tracks, nil
 }
 
-func migrationTrackSourceRanks(ctx context.Context, tx *sql.Tx) (map[string]int, error) {
+func migrationTrackSourceRanks(ctx context.Context, tx *transaction) (map[string]int, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT track_id, MIN(CASE provider
 		WHEN 'local' THEN 0 WHEN 'torrent' THEN 1 WHEN 'soulseek' THEN 2 ELSE 3 END)
 		FROM track_sources GROUP BY track_id`)
@@ -160,7 +159,7 @@ func migrationTrackScore(track domain.Track, sourceRank int) int {
 	return score
 }
 
-func upsertMigrationTrack(ctx context.Context, tx *sql.Tx, track domain.Track) error {
+func upsertMigrationTrack(ctx context.Context, tx *transaction, track domain.Track) error {
 	albumArtistID := track.AlbumArtistID
 	if albumArtistID == "" {
 		albumArtistID = track.ArtistID
@@ -188,7 +187,7 @@ func upsertMigrationTrack(ctx context.Context, tx *sql.Tx, track domain.Track) e
 	return nil
 }
 
-func moveTrackReferences(ctx context.Context, tx *sql.Tx, oldID, newID string) error {
+func moveTrackReferences(ctx context.Context, tx *transaction, oldID, newID string) error {
 	statements := []struct {
 		query string
 		args  []any
@@ -212,7 +211,7 @@ func moveTrackReferences(ctx context.Context, tx *sql.Tx, oldID, newID string) e
 	return nil
 }
 
-func migrateTrackAnnotations(ctx context.Context, tx *sql.Tx, aliases map[string]string) error {
+func migrateTrackAnnotations(ctx context.Context, tx *transaction, aliases map[string]string) error {
 	rows, err := tx.QueryContext(ctx, `SELECT owner, media_type, media_id, starred_at,
 		rating, play_count, last_played_at FROM media_annotations WHERE media_type = 'song'`)
 	if err != nil {

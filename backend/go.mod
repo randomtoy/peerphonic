@@ -5,6 +5,7 @@ go 1.25.0
 require (
 	github.com/anacrolix/torrent v1.61.0
 	github.com/dhowden/tag v0.0.0-20240417053706-3d75831295e8
+	github.com/jackc/pgx/v5 v5.8.0
 	github.com/tcolgate/mp3 v0.0.0-20170426193717-e79c5a46d300
 	golang.org/x/crypto v0.44.0
 	golang.org/x/text v0.41.0
@@ -48,6 +49,9 @@ require (
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/gorilla/websocket v1.5.0 // indirect
 	github.com/huandu/xstrings v1.3.2 // indirect
+	github.com/jackc/pgpassfile v1.0.0 // indirect
+	github.com/jackc/pgservicefile v0.0.0-20240606120523-5a60cdf6a761 // indirect
+	github.com/jackc/puddle/v2 v2.2.2 // indirect
 	github.com/klauspost/cpuid/v2 v2.2.3 // indirect
 	github.com/mattn/go-isatty v0.0.24 // indirect
 	github.com/minio/sha256-simd v1.0.0 // indirect

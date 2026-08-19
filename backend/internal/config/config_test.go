@@ -115,6 +115,33 @@ func TestLoadRejectsInvalidAuthenticationRateLimit(t *testing.T) {
 	}
 }
 
+func TestLoadPostgresMetadataConfiguration(t *testing.T) {
+	t.Parallel()
+
+	credentialKey := filepath.Join(t.TempDir(), "credentials.key")
+	cfg, err := Load([]string{
+		"--music", t.TempDir(), "--metadata-driver", "postgres",
+		"--database-url", "postgres://peerphonic:secret@postgres:5432/peerphonic?sslmode=disable",
+		"--credential-key", credentialKey,
+	}, func(string) (string, bool) { return "", false })
+	if err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if cfg.MetadataDriver != "postgres" || cfg.DatabaseURL == "" || cfg.CredentialKeyPath != credentialKey {
+		t.Fatalf("PostgreSQL config = %#v", cfg)
+	}
+}
+
+func TestLoadPostgresRequiresConnectionURL(t *testing.T) {
+	t.Parallel()
+
+	if _, err := Load([]string{
+		"--music", t.TempDir(), "--metadata-driver", "postgres",
+	}, func(string) (string, bool) { return "", false }); err == nil {
+		t.Fatal("Load() error = nil, want missing PostgreSQL URL error")
+	}
+}
+
 func TestLoadDerivesSlskdDirectoriesFromCache(t *testing.T) {
 	t.Parallel()
 

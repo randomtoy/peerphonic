@@ -10,38 +10,63 @@ import (
 	"strings"
 	"time"
 
+	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
 	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
 	"github.com/randomtoy/peerphonic/backend/migrations"
+	"github.com/randomtoy/peerphonic/backend/postgresmigrations"
 	_ "modernc.org/sqlite"
 )
 
 type Catalog struct {
-	db *sql.DB
+	db         *database
+	migrations fs.FS
 }
 
 func Open(ctx context.Context, path string) (*Catalog, error) {
-	db, err := sql.Open("sqlite", path)
+	raw, err := sql.Open("sqlite", path)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite database: %w", err)
 	}
-	db.SetMaxOpenConns(1)
+	raw.SetMaxOpenConns(1)
 
-	catalog := &Catalog{db: db}
+	catalog := &Catalog{db: &database{raw: raw, dialect: sqliteDialect}, migrations: migrations.Files}
 	if err := catalog.configure(ctx); err != nil {
-		db.Close()
+		raw.Close()
 		return nil, err
 	}
 	if err := catalog.migrate(ctx); err != nil {
-		db.Close()
+		raw.Close()
 		return nil, err
 	}
 	if err := catalog.migrateCanonicalCatalogIdentities(ctx); err != nil {
-		db.Close()
+		raw.Close()
 		return nil, err
 	}
 	if err := catalog.migrateLogicalTracks(ctx); err != nil {
-		db.Close()
+		raw.Close()
+		return nil, err
+	}
+	return catalog, nil
+}
+
+func OpenPostgres(ctx context.Context, connectionURL string) (*Catalog, error) {
+	raw, err := sql.Open("pgx", connectionURL)
+	if err != nil {
+		return nil, fmt.Errorf("open PostgreSQL database: %w", err)
+	}
+	raw.SetMaxOpenConns(10)
+	raw.SetMaxIdleConns(5)
+	raw.SetConnMaxLifetime(30 * time.Minute)
+	catalog := &Catalog{
+		db: &database{raw: raw, dialect: postgresDialect}, migrations: postgresmigrations.Files,
+	}
+	if err := catalog.configure(ctx); err != nil {
+		raw.Close()
+		return nil, err
+	}
+	if err := catalog.migrate(ctx); err != nil {
+		raw.Close()
 		return nil, err
 	}
 	return catalog, nil
@@ -59,6 +84,12 @@ func (c *Catalog) Ping(ctx context.Context) error {
 }
 
 func (c *Catalog) configure(ctx context.Context) error {
+	if c.db.dialect == postgresDialect {
+		if err := c.db.PingContext(ctx); err != nil {
+			return fmt.Errorf("connect to PostgreSQL: %w", err)
+		}
+		return nil
+	}
 	for _, statement := range []string{
 		"PRAGMA foreign_keys = ON",
 		"PRAGMA busy_timeout = 5000",
@@ -79,7 +110,7 @@ func (c *Catalog) migrate(ctx context.Context) error {
 		return fmt.Errorf("create migration table: %w", err)
 	}
 
-	entries, err := fs.ReadDir(migrations.Files, ".")
+	entries, err := fs.ReadDir(c.migrations, ".")
 	if err != nil {
 		return fmt.Errorf("list migrations: %w", err)
 	}
@@ -106,7 +137,7 @@ func (c *Catalog) applyMigration(ctx context.Context, name string) error {
 		return nil
 	}
 
-	contents, err := migrations.Files.ReadFile(name)
+	contents, err := fs.ReadFile(c.migrations, name)
 	if err != nil {
 		return fmt.Errorf("read migration %s: %w", name, err)
 	}
@@ -352,7 +383,7 @@ func (c *Catalog) Artists(ctx context.Context) ([]domain.Artist, error) {
 		FROM artist_roles LEFT JOIN artist_aliases ON artist_aliases.alias_id = artist_roles.id
 	)
 	SELECT id, MIN(name), COUNT(DISTINCT album_id) FROM resolved_roles
-	GROUP BY id ORDER BY MIN(name) COLLATE NOCASE`)
+	GROUP BY id ORDER BY LOWER(MIN(name))`)
 	if err != nil {
 		return nil, fmt.Errorf("query artists: %w", err)
 	}
@@ -399,8 +430,8 @@ func (c *Catalog) Artist(ctx context.Context, id string) (domain.Artist, error) 
 
 func (c *Catalog) Genres(ctx context.Context) ([]domain.Genre, error) {
 	rows, err := c.db.QueryContext(ctx, `SELECT MIN(genre), COUNT(*), COUNT(DISTINCT album_id)
-		FROM tracks WHERE genre <> '' GROUP BY genre COLLATE NOCASE
-		ORDER BY MIN(genre) COLLATE NOCASE`)
+		FROM tracks WHERE genre <> '' GROUP BY LOWER(genre)
+		ORDER BY LOWER(MIN(genre))`)
 	if err != nil {
 		return nil, fmt.Errorf("query genres: %w", err)
 	}
@@ -451,9 +482,10 @@ func (c *Catalog) UpdateTrack(ctx context.Context, track domain.Track) error {
 		return fmt.Errorf("update track %q: %w", track.ID, err)
 	}
 	if previousAlbumID != "" && previousAlbumID != track.AlbumID {
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO album_alias_tracks (
+		if _, err := tx.ExecContext(ctx, `INSERT INTO album_alias_tracks (
 			provider, alias_id, track_id
-		) SELECT provider, ?, track_id FROM track_sources WHERE track_id = ?`,
+		) SELECT provider, ?, track_id FROM track_sources WHERE track_id = ?
+		ON CONFLICT(provider, alias_id, track_id) DO NOTHING`,
 			previousAlbumID, track.ID); err != nil {
 			return fmt.Errorf("preserve previous album for track %q: %w", track.ID, err)
 		}
@@ -465,19 +497,19 @@ func (c *Catalog) UpdateTrack(ctx context.Context, track domain.Track) error {
 }
 
 func (c *Catalog) Albums(ctx context.Context, query ports.AlbumListQuery) ([]domain.Album, error) {
-	order := "album COLLATE NOCASE, album_artist COLLATE NOCASE"
+	order := "LOWER(album), LOWER(album_artist)"
 	switch query.Order {
 	case "", ports.AlbumOrderName:
 	case ports.AlbumOrderArtist:
-		order = "album_artist COLLATE NOCASE, album COLLATE NOCASE"
+		order = "LOWER(album_artist), LOWER(album)"
 	case ports.AlbumOrderNewest:
-		order = "discovered_at DESC, album COLLATE NOCASE"
+		order = "discovered_at DESC, LOWER(album)"
 	case ports.AlbumOrderRandom:
 		order = "RANDOM()"
 	case ports.AlbumOrderYearAsc:
-		order = "album_year ASC, album COLLATE NOCASE"
+		order = "album_year ASC, LOWER(album)"
 	case ports.AlbumOrderYearDesc:
-		order = "album_year DESC, album COLLATE NOCASE"
+		order = "album_year DESC, LOWER(album)"
 	default:
 		return nil, fmt.Errorf("unsupported album order %q", query.Order)
 	}
@@ -491,7 +523,7 @@ func (c *Catalog) Albums(ctx context.Context, query ports.AlbumListQuery) ([]dom
 	if query.Genre != "" {
 		conditions = append(conditions, `EXISTS (SELECT 1 FROM tracks genre_tracks
 			WHERE genre_tracks.album_id = albums.album_id
-			AND genre_tracks.genre = ? COLLATE NOCASE)`)
+			AND LOWER(genre_tracks.genre) = LOWER(?))`)
 		arguments = append(arguments, query.Genre)
 	}
 	where := ""
@@ -541,7 +573,7 @@ func (c *Catalog) AlbumsByArtist(ctx context.Context, artistID string) ([]domain
 				OR COALESCE(track_alias.target_id, candidate.artist_id) = ?
 		)
 		GROUP BY album_id
-		ORDER BY album COLLATE NOCASE`, artistID, artistID)
+		ORDER BY LOWER(MIN(album))`, artistID, artistID)
 	if err != nil {
 		return nil, fmt.Errorf("query albums: %w", err)
 	}
@@ -584,7 +616,7 @@ func (c *Catalog) TracksByAlbum(ctx context.Context, albumID string) ([]domain.T
 			SELECT 1 FROM album_alias_tracks
 			WHERE album_alias_tracks.alias_id = ?
 				AND album_alias_tracks.track_id = tracks.id
-		) ORDER BY disc_number, track_number, title COLLATE NOCASE`, albumID)
+		) ORDER BY disc_number, track_number, LOWER(title)`, albumID)
 	if err != nil {
 		return nil, fmt.Errorf("query album alias tracks: %w", err)
 	}
@@ -594,7 +626,7 @@ func (c *Catalog) TracksByAlbum(ctx context.Context, albumID string) ([]domain.T
 
 func (c *Catalog) tracksByCanonicalAlbum(ctx context.Context, albumID string) ([]domain.Track, error) {
 	rows, err := c.db.QueryContext(ctx, "SELECT "+trackColumns+` FROM tracks WHERE album_id = ?
-		ORDER BY disc_number, track_number, title COLLATE NOCASE`, albumID)
+		ORDER BY disc_number, track_number, LOWER(title)`, albumID)
 	if err != nil {
 		return nil, fmt.Errorf("query album tracks: %w", err)
 	}
@@ -609,8 +641,8 @@ func (c *Catalog) TracksByGenre(
 	offset, limit int,
 ) ([]domain.Track, error) {
 	rows, err := c.db.QueryContext(ctx, "SELECT "+trackColumns+` FROM tracks
-		WHERE genre = ? COLLATE NOCASE
-		ORDER BY album COLLATE NOCASE, disc_number, track_number, title COLLATE NOCASE
+		WHERE LOWER(genre) = LOWER(?)
+		ORDER BY LOWER(album), disc_number, track_number, LOWER(title)
 		LIMIT ? OFFSET ?`, genre, limit, offset)
 	if err != nil {
 		return nil, fmt.Errorf("query genre tracks: %w", err)
@@ -623,7 +655,7 @@ func (c *Catalog) RandomTracks(ctx context.Context, query ports.RandomTracksQuer
 	conditions := []string{}
 	arguments := []any{}
 	if query.Genre != "" {
-		conditions = append(conditions, "genre = ? COLLATE NOCASE")
+		conditions = append(conditions, "LOWER(genre) = LOWER(?)")
 		arguments = append(arguments, query.Genre)
 	}
 	if query.FromYear != 0 {
@@ -699,7 +731,7 @@ func (c *Catalog) Search(ctx context.Context, query ports.CatalogSearch) (ports.
 
 func (c *Catalog) allTracks(ctx context.Context) ([]domain.Track, error) {
 	rows, err := c.db.QueryContext(ctx, "SELECT "+trackColumns+
-		" FROM tracks ORDER BY title COLLATE NOCASE, artist COLLATE NOCASE")
+		" FROM tracks ORDER BY LOWER(title), LOWER(artist)")
 	if err != nil {
 		return nil, fmt.Errorf("query all tracks: %w", err)
 	}

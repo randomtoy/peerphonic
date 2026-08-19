@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
@@ -76,7 +75,7 @@ func (c *Catalog) migrateCanonicalCatalogIdentities(ctx context.Context) error {
 
 func catalogIdentityUpdates(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *transaction,
 ) ([]identityUpdate, map[string]string, map[string]string, error) {
 	rows, err := tx.QueryContext(ctx, `SELECT id, artist, artist_id, album, album_id,
 		album_artist, album_artist_id FROM tracks`)
@@ -129,7 +128,7 @@ func addIdentityMapping(mappings map[string]string, oldID, newID string) {
 
 func migrateIdentityAnnotations(
 	ctx context.Context,
-	tx *sql.Tx,
+	tx *transaction,
 	artistIDs map[string]string,
 	albumIDs map[string]string,
 ) error {

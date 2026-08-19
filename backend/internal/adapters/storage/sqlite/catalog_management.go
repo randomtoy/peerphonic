@@ -31,7 +31,7 @@ func (c *Catalog) resolveArtistID(ctx context.Context, id string) (string, error
 
 func (c *Catalog) ArtistAliases(ctx context.Context) ([]domain.ArtistAlias, error) {
 	rows, err := c.db.QueryContext(ctx, `SELECT alias_id, alias_name, target_id, target_name,
-		created_at FROM artist_aliases ORDER BY alias_name COLLATE NOCASE`)
+		created_at FROM artist_aliases ORDER BY LOWER(alias_name)`)
 	if err != nil {
 		return nil, fmt.Errorf("query artist aliases: %w", err)
 	}

@@ -13,9 +13,12 @@ import (
 )
 
 type Config struct {
+	MetadataDriver        string `json:"metadata_driver"`
 	Address               string `json:"address"`
 	MusicDir              string `json:"music_dir"`
 	Database              string `json:"database"`
+	DatabaseURL           string `json:"database_url"`
+	CredentialKeyPath     string `json:"credential_key_path"`
 	CacheDir              string `json:"cache_dir"`
 	CacheSizeBytes        int64  `json:"cache_size_bytes"`
 	TorrentDir            string `json:"torrent_dir"`
@@ -46,6 +49,7 @@ type Config struct {
 
 func Defaults() Config {
 	return Config{
+		MetadataDriver:        "sqlite",
 		Address:               ":8080",
 		Database:              "peerphonic.db",
 		CacheDir:              "cache",
@@ -92,9 +96,12 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	flags := flag.NewFlagSet("serve", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	flags.StringVar(&configPath, "config", configPath, "path to JSON configuration")
+	flags.StringVar(&cfg.MetadataDriver, "metadata-driver", cfg.MetadataDriver, "metadata storage driver (sqlite or postgres)")
 	flags.StringVar(&cfg.Address, "address", cfg.Address, "HTTP listen address")
 	flags.StringVar(&cfg.MusicDir, "music", cfg.MusicDir, "music library directory")
 	flags.StringVar(&cfg.Database, "database", cfg.Database, "SQLite database path")
+	flags.StringVar(&cfg.DatabaseURL, "database-url", cfg.DatabaseURL, "PostgreSQL connection URL")
+	flags.StringVar(&cfg.CredentialKeyPath, "credential-key", cfg.CredentialKeyPath, "credential encryption key path")
 	flags.StringVar(&cfg.CacheDir, "cache", cfg.CacheDir, "media cache directory")
 	flags.Int64Var(&cfg.CacheSizeBytes, "cache-size", cfg.CacheSizeBytes, "maximum media cache size in bytes")
 	flags.StringVar(&cfg.TorrentDir, "torrents", cfg.TorrentDir, "directory containing torrent metadata")
@@ -128,6 +135,13 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	}
 	if cfg.MusicDir == "" {
 		return Config{}, errors.New("music directory is required (use --music or PEERPHONIC_MUSIC_DIR)")
+	}
+	cfg.MetadataDriver = strings.ToLower(strings.TrimSpace(cfg.MetadataDriver))
+	if cfg.MetadataDriver != "sqlite" && cfg.MetadataDriver != "postgres" {
+		return Config{}, errors.New("metadata driver must be sqlite or postgres")
+	}
+	if cfg.MetadataDriver == "postgres" && strings.TrimSpace(cfg.DatabaseURL) == "" {
+		return Config{}, errors.New("PostgreSQL metadata storage requires --database-url or PEERPHONIC_DATABASE_URL")
 	}
 	if cfg.CacheSizeBytes <= 0 {
 		return Config{}, errors.New("media cache size must be positive")
@@ -165,6 +179,11 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	cfg.Database, err = filepath.Abs(cfg.Database)
 	if err != nil {
 		return Config{}, fmt.Errorf("resolve database path: %w", err)
+	}
+	if cfg.CredentialKeyPath == "" {
+		cfg.CredentialKeyPath = cfg.Database + ".auth.key"
+	} else if cfg.CredentialKeyPath, err = filepath.Abs(cfg.CredentialKeyPath); err != nil {
+		return Config{}, fmt.Errorf("resolve credential key path: %w", err)
 	}
 	cfg.CacheDir, err = filepath.Abs(cfg.CacheDir)
 	if err != nil {
@@ -215,9 +234,12 @@ func readFile(path string, cfg *Config) error {
 
 func applyEnv(cfg *Config, lookup func(string) (string, bool)) error {
 	for key, target := range map[string]*string{
+		"PEERPHONIC_METADATA_DRIVER":      &cfg.MetadataDriver,
 		"PEERPHONIC_ADDRESS":              &cfg.Address,
 		"PEERPHONIC_MUSIC_DIR":            &cfg.MusicDir,
 		"PEERPHONIC_DATABASE":             &cfg.Database,
+		"PEERPHONIC_DATABASE_URL":         &cfg.DatabaseURL,
+		"PEERPHONIC_CREDENTIAL_KEY_PATH":  &cfg.CredentialKeyPath,
 		"PEERPHONIC_CACHE_DIR":            &cfg.CacheDir,
 		"PEERPHONIC_TORRENT_DIR":          &cfg.TorrentDir,
 		"PEERPHONIC_USERNAME":             &cfg.Username,

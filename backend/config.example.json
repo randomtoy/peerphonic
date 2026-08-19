@@ -1,7 +1,10 @@
 {
+  "metadata_driver": "sqlite",
   "address": ":8080",
   "music_dir": "/srv/music",
   "database": "/srv/peerphonic/peerphonic.db",
+  "database_url": "",
+  "credential_key_path": "/srv/peerphonic/peerphonic.auth.key",
   "cache_dir": "/srv/peerphonic/cache",
   "cache_size_bytes": 10737418240,
   "torrent_dir": "/srv/peerphonic/torrents",

@@ -17,8 +17,8 @@ func (c *Catalog) Playlists(ctx context.Context, owner string) ([]domain.Playlis
 		FROM playlists p
 		LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id
 		LEFT JOIN tracks t ON t.id = pt.track_id
-		WHERE p.owner = ? OR p.public = 1
-		GROUP BY p.id ORDER BY p.name COLLATE NOCASE`, owner)
+		WHERE p.owner = ? OR p.public = TRUE
+		GROUP BY p.id ORDER BY LOWER(p.name)`, owner)
 	if err != nil {
 		return nil, fmt.Errorf("query playlists: %w", err)
 	}

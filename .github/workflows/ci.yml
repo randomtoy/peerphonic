@@ -18,6 +18,20 @@ jobs:
     defaults:
       run:
         working-directory: backend
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: peerphonic
+          POSTGRES_PASSWORD: peerphonic-test
+          POSTGRES_DB: peerphonic
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U peerphonic -d peerphonic"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
     steps:
       - name: Check out repository
         uses: actions/checkout@v7.0.1
@@ -27,6 +41,8 @@ jobs:
           go-version-file: backend/go.mod
           cache-dependency-path: backend/go.sum
       - name: Test
+        env:
+          PEERPHONIC_TEST_POSTGRES_URL: postgres://peerphonic:peerphonic-test@127.0.0.1:5432/peerphonic?sslmode=disable
         run: go test ./...
       - name: Vet
         run: go vet ./...
@@ -51,17 +67,21 @@ jobs:
         run: >-
           helm lint --strict deploy/helm/peerphonic
           --set auth.existingSecret=peerphonic-auth
+          --set postgresql.auth.existingSecret=peerphonic-postgresql
       - name: Render full chart
         run: >-
           helm template peerphonic deploy/helm/peerphonic
           --namespace peerphonic
           --set auth.existingSecret=peerphonic-auth
+          --set postgresql.auth.existingSecret=peerphonic-postgresql
           > /tmp/peerphonic-full.yaml
       - name: Render external-storage chart
         run: >-
           helm template peerphonic deploy/helm/peerphonic
           --namespace peerphonic
           --set auth.existingSecret=peerphonic-auth
+          --set database.driver=sqlite
+          --set postgresql.enabled=false
           --set slskd.enabled=false
           --set web.enabled=false
           --set persistence.existingClaim=peerphonic-data
@@ -72,6 +92,7 @@ jobs:
           helm template peerphonic deploy/helm/peerphonic
           --namespace peerphonic
           --set auth.existingSecret=peerphonic-auth
+          --set postgresql.auth.existingSecret=peerphonic-postgresql
           --set backup.enabled=true
           > /tmp/peerphonic-backup.yaml
 

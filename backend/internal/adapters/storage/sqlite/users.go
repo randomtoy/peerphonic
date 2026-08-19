@@ -13,7 +13,7 @@ import (
 
 func (c *Catalog) Users(ctx context.Context) ([]domain.User, error) {
 	rows, err := c.db.QueryContext(ctx, `SELECT username, role, created_at, updated_at
-		FROM users ORDER BY username COLLATE NOCASE`)
+		FROM users ORDER BY LOWER(username)`)
 	if err != nil {
 		return nil, fmt.Errorf("query users: %w", err)
 	}
@@ -194,7 +194,7 @@ func (c *Catalog) loadUserPermissions(ctx context.Context, users []domain.User) 
 		indexes[users[index].Username] = index
 	}
 	rows, err := c.db.QueryContext(ctx, `SELECT username, permission FROM user_permissions
-		ORDER BY username COLLATE NOCASE, permission`)
+		ORDER BY LOWER(username), permission`)
 	if err != nil {
 		return fmt.Errorf("query user permissions: %w", err)
 	}

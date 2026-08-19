@@ -51,9 +51,10 @@ func (c *Catalog) UpdateMediaAnnotations(ctx context.Context, updates []ports.Me
 	}
 	defer tx.Rollback()
 	for _, update := range updates {
-		if _, err := tx.ExecContext(ctx, `INSERT OR IGNORE INTO media_annotations (
+		if _, err := tx.ExecContext(ctx, `INSERT INTO media_annotations (
 			owner, media_type, media_id
-		) VALUES (?, ?, ?)`, update.Owner, update.Media.Type, update.Media.ID); err != nil {
+		) VALUES (?, ?, ?) ON CONFLICT(owner, media_type, media_id) DO NOTHING`,
+			update.Owner, update.Media.Type, update.Media.ID); err != nil {
 			return fmt.Errorf("create media annotation %q: %w", update.Media.ID, err)
 		}
 		starredAt, setStarred := optionalTimeUpdate(update.StarredAt)

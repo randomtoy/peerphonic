@@ -2,7 +2,6 @@ package sqlite
 
 import (
 	"context"
-	"database/sql"
 	"fmt"
 	"time"
 
@@ -45,7 +44,7 @@ func (c *Catalog) SaveTrackAlias(ctx context.Context, aliasID, trackID string) e
 	return nil
 }
 
-func saveTrackSource(ctx context.Context, tx *sql.Tx, source domain.TrackSource) error {
+func saveTrackSource(ctx context.Context, tx *transaction, source domain.TrackSource) error {
 	if source.Track.ID == "" || source.Ref.Provider == "" || source.Ref.Key == "" {
 		return fmt.Errorf("track id, provider, and source key are required")
 	}

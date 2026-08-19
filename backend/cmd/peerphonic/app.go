@@ -15,6 +15,7 @@ import (
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/providers/local"
 	soulseekprovider "github.com/randomtoy/peerphonic/backend/internal/adapters/providers/soulseek"
 	torrentprovider "github.com/randomtoy/peerphonic/backend/internal/adapters/providers/torrent"
+	postgresstore "github.com/randomtoy/peerphonic/backend/internal/adapters/storage/postgres"
 	"github.com/randomtoy/peerphonic/backend/internal/adapters/storage/sqlite"
 	"github.com/randomtoy/peerphonic/backend/internal/api/opensubsonic"
 	"github.com/randomtoy/peerphonic/backend/internal/api/peerphonic"
@@ -29,14 +30,36 @@ import (
 
 type application struct {
 	handler          http.Handler
-	catalog          *sqlite.Catalog
+	catalog          metadataCatalog
 	torrentProvider  *torrentprovider.Provider
 	soulseekProvider *soulseekprovider.Client
 	magnetImporter   *torrentscanner.MagnetImporter
 }
 
+type metadataCatalog interface {
+	ports.Catalog
+	ports.TrackSourceWriter
+	ports.TrackAliasWriter
+	ports.CatalogManager
+	ports.CacheMetadataStore
+	ports.MediaAnnotationStore
+	ports.PlayQueueStore
+	ports.UserStore
+	ports.TransferLimitStore
+	ports.TrackPinStore
+	ports.AuditStore
+	Ping(ctx context.Context) error
+	Close() error
+}
+
 func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logger) (*application, error) {
-	catalog, err := sqlite.Open(ctx, cfg.Database)
+	var catalog metadataCatalog
+	var err error
+	if cfg.MetadataDriver == "postgres" {
+		catalog, err = postgresstore.Open(ctx, cfg.DatabaseURL)
+	} else {
+		catalog, err = sqlite.Open(ctx, cfg.Database)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -56,7 +79,11 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		catalog.Close()
 		return nil, err
 	}
-	credentialCodec, err := authadapter.NewCredentialCodec(cfg.Database + ".auth.key")
+	credentialKeyPath := cfg.CredentialKeyPath
+	if credentialKeyPath == "" {
+		credentialKeyPath = cfg.Database + ".auth.key"
+	}
+	credentialCodec, err := authadapter.NewCredentialCodec(credentialKeyPath)
 	if err != nil {
 		return fail(fmt.Errorf("initialize user credentials: %w", err))
 	}
