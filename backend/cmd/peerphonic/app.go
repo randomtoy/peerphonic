@@ -230,6 +230,7 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	mux := http.NewServeMux()
 	mux.Handle("/api/v1/ready", peerphonic.NewReadinessHandler(catalog))
 	mux.Handle("/api/v1/metrics", peerphonic.NewMetricsHandler(httpMetrics, userService))
+	mux.Handle("/api/v1/audit", peerphonic.NewAuditHandler(catalog, userService))
 	mux.Handle("/rest/", opensubsonic.NewHandlerWithAuthenticatorDiscoveryAndTranscoder(
 		catalog, streaming, artwork, userService, soulseekDiscovery, transcoder, scanManager,
 	))
@@ -238,8 +239,13 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		userService, userService, soulseekMonitor, soulseekSearch, transferSettings, catalog, libraryCache,
 		scanManager,
 	))
+	audit := observability.NewAuditMiddleware(catalog, logger)
+	authLimiter := observability.NewAuthFailureLimiter(
+		cfg.AuthFailureLimit, time.Duration(cfg.AuthFailureWindow)*time.Second,
+		time.Duration(cfg.AuthBlockSeconds)*time.Second,
+	)
 	return &application{
-		handler: httpMetrics.Wrap(mux), catalog: catalog, torrentProvider: torrentProvider,
+		handler: httpMetrics.Wrap(audit.Wrap(authLimiter.Wrap(mux))), catalog: catalog, torrentProvider: torrentProvider,
 		soulseekProvider: soulseekClient, magnetImporter: magnetImporter,
 	}, nil
 }

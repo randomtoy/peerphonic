@@ -66,6 +66,8 @@ const elements = {
   prefetchPinned: document.querySelector("#prefetch-pinned"),
   prefetchMessage: document.querySelector("#prefetch-message"),
   unpinTrack: document.querySelector("#unpin-track"),
+  auditEntries: document.querySelector("#audit-entries"),
+  auditCount: document.querySelector("#audit-count"),
   usersSection: document.querySelector("#users-section"),
   artistAliasForm: document.querySelector("#artist-alias-form"),
   artistAliasSource: document.querySelector("#artist-alias-source"),
@@ -472,6 +474,22 @@ function renderTransfers(items) {
   }).join("");
 }
 
+function renderAudit(items) {
+  elements.auditCount.textContent = `${items.length} recent`;
+  elements.auditEntries.replaceChildren();
+  if (!items.length) {
+    elements.auditEntries.append(empty("No administrative changes recorded yet."));
+    return;
+  }
+  elements.auditEntries.innerHTML = items.map((item) => `<article class="source-row">
+    <div class="source-copy">
+      <h3>${escapeHTML(item.method)} ${escapeHTML(item.path)}</h3>
+      <p class="source-meta"><span>${escapeHTML(item.actor)}</span><span>${escapeHTML(item.remoteAddress || "unknown address")}</span><span>${escapeHTML(new Date(item.occurredAt).toLocaleString())}</span></p>
+    </div>
+    <span class="status ${item.status >= 400 ? "failed" : ""}">${item.status}</span>
+  </article>`).join("");
+}
+
 function renderSources(items) {
   elements.sourceCount.textContent = `${items.length} total`;
   elements.sources.replaceChildren();
@@ -680,7 +698,7 @@ async function refresh() {
     const canSearchSoulseek = allowed.has(permissions.soulseekSearch);
     const canManageUsers = allowed.has(permissions.users);
     const canManageCatalog = allowed.has(permissions.catalog);
-    const [cache, importPayload, downloadPayload, transferPayload, sourcePayload, userPayload, scanStatus, transferSettings, soulseekStatus, catalogPayload] = await Promise.all([
+    const [cache, importPayload, downloadPayload, transferPayload, sourcePayload, userPayload, scanStatus, transferSettings, soulseekStatus, catalogPayload, auditPayload] = await Promise.all([
       canMonitor ? api("/api/v1/cache/status") : Promise.resolve({}),
       canManageSources ? api("/api/v1/imports") : Promise.resolve({ imports: [] }),
       canMonitor ? api("/api/v1/downloads") : Promise.resolve({ downloads: [] }),
@@ -691,6 +709,7 @@ async function refresh() {
       canManageSources ? api("/api/v1/settings/transfers") : Promise.resolve({}),
       canSearchSoulseek ? api("/api/v1/providers/soulseek/status") : Promise.resolve({}),
       canManageCatalog ? api("/api/v1/catalog/artists") : Promise.resolve({ artists: [], aliases: [] }),
+      canMonitor ? api("/api/v1/audit?limit=50") : Promise.resolve({ entries: [] }),
     ]);
     const imports = importPayload.imports || [];
     const downloads = downloadPayload.downloads || [];
@@ -707,6 +726,7 @@ async function refresh() {
     renderImports(imports);
     renderDownloads(downloads, transfers, canManageSources);
     renderTransfers(transfers);
+    if (canMonitor) renderAudit(auditPayload.entries || []);
     renderSources(sources);
     renderUsers(users, session);
     if (canManageCatalog) renderCatalog(catalogPayload);

@@ -39,6 +39,9 @@ type Config struct {
 	SlskdPrebufferBytes   int64  `json:"slskd_prebuffer_bytes"`
 	SlskdPrebufferSeconds int    `json:"slskd_prebuffer_timeout_seconds"`
 	FFmpegPath            string `json:"ffmpeg_path"`
+	AuthFailureLimit      int    `json:"auth_failure_limit"`
+	AuthFailureWindow     int    `json:"auth_failure_window_seconds"`
+	AuthBlockSeconds      int    `json:"auth_block_seconds"`
 }
 
 func Defaults() Config {
@@ -61,6 +64,9 @@ func Defaults() Config {
 		SlskdPrebufferBytes:   1 << 20,
 		SlskdPrebufferSeconds: 15,
 		FFmpegPath:            "ffmpeg",
+		AuthFailureLimit:      10,
+		AuthFailureWindow:     60,
+		AuthBlockSeconds:      60,
 	}
 }
 
@@ -111,6 +117,9 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	flags.Int64Var(&cfg.SlskdPrebufferBytes, "slskd-prebuffer-bytes", cfg.SlskdPrebufferBytes, "Soulseek bytes buffered before playback")
 	flags.IntVar(&cfg.SlskdPrebufferSeconds, "slskd-prebuffer-timeout", cfg.SlskdPrebufferSeconds, "maximum Soulseek prebuffer wait in seconds")
 	flags.StringVar(&cfg.FFmpegPath, "ffmpeg", cfg.FFmpegPath, "FFmpeg executable for OpenSubsonic transcoding (empty disables it)")
+	flags.IntVar(&cfg.AuthFailureLimit, "auth-failure-limit", cfg.AuthFailureLimit, "failed authentications allowed per client and window")
+	flags.IntVar(&cfg.AuthFailureWindow, "auth-failure-window", cfg.AuthFailureWindow, "authentication failure window in seconds")
+	flags.IntVar(&cfg.AuthBlockSeconds, "auth-block-time", cfg.AuthBlockSeconds, "authentication block duration in seconds")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
 	}
@@ -143,6 +152,9 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	}
 	if cfg.SlskdPrebufferBytes <= 0 || cfg.SlskdPrebufferSeconds <= 0 {
 		return Config{}, errors.New("slskd prebuffer size and timeout must be positive")
+	}
+	if cfg.AuthFailureLimit <= 0 || cfg.AuthFailureWindow <= 0 || cfg.AuthBlockSeconds <= 0 {
+		return Config{}, errors.New("authentication rate-limit values must be positive")
 	}
 
 	var err error
@@ -295,6 +307,9 @@ func applyEnv(cfg *Config, lookup func(string) (string, bool)) error {
 		"PEERPHONIC_SLSKD_MAX_ACTIVE_DOWNLOADS":      &cfg.SlskdMaxDownloads,
 		"PEERPHONIC_SLSKD_RETRY_ATTEMPTS":            &cfg.SlskdRetryAttempts,
 		"PEERPHONIC_SLSKD_PREBUFFER_TIMEOUT_SECONDS": &cfg.SlskdPrebufferSeconds,
+		"PEERPHONIC_AUTH_FAILURE_LIMIT":              &cfg.AuthFailureLimit,
+		"PEERPHONIC_AUTH_FAILURE_WINDOW_SECONDS":     &cfg.AuthFailureWindow,
+		"PEERPHONIC_AUTH_BLOCK_SECONDS":              &cfg.AuthBlockSeconds,
 	} {
 		if value, ok := lookup(key); ok {
 			parsed, err := strconv.Atoi(value)

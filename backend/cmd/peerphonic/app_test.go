@@ -183,6 +183,16 @@ func TestLocalFileToOpenSubsonicStream(t *testing.T) {
 	if !bytes.Equal(stream.Body.Bytes(), media) {
 		t.Fatalf("streamed %d bytes, want %d", stream.Body.Len(), len(media))
 	}
+	rangeRequest := httptest.NewRequest(http.MethodGet,
+		"/rest/download?u=admin&p=secret&id="+trackID, nil)
+	rangeRequest.Header.Set("Range", "bytes=0-31")
+	rangeResponse := httptest.NewRecorder()
+	app.handler.ServeHTTP(rangeResponse, rangeRequest)
+	if rangeResponse.Code != http.StatusPartialContent || rangeResponse.Body.Len() != 32 ||
+		rangeResponse.Header().Get("Accept-Ranges") != "bytes" {
+		t.Fatalf("range download status = %d, length = %d, headers = %v",
+			rangeResponse.Code, rangeResponse.Body.Len(), rangeResponse.Header())
+	}
 
 	artistID := domain.StableID("artist", "artist")
 	albumID := domain.StableID("album", artistID, "album")
@@ -207,5 +217,14 @@ func TestLocalFileToOpenSubsonicStream(t *testing.T) {
 		"/rest/getCoverArt?u=admin&p=secret&id="+payload.Response.Album.CoverArt, nil))
 	if coverResponse.Code != http.StatusOK || !bytes.Equal(coverResponse.Body.Bytes(), cover) {
 		t.Fatalf("cover status = %d, body size = %d", coverResponse.Code, coverResponse.Body.Len())
+	}
+	auditRequest := httptest.NewRequest(http.MethodGet, "/api/v1/audit?limit=10", nil)
+	auditRequest.SetBasicAuth("admin", "secret")
+	auditResponse := httptest.NewRecorder()
+	app.handler.ServeHTTP(auditResponse, auditRequest)
+	if auditResponse.Code != http.StatusOK ||
+		!strings.Contains(auditResponse.Body.String(), `"path":"/api/v1/users/listener/permissions"`) ||
+		strings.Contains(auditResponse.Body.String(), "listener-password") {
+		t.Fatalf("audit status = %d, body = %s", auditResponse.Code, auditResponse.Body.String())
 	}
 }

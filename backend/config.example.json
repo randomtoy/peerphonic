@@ -24,5 +24,8 @@
   "slskd_retry_attempts": 3,
   "slskd_prebuffer_bytes": 1048576,
   "slskd_prebuffer_timeout_seconds": 15,
-  "ffmpeg_path": "ffmpeg"
+  "ffmpeg_path": "ffmpeg",
+  "auth_failure_limit": 10,
+  "auth_failure_window_seconds": 60,
+  "auth_block_seconds": 60
 }

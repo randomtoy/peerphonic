@@ -75,6 +75,12 @@ spec:
               value: {{ .Values.peerphonic.scanOnStart | quote }}
             - name: PEERPHONIC_SCAN_INTERVAL_SECONDS
               value: {{ .Values.peerphonic.scanIntervalSeconds | quote }}
+            - name: PEERPHONIC_AUTH_FAILURE_LIMIT
+              value: {{ .Values.peerphonic.authFailureLimit | quote }}
+            - name: PEERPHONIC_AUTH_FAILURE_WINDOW_SECONDS
+              value: {{ .Values.peerphonic.authFailureWindowSeconds | quote }}
+            - name: PEERPHONIC_AUTH_BLOCK_SECONDS
+              value: {{ .Values.peerphonic.authBlockSeconds | quote }}
             - name: PEERPHONIC_USERNAME
               valueFrom:
                 secretKeyRef:

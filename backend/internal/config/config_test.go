@@ -32,6 +32,9 @@ func TestLoadPrecedence(t *testing.T) {
 		"PEERPHONIC_SLSKD_MAX_ACTIVE_DOWNLOADS":              "4",
 		"PEERPHONIC_SLSKD_RETRY_ATTEMPTS":                    "6",
 		"PEERPHONIC_FFMPEG_PATH":                             "ffmpeg-env",
+		"PEERPHONIC_AUTH_FAILURE_LIMIT":                      "12",
+		"PEERPHONIC_AUTH_FAILURE_WINDOW_SECONDS":             "90",
+		"PEERPHONIC_AUTH_BLOCK_SECONDS":                      "120",
 	}
 	lookup := func(key string) (string, bool) { value, ok := env[key]; return value, ok }
 
@@ -52,6 +55,7 @@ func TestLoadPrecedence(t *testing.T) {
 		"--slskd-max-downloads", "8",
 		"--slskd-retry-attempts", "9",
 		"--ffmpeg", "ffmpeg-flag",
+		"--auth-failure-limit", "15",
 	}, lookup)
 	if err != nil {
 		t.Fatalf("Load() error = %v", err)
@@ -95,6 +99,19 @@ func TestLoadPrecedence(t *testing.T) {
 	}
 	if cfg.FFmpegPath != "ffmpeg-flag" {
 		t.Errorf("FFmpegPath = %q, want ffmpeg-flag", cfg.FFmpegPath)
+	}
+	if cfg.AuthFailureLimit != 15 || cfg.AuthFailureWindow != 90 || cfg.AuthBlockSeconds != 120 {
+		t.Errorf("auth limit = %d failures/%ds, block %ds", cfg.AuthFailureLimit, cfg.AuthFailureWindow, cfg.AuthBlockSeconds)
+	}
+}
+
+func TestLoadRejectsInvalidAuthenticationRateLimit(t *testing.T) {
+	t.Parallel()
+
+	if _, err := Load([]string{"--music", t.TempDir(), "--auth-failure-limit", "0"}, func(string) (string, bool) {
+		return "", false
+	}); err == nil {
+		t.Fatal("Load() error = nil, want invalid authentication rate limit error")
 	}
 }
 

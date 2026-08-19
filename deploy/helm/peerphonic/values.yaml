@@ -10,6 +10,9 @@ peerphonic:
   cacheSizeBytes: "10737418240"
   scanOnStart: true
   scanIntervalSeconds: 300
+  authFailureLimit: 10
+  authFailureWindowSeconds: 60
+  authBlockSeconds: 60
   torrent:
     seed: true
     port: 42069

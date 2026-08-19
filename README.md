@@ -169,6 +169,9 @@ then CLI flags.
 | `slskd_prebuffer_bytes` | `PEERPHONIC_SLSKD_PREBUFFER_BYTES` | `--slskd-prebuffer-bytes` | `1048576` |
 | `slskd_prebuffer_timeout_seconds` | `PEERPHONIC_SLSKD_PREBUFFER_TIMEOUT_SECONDS` | `--slskd-prebuffer-timeout` | `15` |
 | `ffmpeg_path` | `PEERPHONIC_FFMPEG_PATH` | `--ffmpeg` | `ffmpeg` |
+| `auth_failure_limit` | `PEERPHONIC_AUTH_FAILURE_LIMIT` | `--auth-failure-limit` | `10` |
+| `auth_failure_window_seconds` | `PEERPHONIC_AUTH_FAILURE_WINDOW_SECONDS` | `--auth-failure-window` | `60` |
+| `auth_block_seconds` | `PEERPHONIC_AUTH_BLOCK_SECONDS` | `--auth-block-time` | `60` |
 
 Use a config file with `--config peerphonic.json` or set its path through
 `PEERPHONIC_CONFIG`. See [`backend/config.example.json`](backend/config.example.json).
@@ -198,6 +201,17 @@ overwritten. Treat the archive as a secret because its key can decrypt stored
 OpenSubsonic credentials. Music, cached media, and `.torrent` files remain on
 their configured storage and are not duplicated in this metadata archive.
 
+Restore is deliberately offline and refuses to overwrite an existing database
+unless `--force` is supplied. Stop Peerphonic first; forced restores preserve
+the previous database and credential key as timestamped recovery copies:
+
+```bash
+peerphonic restore \
+  --input /srv/backups/peerphonic-2026-08-19.tar.gz \
+  --database /srv/peerphonic/peerphonic.db \
+  --force
+```
+
 Upload and download limits saved through the Peerphonic API or dashboard are
 stored in SQLite and override their startup configuration values on subsequent
 runs. Saving `0` restores unlimited transfer speed.
@@ -216,6 +230,7 @@ curl -u admin:admin http://localhost:8080/api/v1/library/scan
 curl -u admin:admin -X POST http://localhost:8080/api/v1/library/scan
 curl -u admin:admin http://localhost:8080/api/v1/settings/transfers
 curl -u admin:admin http://localhost:8080/api/v1/metrics
+curl -u admin:admin 'http://localhost:8080/api/v1/audit?limit=100'
 curl -u admin:admin -X PUT -H 'Content-Type: application/json' \
   -d '{"downloadLimitBytesPerSecond":10485760,"uploadLimitBytesPerSecond":2097152}' \
   http://localhost:8080/api/v1/settings/transfers
@@ -230,6 +245,10 @@ curl -u admin:admin \
 curl -u admin:admin -X POST \
   http://localhost:8080/api/v1/providers/soulseek/albums/SEARCH_RESULT_ID
 ```
+
+Run the same basic discovery flow used by an OpenSubsonic client against a live
+server with `backend/scripts/opensubsonic-smoke.sh`. Set `PEERPHONIC_TRACK_ID`
+to include a byte-range streaming check.
 
 Library scans started through the Peerphonic API run in the background. Their
 status includes the indexed track count and the last start, completion, or
