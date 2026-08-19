@@ -26,14 +26,21 @@ func TestSlskdProviderStatusAuthenticatesWithAPIKey(t *testing.T) {
 	t.Parallel()
 
 	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
-		if request.URL.Path != "/base/api/v0/session" {
-			t.Errorf("path = %q", request.URL.Path)
-		}
 		if request.Header.Get("X-API-Key") != "0123456789abcdef" {
 			t.Errorf("API key = %q", request.Header.Get("X-API-Key"))
 		}
 		writer.Header().Set("Content-Type", "application/json")
-		_, _ = writer.Write([]byte(`{"authenticated":true}`))
+		switch request.URL.Path {
+		case "/base/api/v0/session":
+			_, _ = writer.Write([]byte(`{"authenticated":true}`))
+		case "/base/api/v0/application":
+			_, _ = writer.Write([]byte(`{
+				"server":{"state":"Connected, LoggedIn","isConnected":true,"isLoggedIn":true},
+				"user":{"username":"peerphonic-test"}
+			}`))
+		default:
+			http.Error(writer, "unexpected request", http.StatusNotFound)
+		}
 	}))
 	defer server.Close()
 	client, err := NewSlskd(server.URL+"/base", "0123456789abcdef", time.Second)
@@ -41,7 +48,36 @@ func TestSlskdProviderStatusAuthenticatesWithAPIKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	status := client.ProviderStatus(context.Background())
-	if !status.Configured || !status.Reachable || !status.Authenticated || status.Provider != Name {
+	if !status.Configured || !status.Reachable || !status.Authenticated || status.Provider != Name ||
+		status.Message != "slskd is logged in to Soulseek as peerphonic-test" {
+		t.Fatalf("ProviderStatus() = %#v", status)
+	}
+}
+
+func TestSlskdProviderStatusReportsSoulseekLoginState(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch request.URL.Path {
+		case "/api/v0/session":
+			_, _ = writer.Write([]byte(`{"authenticated":true}`))
+		case "/api/v0/application":
+			_, _ = writer.Write([]byte(`{
+				"server":{"state":"Disconnected","isConnected":false,"isLoggedIn":false}
+			}`))
+		default:
+			http.Error(writer, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	client, err := NewSlskd(server.URL, "key", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	status := client.ProviderStatus(context.Background())
+	if !status.Reachable || !status.Authenticated ||
+		status.Message != "slskd API is ready; Soulseek is not logged in (Disconnected)" {
 		t.Fatalf("ProviderStatus() = %#v", status)
 	}
 }
@@ -155,6 +191,45 @@ func TestSlskdSearchMapsAudioResultsAndCleansUp(t *testing.T) {
 	}
 	if !deleted.Load() {
 		t.Fatal("completed slskd search was not deleted after cleanup delay")
+	}
+}
+
+func TestSlskdSearchRetriesTemporaryStartFailure(t *testing.T) {
+	t.Parallel()
+
+	var starts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		writer.Header().Set("Content-Type", "application/json")
+		switch {
+		case request.Method == http.MethodPost && request.URL.Path == "/api/v0/searches":
+			if starts.Add(1) == 1 {
+				http.Error(writer, "The wait timed out after 5000 milliseconds", http.StatusInternalServerError)
+				return
+			}
+			_, _ = writer.Write([]byte(`{
+				"id":"retry-search","isComplete":true,
+				"responses":[{"username":"peer","files":[
+					{"filename":"Artist\\Album\\Recovered.mp3","extension":"mp3","size":1200}
+				]}]
+			}`))
+		case request.Method == http.MethodDelete && request.URL.Path == "/api/v0/searches/retry-search":
+			writer.WriteHeader(http.StatusNoContent)
+		default:
+			http.Error(writer, "unexpected request", http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+	client, err := NewSlskd(server.URL, "key", time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	results, err := client.Search(context.Background(), domain.SearchQuery{Text: "Recovered", Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if starts.Load() != 2 || len(results) != 1 || results[0].Track.Title != "Recovered" {
+		t.Fatalf("starts = %d, results = %#v", starts.Load(), results)
 	}
 }
 
