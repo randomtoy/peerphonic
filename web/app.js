@@ -39,6 +39,7 @@ const elements = {
   scanButton: document.querySelector("#scan-now"),
   scanState: document.querySelector("#scan-state"),
   scanSummary: document.querySelector("#scan-summary"),
+  scanHistory: document.querySelector("#scan-history"),
   transferSettingsForm: document.querySelector("#transfer-settings-form"),
   downloadLimit: document.querySelector("#download-limit"),
   uploadLimit: document.querySelector("#upload-limit"),
@@ -496,6 +497,19 @@ function renderLibraryScan(status) {
   elements.scanButton.textContent = status.scanning ? "Scanning…" : "Scan now";
   elements.scanState.className = `pill${status.scanning ? " active" : failed ? " failed" : ""}`;
   elements.scanState.textContent = status.scanning ? "Running" : failed ? "Failed" : "Idle";
+  const history = status.history || [];
+  elements.scanHistory.replaceChildren();
+  if (!history.length) {
+    elements.scanHistory.append(empty("No maintenance runs have completed since the server started."));
+  } else {
+    elements.scanHistory.innerHTML = history.map((run) => {
+      const finished = new Date(run.finishedAt).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+      const warnings = run.warnings || [];
+      return `<article class="source-card">
+        <div class="source-main"><span class="source-name">${escapeHTML(run.trigger || "scan")} · ${escapeHTML(finished)}</span><span class="source-meta">${run.tracks || 0} tracks · ${warnings.length} warning${warnings.length === 1 ? "" : "s"}${run.error ? ` · ${escapeHTML(run.error)}` : ""}</span>${warnings.length ? `<small>${warnings.slice(0, 3).map(escapeHTML).join(" · ")}</small>` : ""}</div>
+      </article>`;
+    }).join("");
+  }
   if (status.scanning) {
     elements.scanSummary.textContent = "Checking local files and connected sources in the background.";
     return;

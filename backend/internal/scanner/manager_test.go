@@ -48,7 +48,8 @@ func TestManagerScanNowRecordsStatus(t *testing.T) {
 	status := manager.Status()
 	if status.Scanning || status.Count != 42 || status.LastError != "" ||
 		status.LastStartedAt.IsZero() || status.LastFinishedAt.IsZero() ||
-		status.LastFinishedAt.Before(status.LastStartedAt) {
+		status.LastFinishedAt.Before(status.LastStartedAt) || len(status.History) != 1 ||
+		status.History[0].Trigger != "synchronous" || status.History[0].Tracks != 42 {
 		t.Fatalf("Status() = %#v", status)
 	}
 }
@@ -100,7 +101,24 @@ func TestManagerRunsPeriodicScansUntilCancelled(t *testing.T) {
 	for manager.Status().Scanning && time.Now().Before(deadline) {
 		time.Sleep(time.Millisecond)
 	}
-	if status := manager.Status(); status.Scanning || status.Count != 3 {
+	if status := manager.Status(); status.Scanning || status.Count != 3 ||
+		len(status.History) == 0 || status.History[0].Trigger != "periodic" {
+		t.Fatalf("Status() = %#v", status)
+	}
+}
+
+func TestManagerRecordsWarningsAndFailures(t *testing.T) {
+	t.Parallel()
+	manager := NewManager(context.Background(), &runnerStub{
+		report: Report{Warnings: []Warning{{Path: "/music/broken.mp3", Err: errors.New("bad tag")}}},
+		err:    errors.New("scan failed"),
+	})
+	if _, err := manager.ScanNow(context.Background()); err == nil {
+		t.Fatal("ScanNow() error = nil")
+	}
+	status := manager.Status()
+	if len(status.History) != 1 || status.History[0].Error != "scan failed" ||
+		len(status.History[0].Warnings) != 1 {
 		t.Fatalf("Status() = %#v", status)
 	}
 }

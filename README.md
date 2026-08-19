@@ -9,7 +9,8 @@ changing the client-facing streaming flow.
 
 - recursive scanning and original-format streaming of MP3, FLAC, Ogg/Vorbis, Opus,
   AAC, M4A/ALAC, WAV, AIFF, WMA, APE, WavPack, and Musepack files;
-- periodic background synchronization of local music and torrent metadata;
+- periodic background synchronization of local music and torrent metadata with
+  a bounded maintenance log and warning details in the dashboard;
 - tag extraction with directory/filename fallbacks and conservative repair of legacy Cyrillic encodings;
 - a migrated SQLite metadata catalog;
 - provider-independent artist, album, and logical track identities with local,

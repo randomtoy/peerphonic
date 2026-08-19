@@ -15,7 +15,8 @@ permission-aware navigation areas. The Catalog workspace provides reversible
 artist aliases and targeted metadata overrides without rewriting source files.
 Users with source-management access can also
 start a background library scan and follow its last result from the Sources
-workspace. The Settings workspace changes aggregate torrent upload and download
+workspace. Recent manual and periodic runs, failures, and file warnings remain
+visible in its maintenance log until restart. The Settings workspace changes aggregate torrent upload and download
 limits at runtime and persists them in the metadata database. It also reports
 whether an optional slskd API is configured, reachable, and authenticated
 without exposing the API key to the browser. The Search workspace queries

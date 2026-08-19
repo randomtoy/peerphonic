@@ -124,11 +124,22 @@ type cacheStatusResponse struct {
 }
 
 type libraryScanResponse struct {
-	Scanning       bool   `json:"scanning"`
-	Tracks         int    `json:"tracks"`
-	LastError      string `json:"lastError,omitempty"`
-	LastStartedAt  string `json:"lastStartedAt,omitempty"`
-	LastFinishedAt string `json:"lastFinishedAt,omitempty"`
+	Scanning       bool                     `json:"scanning"`
+	Tracks         int                      `json:"tracks"`
+	LastError      string                   `json:"lastError,omitempty"`
+	CurrentTrigger string                   `json:"currentTrigger,omitempty"`
+	LastStartedAt  string                   `json:"lastStartedAt,omitempty"`
+	LastFinishedAt string                   `json:"lastFinishedAt,omitempty"`
+	History        []libraryScanRunResponse `json:"history"`
+}
+
+type libraryScanRunResponse struct {
+	Trigger    string   `json:"trigger"`
+	Tracks     int      `json:"tracks"`
+	Warnings   []string `json:"warnings"`
+	Error      string   `json:"error,omitempty"`
+	StartedAt  string   `json:"startedAt"`
+	FinishedAt string   `json:"finishedAt"`
 }
 
 type transferSettingsResponse struct {
@@ -976,12 +987,20 @@ func stringSliceContains(values []string, candidate string) bool {
 func newLibraryScanResponse(status scanner.Status) libraryScanResponse {
 	response := libraryScanResponse{
 		Scanning: status.Scanning, Tracks: status.Count, LastError: status.LastError,
+		CurrentTrigger: status.CurrentTrigger,
+		History:        make([]libraryScanRunResponse, 0, len(status.History)),
 	}
 	if !status.LastStartedAt.IsZero() {
 		response.LastStartedAt = status.LastStartedAt.Format(time.RFC3339)
 	}
 	if !status.LastFinishedAt.IsZero() {
 		response.LastFinishedAt = status.LastFinishedAt.Format(time.RFC3339)
+	}
+	for _, run := range status.History {
+		response.History = append(response.History, libraryScanRunResponse{
+			Trigger: run.Trigger, Tracks: run.Tracks, Warnings: run.Warnings, Error: run.Error,
+			StartedAt: run.StartedAt.Format(time.RFC3339), FinishedAt: run.FinishedAt.Format(time.RFC3339),
+		})
 	}
 	return response
 }
