@@ -1,0 +1,144 @@
+{{- if .Values.postgresql.enabled }}
+{{- if not .Values.postgresql.auth.existingSecret }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "peerphonic.postgresqlSecretName" . }}
+  labels:
+    {{- include "peerphonic.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  {{ .Values.postgresql.auth.secretKeys.adminPasswordKey }}: {{ required "postgresql.auth.postgresPassword is required, or set postgresql.auth.existingSecret" .Values.postgresql.auth.postgresPassword | quote }}
+  {{ .Values.postgresql.auth.secretKeys.userPasswordKey }}: {{ required "postgresql.auth.password is required, or set postgresql.auth.existingSecret" .Values.postgresql.auth.password | quote }}
+---
+{{- end }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "peerphonic.postgresqlName" . }}-init
+  labels:
+    {{- include "peerphonic.labels" . | nindent 4 }}
+data:
+  10-peerphonic.sh: |
+    #!/bin/sh
+    set -eu
+    psql -v ON_ERROR_STOP=1 --username postgres --dbname postgres \
+      --set=db_name="$PEERPHONIC_DB_NAME" \
+      --set=db_user="$PEERPHONIC_DB_USER" \
+      --set=db_password="$PEERPHONIC_DB_PASSWORD" <<'EOSQL'
+    SELECT format('CREATE ROLE %I LOGIN PASSWORD %L', :'db_user', :'db_password')
+    WHERE NOT EXISTS (SELECT FROM pg_catalog.pg_roles WHERE rolname = :'db_user') \gexec
+    SELECT format('CREATE DATABASE %I OWNER %I', :'db_name', :'db_user')
+    WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = :'db_name') \gexec
+    EOSQL
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "peerphonic.postgresqlName" . }}
+  labels:
+    {{- include "peerphonic.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  ports:
+    - name: postgresql
+      port: {{ .Values.postgresql.service.port }}
+      targetPort: postgresql
+  selector:
+    {{- include "peerphonic.postgresqlSelectorLabels" . | nindent 4 }}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "peerphonic.postgresqlName" . }}
+  labels:
+    {{- include "peerphonic.labels" . | nindent 4 }}
+spec:
+  serviceName: {{ include "peerphonic.postgresqlName" . }}
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "peerphonic.postgresqlSelectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "peerphonic.postgresqlSelectorLabels" . | nindent 8 }}
+    spec:
+      automountServiceAccountToken: false
+      securityContext:
+        {{- toYaml .Values.postgresql.primary.podSecurityContext | nindent 8 }}
+      containers:
+        - name: postgresql
+          image: "{{ .Values.postgresql.image.repository }}:{{ .Values.postgresql.image.tag }}"
+          imagePullPolicy: {{ .Values.postgresql.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.postgresql.primary.containerSecurityContext | nindent 12 }}
+          ports:
+            - name: postgresql
+              containerPort: {{ .Values.postgresql.service.port }}
+              protocol: TCP
+          env:
+            - name: POSTGRES_USER
+              value: postgres
+            - name: POSTGRES_DB
+              value: postgres
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "peerphonic.postgresqlSecretName" . }}
+                  key: {{ .Values.postgresql.auth.secretKeys.adminPasswordKey }}
+            - name: PEERPHONIC_DB_NAME
+              value: {{ .Values.postgresql.auth.database | quote }}
+            - name: PEERPHONIC_DB_USER
+              value: {{ .Values.postgresql.auth.username | quote }}
+            - name: PEERPHONIC_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "peerphonic.postgresqlSecretName" . }}
+                  key: {{ .Values.postgresql.auth.secretKeys.userPasswordKey }}
+            - name: PGDATA
+              value: /var/lib/postgresql/data/pgdata
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "postgres"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 3
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "postgres", "-d", "postgres"]
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+          resources:
+            {{- toYaml .Values.postgresql.primary.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+            - name: init
+              mountPath: /docker-entrypoint-initdb.d/10-peerphonic.sh
+              subPath: 10-peerphonic.sh
+      volumes:
+        - name: init
+          configMap:
+            name: {{ include "peerphonic.postgresqlName" . }}-init
+            defaultMode: 0555
+        {{- if not .Values.postgresql.primary.persistence.enabled }}
+        - name: data
+          emptyDir: {}
+        {{- end }}
+  {{- if .Values.postgresql.primary.persistence.enabled }}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+      spec:
+        accessModes:
+          {{- toYaml .Values.postgresql.primary.persistence.accessModes | nindent 10 }}
+        {{- with .Values.postgresql.primary.persistence.storageClass }}
+        storageClassName: {{ . | quote }}
+        {{- end }}
+        resources:
+          requests:
+            storage: {{ .Values.postgresql.primary.persistence.size }}
+  {{- end }}
+{{- end }}

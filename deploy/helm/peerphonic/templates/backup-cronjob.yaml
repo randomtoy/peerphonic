@@ -1,0 +1,106 @@
+{{- if and .Values.backup.enabled (not .Values.persistence.enabled) }}
+{{- fail "backup.enabled requires persistence.enabled" }}
+{{- end }}
+{{- if .Values.backup.enabled }}
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "peerphonic.fullname" . }}-backup
+  labels:
+    {{- include "peerphonic.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.backup.schedule | quote }}
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: {{ .Values.backup.successfulJobsHistoryLimit }}
+  failedJobsHistoryLimit: {{ .Values.backup.failedJobsHistoryLimit }}
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: {{ .Values.backup.activeDeadlineSeconds }}
+      template:
+        metadata:
+          labels:
+            {{- include "peerphonic.labels" . | nindent 12 }}
+            app.kubernetes.io/component: backup
+        spec:
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          {{- with .Values.peerphonic.imagePullSecrets }}
+          imagePullSecrets:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          securityContext:
+            {{- toYaml .Values.peerphonic.podSecurityContext | nindent 12 }}
+          affinity:
+            podAffinity:
+              requiredDuringSchedulingIgnoredDuringExecution:
+                - labelSelector:
+                    matchLabels:
+                      {{- include "peerphonic.selectorLabels" . | nindent 22 }}
+                  topologyKey: kubernetes.io/hostname
+          {{- with .Values.nodeSelector }}
+          nodeSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.tolerations }}
+          tolerations:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          containers:
+            - name: backup
+              {{- if eq .Values.database.driver "postgres" }}
+              image: "{{ .Values.backup.postgresImage.repository }}:{{ .Values.backup.postgresImage.tag }}"
+              imagePullPolicy: {{ .Values.backup.postgresImage.pullPolicy }}
+              command: ["sh", "-ec"]
+              args:
+                - |
+                  umask 077
+                  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+                  workspace="$(mktemp -d /tmp/peerphonic-backup.XXXXXX)"
+                  pg_dump --format=custom --file="${workspace}/peerphonic.dump" "$DATABASE_URL"
+                  cp /data/peerphonic.auth.key "${workspace}/peerphonic.auth.key"
+                  (cd "$workspace" && sha256sum peerphonic.dump peerphonic.auth.key > manifest.sha256)
+                  mkdir -p /data/backups
+                  tar -C "$workspace" -czf "/data/backups/peerphonic-${timestamp}.tar.gz" \
+                    manifest.sha256 peerphonic.dump peerphonic.auth.key
+                  rm -rf "$workspace"
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "peerphonic.databaseSecretName" . }}
+                      key: {{ .Values.database.secretKey }}
+              {{- else }}
+              image: "{{ .Values.peerphonic.image.repository }}:{{ default .Chart.AppVersion .Values.peerphonic.image.tag }}"
+              imagePullPolicy: {{ .Values.peerphonic.image.pullPolicy }}
+              command: ["/peerphonic"]
+              args:
+                - backup
+                - --database
+                - /data/peerphonic.db
+                - --output-dir
+                - /data/backups
+              {{- end }}
+              securityContext:
+                {{- toYaml .Values.peerphonic.securityContext | nindent 16 }}
+              resources:
+                {{- toYaml .Values.backup.resources | nindent 16 }}
+              volumeMounts:
+                - name: data
+                  mountPath: /data
+                {{- if eq .Values.database.driver "postgres" }}
+                - name: tmp
+                  mountPath: /tmp
+                {{- end }}
+          volumes:
+            - name: data
+              {{- if .Values.persistence.enabled }}
+              persistentVolumeClaim:
+                claimName: {{ include "peerphonic.dataClaimName" . }}
+              {{- else }}
+              emptyDir: {}
+              {{- end }}
+            {{- if eq .Values.database.driver "postgres" }}
+            - name: tmp
+              emptyDir: {}
+            {{- end }}
+{{- end }}

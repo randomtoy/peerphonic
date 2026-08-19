@@ -1,0 +1,97 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "peerphonic.fullname" . }}
+  labels:
+    {{- include "peerphonic.labels" . | nindent 4 }}
+spec:
+  type: {{ .Values.peerphonic.service.type }}
+  selector:
+    {{- include "peerphonic.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.peerphonic.service.port }}
+      targetPort: http
+      protocol: TCP
+{{- if .Values.peerphonic.torrentService.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "peerphonic.fullname" . }}-torrent
+  labels:
+    {{- include "peerphonic.labels" . | nindent 4 }}
+  {{- with .Values.peerphonic.torrentService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.peerphonic.torrentService.type }}
+  {{- with .Values.peerphonic.torrentService.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ . }}
+  {{- end }}
+  selector:
+    {{- include "peerphonic.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: torrent-tcp
+      port: {{ .Values.peerphonic.torrent.port }}
+      targetPort: torrent-tcp
+      protocol: TCP
+      {{- if and (eq .Values.peerphonic.torrentService.type "NodePort") .Values.peerphonic.torrentService.nodePort }}
+      nodePort: {{ .Values.peerphonic.torrentService.nodePort }}
+      {{- end }}
+    - name: torrent-udp
+      port: {{ .Values.peerphonic.torrent.port }}
+      targetPort: torrent-udp
+      protocol: UDP
+      {{- if and (eq .Values.peerphonic.torrentService.type "NodePort") .Values.peerphonic.torrentService.nodePort }}
+      nodePort: {{ .Values.peerphonic.torrentService.nodePort }}
+      {{- end }}
+{{- end }}
+{{- if .Values.slskd.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "peerphonic.fullname" . }}-slskd
+  labels:
+    {{- include "peerphonic.labels" . | nindent 4 }}
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "peerphonic.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: http
+      port: {{ .Values.slskd.service.port }}
+      targetPort: slskd-http
+      protocol: TCP
+{{- if .Values.slskd.networkService.enabled }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "peerphonic.fullname" . }}-soulseek
+  labels:
+    {{- include "peerphonic.labels" . | nindent 4 }}
+  {{- with .Values.slskd.networkService.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  type: {{ .Values.slskd.networkService.type }}
+  {{- with .Values.slskd.networkService.externalTrafficPolicy }}
+  externalTrafficPolicy: {{ . }}
+  {{- end }}
+  selector:
+    {{- include "peerphonic.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: soulseek
+      port: {{ .Values.slskd.listenPort }}
+      targetPort: soulseek
+      protocol: TCP
+      {{- if and (eq .Values.slskd.networkService.type "NodePort") .Values.slskd.networkService.nodePort }}
+      nodePort: {{ .Values.slskd.networkService.nodePort }}
+      {{- end }}
+{{- end }}
+{{- end }}
+

@@ -1,0 +1,119 @@
+peerphonic:
+  image:
+    repository: ghcr.io/randomtoy/peerphonic
+  imagePullSecrets:
+    - name: peerphonic-ghcr
+  cacheSizeBytes: "10737418240"
+  scanOnStart: true
+  scanIntervalSeconds: 300
+  torrent:
+    seed: true
+    port: 42069
+    portForwarding: false
+    maxActiveDownloads: 3
+  torrentService:
+    enabled: true
+    type: LoadBalancer
+    externalTrafficPolicy: Local
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: "2"
+      memory: 2Gi
+
+web:
+  enabled: true
+  image:
+    repository: ghcr.io/randomtoy/peerphonic-web
+  imagePullSecrets:
+    - name: peerphonic-ghcr
+  resources:
+    requests:
+      cpu: 25m
+      memory: 32Mi
+    limits:
+      cpu: 250m
+      memory: 128Mi
+
+database:
+  driver: postgres
+  existingSecret: peerphonic-auth
+  secretKey: database-url
+
+postgresql:
+  enabled: true
+  image:
+    repository: postgres
+    tag: "17-alpine"
+  auth:
+    username: peerphonic
+    database: peerphonic
+    existingSecret: peerphonic-postgresql
+    secretKeys:
+      adminPasswordKey: postgres-password
+      userPasswordKey: password
+  primary:
+    persistence:
+      enabled: true
+      storageClass: local-path
+      size: 10Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+slskd:
+  enabled: true
+  remoteConfiguration: true
+  networkService:
+    enabled: true
+    type: LoadBalancer
+    externalTrafficPolicy: Local
+  resources:
+    requests:
+      cpu: 50m
+      memory: 128Mi
+    limits:
+      cpu: "1"
+      memory: 1Gi
+
+auth:
+  existingSecret: peerphonic-auth
+
+persistence:
+  enabled: true
+  storageClass: local-path
+  size: 20Gi
+
+music:
+  readOnly: true
+  persistence:
+    enabled: true
+    storageClass: local-path
+    size: 10Gi
+
+backup:
+  enabled: true
+  schedule: "0 3 * * *"
+
+ingress:
+  enabled: true
+  className: traefik
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: websecure
+    traefik.ingress.kubernetes.io/router.tls: "true"
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+  hosts:
+    - host: peerphonic.randomtoy.dev
+      paths:
+        - path: /
+          pathType: Prefix
+  tls:
+    - secretName: peerphonic-tls
+      hosts:
+        - peerphonic.randomtoy.dev

@@ -1,0 +1,1394 @@
+package torrent
+
+import (
+	"context"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"path"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+	"unicode"
+
+	torrentclient "github.com/anacrolix/torrent"
+	"github.com/anacrolix/torrent/metainfo"
+	"github.com/anacrolix/torrent/storage"
+	"github.com/randomtoy/peerphonic/backend/internal/audioformat"
+	"github.com/randomtoy/peerphonic/backend/internal/core/domain"
+	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
+	"golang.org/x/time/rate"
+)
+
+const Name = "torrent"
+
+var imageContentTypes = map[string]string{
+	".gif": "image/gif", ".jpeg": "image/jpeg", ".jpg": "image/jpeg",
+	".png": "image/png", ".webp": "image/webp",
+}
+
+const streamReadahead = 8 << 20
+const defaultMaxActiveDownloads = 3
+
+const legacyVerificationMarker = ".peerphonic-legacy-unverified"
+
+type Provider struct {
+	metadataRoot string
+	dataRoot     string
+	options      StreamingOptions
+	optionsMu    sync.RWMutex
+
+	clientMu        sync.Mutex
+	client          *torrentclient.Client
+	uploadLimiter   *rate.Limiter
+	downloadLimiter *rate.Limiter
+	operation       sync.RWMutex
+	legacyMu        sync.Mutex
+
+	cacheMu        sync.Mutex
+	cacheFiles     map[string]cacheFile
+	active         map[string]int
+	streams        map[string]int
+	lastAccessed   map[string]time.Time
+	onCacheChanged func()
+
+	artworkMu sync.RWMutex
+	artworks  map[string]domain.SourceRef
+
+	completionMu sync.Mutex
+	completionWG sync.WaitGroup
+	trackIDs     map[string]string
+	completed    map[string]bool
+	onCompleted  func(CompletedFile)
+	closing      bool
+
+	downloadMu       sync.Mutex
+	downloads        map[string]downloadRecord
+	activeDownloads  map[string]*torrentclient.File
+	pendingDownloads map[string]*torrentclient.File
+	downloadSlots    chan struct{}
+	downloadCtx      context.Context
+	downloadCancel   context.CancelFunc
+	downloadWG       sync.WaitGroup
+}
+
+type StreamingOptions struct {
+	Seed               bool
+	ListenPort         int
+	PortForwarding     bool
+	UploadLimit        int64
+	DownloadLimit      int64
+	MaxActiveDownloads int
+}
+
+type CompletedFile struct {
+	TrackID string
+	Path    string
+}
+
+type Catalog struct {
+	InfoHash string
+	Name     string
+	Tracks   []domain.TrackSource
+}
+
+type catalogFile struct {
+	parts       []string
+	length      int64
+	extension   string
+	contentType string
+}
+
+type cacheFile struct {
+	infoHash    string
+	logicalPath string
+}
+
+type evictionCandidate struct {
+	key          string
+	infoHash     string
+	path         string
+	lastAccessed time.Time
+	size         int64
+}
+
+func New() *Provider {
+	downloadCtx, downloadCancel := context.WithCancel(context.Background())
+	return &Provider{
+		artworks:         make(map[string]domain.SourceRef),
+		trackIDs:         make(map[string]string),
+		completed:        make(map[string]bool),
+		cacheFiles:       make(map[string]cacheFile),
+		active:           make(map[string]int),
+		streams:          make(map[string]int),
+		lastAccessed:     make(map[string]time.Time),
+		downloads:        make(map[string]downloadRecord),
+		activeDownloads:  make(map[string]*torrentclient.File),
+		pendingDownloads: make(map[string]*torrentclient.File),
+		downloadSlots:    make(chan struct{}, defaultMaxActiveDownloads),
+		downloadCtx:      downloadCtx,
+		downloadCancel:   downloadCancel,
+	}
+}
+
+// NewStreaming configures a provider that joins a swarm only when media or
+// artwork is opened. Downloaded pieces are persisted under dataRoot and
+// partitioned by info hash so torrents with matching internal paths cannot
+// corrupt each other's cache.
+func NewStreaming(metadataRoot, dataRoot string, options ...StreamingOptions) (*Provider, error) {
+	metadataRoot, err := filepath.Abs(metadataRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve torrent metadata directory: %w", err)
+	}
+	dataRoot, err = filepath.Abs(dataRoot)
+	if err != nil {
+		return nil, fmt.Errorf("resolve torrent data directory: %w", err)
+	}
+	provider := New()
+	provider.metadataRoot = metadataRoot
+	provider.dataRoot = dataRoot
+	if len(options) != 0 {
+		provider.options = options[0]
+	}
+	if provider.options.MaxActiveDownloads <= 0 {
+		provider.options.MaxActiveDownloads = defaultMaxActiveDownloads
+	}
+	provider.downloadSlots = make(chan struct{}, provider.options.MaxActiveDownloads)
+	return provider, nil
+}
+
+func (*Provider) Name() string { return Name }
+
+func (p *Provider) TransferLimits(ctx context.Context) (domain.TransferLimits, error) {
+	if err := ctx.Err(); err != nil {
+		return domain.TransferLimits{}, err
+	}
+	p.optionsMu.RLock()
+	defer p.optionsMu.RUnlock()
+	return domain.TransferLimits{
+		UploadBytesPerSecond:   p.options.UploadLimit,
+		DownloadBytesPerSecond: p.options.DownloadLimit,
+	}, nil
+}
+
+func (p *Provider) SetTransferLimits(ctx context.Context, limits domain.TransferLimits) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if limits.UploadBytesPerSecond < 0 || limits.DownloadBytesPerSecond < 0 {
+		return fmt.Errorf("transfer limits must be non-negative")
+	}
+	p.clientMu.Lock()
+	defer p.clientMu.Unlock()
+	p.optionsMu.Lock()
+	p.options.UploadLimit = limits.UploadBytesPerSecond
+	p.options.DownloadLimit = limits.DownloadBytesPerSecond
+	p.optionsMu.Unlock()
+	setRateLimit(p.uploadLimiter, limits.UploadBytesPerSecond)
+	setRateLimit(p.downloadLimiter, limits.DownloadBytesPerSecond)
+	return nil
+}
+
+func (*Provider) Search(context.Context, domain.SearchQuery) ([]domain.TrackSource, error) {
+	return nil, nil
+}
+
+func (p *Provider) Resolve(ctx context.Context, trackID string, ref domain.SourceRef) (ports.ResolvedSource, error) {
+	if ref.Provider != Name {
+		return ports.ResolvedSource{}, fmt.Errorf("cannot resolve provider %q", ref.Provider)
+	}
+	if trackID != "" {
+		p.registerTrack(ref.Key, trackID)
+	}
+	return p.open(ctx, ref)
+}
+
+func (p *Provider) OpenArtwork(ctx context.Context, id string) (ports.ResolvedSource, error) {
+	p.artworkMu.RLock()
+	ref, ok := p.artworks[id]
+	p.artworkMu.RUnlock()
+	if !ok {
+		return ports.ResolvedSource{}, ports.ErrNotFound
+	}
+	return p.open(ctx, ref)
+}
+
+func (p *Provider) SetCompletedHandler(handler func(CompletedFile)) {
+	p.completionMu.Lock()
+	p.onCompleted = handler
+	p.completionMu.Unlock()
+}
+
+func (p *Provider) SetCacheChangedHandler(handler func()) {
+	p.cacheMu.Lock()
+	p.onCacheChanged = handler
+	p.cacheMu.Unlock()
+}
+
+// CachedPath returns a fully materialized file without starting the torrent
+// client. Incomplete files remain provider-owned .part data and are ignored.
+func (p *Provider) CachedPath(ref domain.SourceRef, expectedSize int64) (string, bool) {
+	if ref.Provider != Name {
+		return "", false
+	}
+	infoHash, logicalPath, err := parseSourceKey(ref.Key)
+	if err != nil {
+		return "", false
+	}
+	if err := p.migrateLegacyFile(infoHash, logicalPath); err != nil {
+		return "", false
+	}
+	mediaPath := p.cachePath(infoHash, logicalPath)
+	info, err := os.Stat(mediaPath)
+	if err != nil || !info.Mode().IsRegular() || (expectedSize > 0 && info.Size() != expectedSize) {
+		return "", false
+	}
+	return mediaPath, true
+}
+
+// CacheUsage reports physical disk allocation rather than logical file sizes,
+// because incomplete torrent files can be sparse.
+func (p *Provider) CacheUsage(ctx context.Context) (domain.CacheUsage, error) {
+	usage := domain.CacheUsage{Name: Name}
+	err := filepath.WalkDir(p.dataRoot, func(filePath string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			if os.IsNotExist(walkErr) && filePath == p.dataRoot {
+				return filepath.SkipDir
+			}
+			return walkErr
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		usage.Size += allocatedFileSize(info)
+		if strings.HasPrefix(entry.Name(), ".torrent.db") {
+			return nil
+		}
+		usage.Entries++
+		if strings.HasSuffix(entry.Name(), ".part") {
+			usage.PartialEntries++
+		}
+		return nil
+	})
+	if err != nil {
+		return domain.CacheUsage{}, fmt.Errorf("inspect torrent cache: %w", err)
+	}
+	return usage, nil
+}
+
+// Transfers returns a point-in-time snapshot of torrents attached by media or
+// artwork requests. It does not join inactive catalog torrents to collect data.
+func (p *Provider) Transfers(ctx context.Context) ([]domain.SourceTransfer, error) {
+	p.operation.RLock()
+	defer p.operation.RUnlock()
+
+	p.clientMu.Lock()
+	client := p.client
+	p.clientMu.Unlock()
+	if client == nil {
+		return []domain.SourceTransfer{}, nil
+	}
+	p.cacheMu.Lock()
+	streams := make(map[string]int, len(p.streams))
+	for infoHash, count := range p.streams {
+		streams[infoHash] = count
+	}
+	p.cacheMu.Unlock()
+	limits, err := p.TransferLimits(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	torrents := client.Torrents()
+	transfers := make([]domain.SourceTransfer, 0, len(torrents))
+	for _, torrent := range torrents {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		stats := torrent.Stats()
+		infoHash := torrent.InfoHash().HexString()
+		transfers = append(transfers, domain.SourceTransfer{
+			Provider: Name, ID: infoHash, Name: torrent.Name(),
+			CompletedBytes: torrent.BytesCompleted(), TotalBytes: torrent.Length(),
+			DownloadedBytes: stats.BytesReadUsefulData.Int64(),
+			UploadedBytes:   stats.BytesWrittenData.Int64(),
+			DownloadLimit:   limits.DownloadBytesPerSecond,
+			UploadLimit:     limits.UploadBytesPerSecond,
+			Peers:           stats.TotalPeers, ActivePeers: stats.ActivePeers,
+			ConnectedSeeders: stats.ConnectedSeeders,
+			ActiveStreams:    streams[infoHash],
+			Seeding:          torrent.Seeding(),
+		})
+	}
+	sort.Slice(transfers, func(i, j int) bool {
+		if transfers[i].Name == transfers[j].Name {
+			return transfers[i].ID < transfers[j].ID
+		}
+		return transfers[i].Name < transfers[j].Name
+	})
+	return transfers, nil
+}
+
+func (p *Provider) ManagedSources(ctx context.Context) ([]domain.ManagedSource, error) {
+	p.operation.RLock()
+	defer p.operation.RUnlock()
+	entries, err := os.ReadDir(p.metadataRoot)
+	if os.IsNotExist(err) {
+		return []domain.ManagedSource{}, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read torrent metadata directory: %w", err)
+	}
+	result := make([]domain.ManagedSource, 0, len(entries))
+	for _, entry := range entries {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if entry.IsDir() || !strings.EqualFold(filepath.Ext(entry.Name()), ".torrent") {
+			continue
+		}
+		file, err := os.Open(filepath.Join(p.metadataRoot, entry.Name()))
+		if err != nil {
+			return nil, fmt.Errorf("open torrent metadata %q: %w", entry.Name(), err)
+		}
+		catalog, readErr := p.ReadCatalog(file)
+		closeErr := file.Close()
+		if readErr != nil {
+			return nil, fmt.Errorf("read torrent metadata %q: %w", entry.Name(), readErr)
+		}
+		if closeErr != nil {
+			return nil, fmt.Errorf("close torrent metadata %q: %w", entry.Name(), closeErr)
+		}
+		result = append(result, domain.ManagedSource{
+			Provider: Name, ID: catalog.InfoHash, Name: catalog.Name, Tracks: len(catalog.Tracks),
+			Attached: p.torrentAttached(catalog.InfoHash),
+			Paused:   p.sourceMarkerExists(catalog.InfoHash, "paused"),
+			Pinned:   p.sourceMarkerExists(catalog.InfoHash, "pinned"),
+		})
+	}
+	sort.Slice(result, func(i, j int) bool {
+		if result[i].Name == result[j].Name {
+			return result[i].ID < result[j].ID
+		}
+		return result[i].Name < result[j].Name
+	})
+	return result, nil
+}
+
+func (p *Provider) PauseSource(_ context.Context, id string) error {
+	return p.setSourcePaused(id, true)
+}
+
+func (p *Provider) ResumeSource(ctx context.Context, id string) error {
+	if err := p.setSourcePaused(id, false); err != nil {
+		return err
+	}
+	return p.ResumeTrackDownloads(ctx)
+}
+
+func (p *Provider) PinSource(_ context.Context, id string, pinned bool) error {
+	p.operation.RLock()
+	defer p.operation.RUnlock()
+	if err := p.validateSourceID(id); err != nil {
+		return err
+	}
+	return p.setSourceMarker(id, "pinned", pinned)
+}
+
+func (p *Provider) RemoveSource(ctx context.Context, id string, deleteData bool) error {
+	p.operation.Lock()
+	defer p.operation.Unlock()
+	if err := p.validateSourceID(id); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	p.cacheMu.Lock()
+	active := p.active[id]
+	p.cacheMu.Unlock()
+	if active > 0 {
+		return ports.ErrSourceBusy
+	}
+	p.dropTorrent(id)
+	if err := os.Remove(filepath.Join(p.metadataRoot, id+".torrent")); err != nil {
+		if os.IsNotExist(err) {
+			return ports.ErrNotFound
+		}
+		return fmt.Errorf("remove torrent metadata: %w", err)
+	}
+	for _, state := range []string{"paused", "pinned"} {
+		if err := os.Remove(p.sourceMarkerPath(id, state)); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove torrent %s marker: %w", state, err)
+		}
+	}
+	if err := p.removeDownloadsForSource(id); err != nil {
+		return err
+	}
+	if deleteData {
+		if err := os.RemoveAll(filepath.Join(p.dataRoot, id)); err != nil {
+			return fmt.Errorf("remove torrent cache data: %w", err)
+		}
+	}
+	return nil
+}
+
+// Evict removes least recently accessed torrent files. Active torrents are
+// skipped, and an inactive torrent is dropped from the client before any of
+// its files are removed so piece completion is re-evaluated on the next open.
+func (p *Provider) Evict(ctx context.Context, bytes int64) (int64, error) {
+	if bytes <= 0 {
+		return 0, nil
+	}
+	p.operation.Lock()
+	defer p.operation.Unlock()
+
+	candidates, err := p.evictionCandidates(ctx)
+	if err != nil {
+		return 0, err
+	}
+	sort.Slice(candidates, func(left, right int) bool {
+		return candidates[left].lastAccessed.Before(candidates[right].lastAccessed)
+	})
+	dropped := make(map[string]bool)
+	var freed int64
+	for _, candidate := range candidates {
+		if err := ctx.Err(); err != nil {
+			return freed, err
+		}
+		p.cacheMu.Lock()
+		active := p.active[candidate.infoHash]
+		p.cacheMu.Unlock()
+		if active > 0 || p.sourceMarkerExists(candidate.infoHash, "pinned") {
+			continue
+		}
+		if !dropped[candidate.infoHash] {
+			p.dropTorrent(candidate.infoHash)
+			dropped[candidate.infoHash] = true
+		}
+		if err := os.Remove(candidate.path); err != nil {
+			if os.IsNotExist(err) {
+				continue
+			}
+			return freed, fmt.Errorf("remove cached torrent file %q: %w", candidate.path, err)
+		}
+		freed += candidate.size
+		p.markDownloadEvicted(candidate.key)
+		p.cacheMu.Lock()
+		delete(p.lastAccessed, candidate.key)
+		p.cacheMu.Unlock()
+		if freed >= bytes {
+			break
+		}
+	}
+	return freed, nil
+}
+
+func (p *Provider) Close() error {
+	p.cacheMu.Lock()
+	p.onCacheChanged = nil
+	p.cacheMu.Unlock()
+	p.completionMu.Lock()
+	p.closing = true
+	p.completionMu.Unlock()
+	p.downloadCancel()
+	p.downloadWG.Wait()
+	p.operation.Lock()
+	p.clientMu.Lock()
+	client := p.client
+	p.client = nil
+	p.uploadLimiter = nil
+	p.downloadLimiter = nil
+	p.clientMu.Unlock()
+	var err error
+	if client != nil {
+		err = errors.Join(client.Close()...)
+	}
+	p.operation.Unlock()
+	p.completionWG.Wait()
+	if client == nil {
+		return nil
+	}
+	return err
+}
+
+func (p *Provider) ReadCatalog(reader io.Reader) (Catalog, error) {
+	meta, err := metainfo.Load(reader)
+	if err != nil {
+		return Catalog{}, fmt.Errorf("read torrent metainfo: %w", err)
+	}
+	info, err := meta.UnmarshalInfo()
+	if err != nil {
+		return Catalog{}, fmt.Errorf("decode torrent info: %w", err)
+	}
+	name := strings.TrimSpace(info.BestName())
+	if name == "" {
+		return Catalog{}, fmt.Errorf("torrent name is empty")
+	}
+	infoHash := meta.HashInfoBytes().HexString()
+	if err := p.migrateLegacyData(infoHash, info); err != nil {
+		return Catalog{}, fmt.Errorf("migrate legacy torrent cache: %w", err)
+	}
+	result := Catalog{InfoHash: infoHash, Name: name}
+	var audioFiles []catalogFile
+	var artworkFiles []catalogFile
+	for _, file := range info.UpvertedFiles() {
+		parts, err := safePath(name, file.BestPath())
+		if err != nil {
+			return Catalog{}, err
+		}
+		extension := strings.ToLower(path.Ext(parts[len(parts)-1]))
+		if format, supported := audioformat.ByExtension(extension); supported {
+			audioFiles = append(audioFiles, catalogFile{
+				parts: parts, length: file.Length, extension: extension, contentType: format.ContentType,
+			})
+		} else if contentType, supported := imageContentTypes[extension]; supported {
+			artworkFiles = append(artworkFiles, catalogFile{
+				parts: parts, length: file.Length, extension: extension, contentType: contentType,
+			})
+		}
+	}
+	for _, file := range audioFiles {
+		track := makeTrack(infoHash, file.parts, file.length, file.extension, file.contentType)
+		p.registerTrack(track.Ref.Key, track.Track.ID)
+		p.registerCacheFile(track.Ref.Key, infoHash, strings.Join(file.parts, "/"))
+		if artwork, ok := bestArtwork(file.parts, artworkFiles); ok {
+			logicalPath := strings.Join(artwork.parts, "/")
+			id := domain.StableID("torrentart", infoHash, logicalPath)
+			track.Track.CoverArtID = id
+			p.registerArtwork(id, domain.SourceRef{Provider: Name, Key: infoHash + "/" + logicalPath})
+		}
+		result.Tracks = append(result.Tracks, track)
+	}
+	for _, file := range artworkFiles {
+		logicalPath := strings.Join(file.parts, "/")
+		p.registerCacheFile(infoHash+"/"+logicalPath, infoHash, logicalPath)
+	}
+	return result, nil
+}
+
+func (p *Provider) open(ctx context.Context, ref domain.SourceRef) (ports.ResolvedSource, error) {
+	p.operation.RLock()
+	defer p.operation.RUnlock()
+
+	infoHash, logicalPath, err := parseSourceKey(ref.Key)
+	if err != nil {
+		return ports.ResolvedSource{}, err
+	}
+	if p.sourceMarkerExists(infoHash, "paused") {
+		return ports.ResolvedSource{}, fmt.Errorf("%w: torrent source is paused", ports.ErrSourceUnavailable)
+	}
+	client, err := p.ensureClient()
+	if err != nil {
+		return ports.ResolvedSource{}, err
+	}
+	metadataPath := filepath.Join(p.metadataRoot, infoHash+".torrent")
+	meta, err := metainfo.LoadFromFile(metadataPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return ports.ResolvedSource{}, fmt.Errorf("%w: torrent metadata is missing", ports.ErrSourceUnavailable)
+		}
+		return ports.ResolvedSource{}, fmt.Errorf("load torrent %s: %w", infoHash, err)
+	}
+	if meta.HashInfoBytes().HexString() != infoHash {
+		return ports.ResolvedSource{}, fmt.Errorf("%w: torrent metadata hash does not match source", ports.ErrSourceUnavailable)
+	}
+	info, err := meta.UnmarshalInfo()
+	if err != nil {
+		return ports.ResolvedSource{}, fmt.Errorf("decode torrent %s: %w", infoHash, err)
+	}
+	if err := p.migrateLegacyData(infoHash, info); err != nil {
+		return ports.ResolvedSource{}, fmt.Errorf("migrate torrent %s cache: %w", infoHash, err)
+	}
+	if err := p.prepareLegacyData(infoHash, info); err != nil {
+		return ports.ResolvedSource{}, fmt.Errorf("prepare torrent %s cache verification: %w", infoHash, err)
+	}
+	if err := p.reconcileCacheData(infoHash, info); err != nil {
+		return ports.ResolvedSource{}, fmt.Errorf("reconcile torrent %s cache: %w", infoHash, err)
+	}
+	spec, err := torrentclient.TorrentSpecFromMetaInfoErr(meta)
+	if err != nil {
+		return ports.ResolvedSource{}, fmt.Errorf("create torrent %s spec: %w", infoHash, err)
+	}
+	torrent, _, err := client.AddTorrentSpec(spec)
+	if err != nil {
+		return ports.ResolvedSource{}, fmt.Errorf("add torrent %s: %w", infoHash, err)
+	}
+	select {
+	case <-torrent.GotInfo():
+	case <-ctx.Done():
+		return ports.ResolvedSource{}, ctx.Err()
+	}
+	for _, file := range torrent.Files() {
+		if file.Path() != logicalPath {
+			continue
+		}
+		if fileExists(p.cachePath(infoHash, logicalPath) + ".part") {
+			for pieceIndex := file.BeginPieceIndex(); pieceIndex < file.EndPieceIndex(); pieceIndex++ {
+				if err := torrent.Piece(pieceIndex).VerifyDataContext(ctx); err != nil {
+					return ports.ResolvedSource{}, fmt.Errorf("verify cached torrent file %q: %w", logicalPath, err)
+				}
+			}
+		}
+		p.queueTrackDownload(ref, infoHash, logicalPath, file)
+		reader := file.NewReader()
+		reader.SetContext(ctx)
+		reader.SetReadahead(streamReadahead)
+		p.retainStream(infoHash, ref.Key)
+		return ports.ResolvedSource{
+			Content: &boundedReader{
+				ReadSeekCloser: reader,
+				length:         file.Length(),
+				contiguous:     true,
+				onComplete: func() {
+					p.notifyCompleted(ref, logicalPath)
+				},
+				onClose: func() { p.releaseStream(infoHash) },
+			},
+			Name: path.Base(logicalPath), ContentType: contentType(logicalPath),
+			Size: file.Length(), ModTime: time.Time{}, Revision: ref.Key,
+		}, nil
+	}
+	return ports.ResolvedSource{}, fmt.Errorf("%w: torrent file %q is missing", ports.ErrSourceUnavailable, logicalPath)
+}
+
+func (p *Provider) evictionCandidates(ctx context.Context) ([]evictionCandidate, error) {
+	p.cacheMu.Lock()
+	files := make(map[string]cacheFile, len(p.cacheFiles))
+	accessed := make(map[string]time.Time, len(p.lastAccessed))
+	for key, file := range p.cacheFiles {
+		files[key] = file
+	}
+	for key, value := range p.lastAccessed {
+		accessed[key] = value
+	}
+	p.cacheMu.Unlock()
+
+	var candidates []evictionCandidate
+	for key, file := range files {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		filePath := p.cachePath(file.infoHash, file.logicalPath)
+		info, err := os.Stat(filePath)
+		if os.IsNotExist(err) {
+			filePath += ".part"
+			info, err = os.Stat(filePath)
+		}
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("inspect cached torrent file %q: %w", filePath, err)
+		}
+		if !info.Mode().IsRegular() {
+			continue
+		}
+		lastAccessed := accessed[key]
+		if lastAccessed.IsZero() {
+			lastAccessed = info.ModTime()
+		}
+		candidates = append(candidates, evictionCandidate{
+			key: key, infoHash: file.infoHash, path: filePath,
+			lastAccessed: lastAccessed, size: allocatedFileSize(info),
+		})
+	}
+	return candidates, nil
+}
+
+func (p *Provider) dropTorrent(infoHash string) {
+	hash := metainfo.NewHashFromHex(infoHash)
+	p.clientMu.Lock()
+	client := p.client
+	p.clientMu.Unlock()
+	if client == nil {
+		return
+	}
+	if torrent, ok := client.Torrent(hash); ok {
+		torrent.Drop()
+	}
+}
+
+func (p *Provider) torrentAttached(infoHash string) bool {
+	hash := metainfo.NewHashFromHex(infoHash)
+	p.clientMu.Lock()
+	client := p.client
+	p.clientMu.Unlock()
+	if client == nil {
+		return false
+	}
+	_, ok := client.Torrent(hash)
+	return ok
+}
+
+func (p *Provider) setSourcePaused(id string, paused bool) error {
+	p.operation.RLock()
+	defer p.operation.RUnlock()
+	if err := p.validateSourceID(id); err != nil {
+		return err
+	}
+	if err := p.setSourceMarker(id, "paused", paused); err != nil {
+		return err
+	}
+	hash := metainfo.NewHashFromHex(id)
+	p.clientMu.Lock()
+	client := p.client
+	p.clientMu.Unlock()
+	if client == nil {
+		return nil
+	}
+	torrent, ok := client.Torrent(hash)
+	if !ok {
+		return nil
+	}
+	if paused {
+		torrent.DisallowDataDownload()
+		torrent.DisallowDataUpload()
+	} else {
+		torrent.AllowDataDownload()
+		torrent.AllowDataUpload()
+	}
+	return nil
+}
+
+func (p *Provider) validateSourceID(id string) error {
+	if len(id) != 40 {
+		return fmt.Errorf("invalid torrent info hash")
+	}
+	if _, err := hex.DecodeString(id); err != nil {
+		return fmt.Errorf("invalid torrent info hash: %w", err)
+	}
+	if _, err := os.Stat(filepath.Join(p.metadataRoot, id+".torrent")); err != nil {
+		if os.IsNotExist(err) {
+			return ports.ErrNotFound
+		}
+		return fmt.Errorf("stat torrent metadata: %w", err)
+	}
+	return nil
+}
+
+func (p *Provider) sourceMarkerPath(id, state string) string {
+	return filepath.Join(p.metadataRoot, id+"."+state)
+}
+
+func (p *Provider) sourceMarkerExists(id, state string) bool {
+	return fileExists(p.sourceMarkerPath(id, state))
+}
+
+func (p *Provider) setSourceMarker(id, state string, enabled bool) error {
+	markerPath := p.sourceMarkerPath(id, state)
+	if !enabled {
+		if err := os.Remove(markerPath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove torrent %s marker: %w", state, err)
+		}
+		return nil
+	}
+	if err := os.MkdirAll(p.metadataRoot, 0o755); err != nil {
+		return fmt.Errorf("create torrent metadata directory: %w", err)
+	}
+	if err := os.WriteFile(markerPath, nil, 0o600); err != nil {
+		return fmt.Errorf("write torrent %s marker: %w", state, err)
+	}
+	return nil
+}
+
+func (p *Provider) ensureClient() (*torrentclient.Client, error) {
+	p.clientMu.Lock()
+	defer p.clientMu.Unlock()
+	if p.client != nil {
+		return p.client, nil
+	}
+	if p.metadataRoot == "" || p.dataRoot == "" {
+		return nil, fmt.Errorf("%w: torrent streaming is not configured", ports.ErrSourceUnavailable)
+	}
+	if err := os.MkdirAll(p.dataRoot, 0o755); err != nil {
+		return nil, fmt.Errorf("create torrent data directory: %w", err)
+	}
+	config := torrentclient.NewDefaultClientConfig()
+	p.optionsMu.RLock()
+	options := p.options
+	p.optionsMu.RUnlock()
+	config.DataDir = p.dataRoot
+	config.DefaultStorage = storage.NewFileByInfoHash(p.dataRoot)
+	config.ListenPort = options.ListenPort
+	config.NoDefaultPortForwarding = !options.PortForwarding
+	config.Seed = options.Seed
+	applyTransferLimits(config, options)
+	config.Slogger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	client, err := torrentclient.NewClient(config)
+	if err != nil {
+		return nil, fmt.Errorf("start torrent client: %w", err)
+	}
+	p.client = client
+	p.uploadLimiter = config.UploadRateLimiter
+	p.downloadLimiter = config.DownloadRateLimiter
+	return client, nil
+}
+
+func applyTransferLimits(config *torrentclient.ClientConfig, options StreamingOptions) {
+	if options.UploadLimit > 0 {
+		config.UploadRateLimiter = rate.NewLimiter(
+			rate.Limit(options.UploadLimit),
+			max(config.MaxAllocPeerRequestDataPerConn, 256<<10),
+		)
+	}
+	if options.DownloadLimit > 0 {
+		config.DownloadRateLimiter = rate.NewLimiter(rate.Limit(options.DownloadLimit), 0)
+	}
+}
+
+func setRateLimit(limiter *rate.Limiter, bytesPerSecond int64) {
+	if limiter == nil {
+		return
+	}
+	limit := rate.Inf
+	if bytesPerSecond > 0 {
+		limit = rate.Limit(bytesPerSecond)
+	}
+	limiter.SetLimit(limit)
+}
+
+func parseSourceKey(key string) (infoHash, logicalPath string, err error) {
+	infoHash, logicalPath, ok := strings.Cut(key, "/")
+	if !ok || logicalPath == "" || len(infoHash) != 40 {
+		return "", "", fmt.Errorf("invalid torrent source key")
+	}
+	if _, err := hex.DecodeString(infoHash); err != nil {
+		return "", "", fmt.Errorf("invalid torrent info hash: %w", err)
+	}
+	if path.Clean(logicalPath) != logicalPath || strings.HasPrefix(logicalPath, "../") {
+		return "", "", fmt.Errorf("invalid torrent source path")
+	}
+	return infoHash, logicalPath, nil
+}
+
+func contentType(name string) string {
+	extension := strings.ToLower(path.Ext(name))
+	if format, ok := audioformat.ByExtension(extension); ok {
+		return format.ContentType
+	}
+	return imageContentTypes[extension]
+}
+
+func (p *Provider) registerArtwork(id string, ref domain.SourceRef) {
+	p.artworkMu.Lock()
+	p.artworks[id] = ref
+	p.artworkMu.Unlock()
+}
+
+func (p *Provider) registerTrack(sourceKey, trackID string) {
+	p.completionMu.Lock()
+	p.trackIDs[sourceKey] = trackID
+	p.completionMu.Unlock()
+}
+
+func (p *Provider) registerCacheFile(key, infoHash, logicalPath string) {
+	p.cacheMu.Lock()
+	p.cacheFiles[key] = cacheFile{infoHash: infoHash, logicalPath: logicalPath}
+	p.cacheMu.Unlock()
+}
+
+func (p *Provider) retain(infoHash, key string) {
+	p.cacheMu.Lock()
+	p.active[infoHash]++
+	p.lastAccessed[key] = time.Now().UTC()
+	p.cacheMu.Unlock()
+}
+
+func (p *Provider) retainStream(infoHash, key string) {
+	p.cacheMu.Lock()
+	p.active[infoHash]++
+	p.streams[infoHash]++
+	p.lastAccessed[key] = time.Now().UTC()
+	p.cacheMu.Unlock()
+}
+
+func (p *Provider) release(infoHash string) {
+	p.cacheMu.Lock()
+	decrementCount(p.active, infoHash)
+	handler := p.onCacheChanged
+	p.cacheMu.Unlock()
+	if handler != nil {
+		handler()
+	}
+}
+
+func (p *Provider) releaseStream(infoHash string) {
+	p.cacheMu.Lock()
+	decrementCount(p.active, infoHash)
+	decrementCount(p.streams, infoHash)
+	handler := p.onCacheChanged
+	p.cacheMu.Unlock()
+	if handler != nil {
+		handler()
+	}
+}
+
+func decrementCount(counts map[string]int, key string) {
+	if counts[key] <= 1 {
+		delete(counts, key)
+	} else {
+		counts[key]--
+	}
+}
+
+func (p *Provider) notifyCompleted(ref domain.SourceRef, logicalPath string) {
+	infoHash, _, err := parseSourceKey(ref.Key)
+	if err != nil {
+		return
+	}
+	p.completionMu.Lock()
+	trackID := p.trackIDs[ref.Key]
+	handler := p.onCompleted
+	if trackID == "" || handler == nil || p.closing || p.completed[ref.Key] {
+		p.completionMu.Unlock()
+		return
+	}
+	p.completed[ref.Key] = true
+	p.completionWG.Add(1)
+	p.completionMu.Unlock()
+	p.retain(infoHash, ref.Key)
+	file := CompletedFile{
+		TrackID: trackID,
+		Path:    p.cachePath(infoHash, logicalPath),
+	}
+	go func() {
+		defer p.completionWG.Done()
+		defer p.release(infoHash)
+		handler(file)
+	}()
+}
+
+func (p *Provider) cachePath(infoHash, logicalPath string) string {
+	return filepath.Join(p.dataRoot, infoHash, filepath.FromSlash(logicalPath))
+}
+
+func (p *Provider) migrateLegacyData(infoHash string, info metainfo.Info) error {
+	if p.dataRoot == "" {
+		return nil
+	}
+	p.legacyMu.Lock()
+	defer p.legacyMu.Unlock()
+	name := strings.TrimSpace(info.BestName())
+	for _, file := range info.UpvertedFiles() {
+		parts, err := safePath(name, file.BestPath())
+		if err != nil {
+			return err
+		}
+		if err := p.migrateLegacyFileLocked(infoHash, strings.Join(parts, "/")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (p *Provider) migrateLegacyFile(infoHash, logicalPath string) error {
+	if p.dataRoot == "" {
+		return nil
+	}
+	p.legacyMu.Lock()
+	defer p.legacyMu.Unlock()
+	return p.migrateLegacyFileLocked(infoHash, logicalPath)
+}
+
+func (p *Provider) migrateLegacyFileLocked(infoHash, logicalPath string) error {
+	legacyPath := filepath.Join(p.dataRoot, filepath.FromSlash(logicalPath))
+	targetPath := p.cachePath(infoHash, logicalPath)
+	if legacyPath == targetPath {
+		return nil
+	}
+	if fileExists(targetPath) || fileExists(targetPath+".part") {
+		return nil
+	}
+	sourcePath, destinationPath := legacyPath, targetPath
+	movedComplete := true
+	if !fileExists(sourcePath) {
+		sourcePath, destinationPath = legacyPath+".part", targetPath+".part"
+		movedComplete = false
+		if !fileExists(sourcePath) {
+			return nil
+		}
+	}
+	if err := os.MkdirAll(filepath.Dir(destinationPath), 0o755); err != nil {
+		return fmt.Errorf("create isolated torrent cache directory: %w", err)
+	}
+	if movedComplete {
+		markerPath := filepath.Join(p.dataRoot, infoHash, legacyVerificationMarker)
+		if err := os.WriteFile(markerPath, nil, 0o600); err != nil {
+			return fmt.Errorf("mark migrated torrent cache for verification: %w", err)
+		}
+	}
+	if err := os.Rename(sourcePath, destinationPath); err != nil {
+		return fmt.Errorf("move legacy torrent cache file %q: %w", sourcePath, err)
+	}
+	return nil
+}
+
+func (p *Provider) prepareLegacyData(infoHash string, info metainfo.Info) error {
+	if p.dataRoot == "" {
+		return nil
+	}
+	p.legacyMu.Lock()
+	defer p.legacyMu.Unlock()
+	markerPath := filepath.Join(p.dataRoot, infoHash, legacyVerificationMarker)
+	if !fileExists(markerPath) {
+		return nil
+	}
+	name := strings.TrimSpace(info.BestName())
+	for _, file := range info.UpvertedFiles() {
+		parts, err := safePath(name, file.BestPath())
+		if err != nil {
+			return err
+		}
+		completePath := p.cachePath(infoHash, strings.Join(parts, "/"))
+		if !fileExists(completePath) {
+			continue
+		}
+		if fileExists(completePath + ".part") {
+			return fmt.Errorf("both complete and partial cache files exist for %q", completePath)
+		}
+		if err := os.Rename(completePath, completePath+".part"); err != nil {
+			return fmt.Errorf("prepare migrated cache file %q: %w", completePath, err)
+		}
+	}
+	if err := os.Remove(markerPath); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("remove migrated cache verification marker: %w", err)
+	}
+	return nil
+}
+
+func (p *Provider) reconcileCacheData(infoHash string, info metainfo.Info) error {
+	if p.dataRoot == "" {
+		return nil
+	}
+	p.legacyMu.Lock()
+	defer p.legacyMu.Unlock()
+	name := strings.TrimSpace(info.BestName())
+	for _, file := range info.UpvertedFiles() {
+		parts, err := safePath(name, file.BestPath())
+		if err != nil {
+			return err
+		}
+		completePath := p.cachePath(infoHash, strings.Join(parts, "/"))
+		partialPath := completePath + ".part"
+		if !fileExists(completePath) || !fileExists(partialPath) {
+			continue
+		}
+		if err := os.Remove(completePath); err != nil && !os.IsNotExist(err) {
+			return fmt.Errorf("remove stale complete cache file %q: %w", completePath, err)
+		}
+	}
+	return nil
+}
+
+func fileExists(filePath string) bool {
+	info, err := os.Stat(filePath)
+	return err == nil && info.Mode().IsRegular()
+}
+
+func bestArtwork(audioParts []string, candidates []catalogFile) (catalogFile, bool) {
+	albumDirectory := strings.Join(audioParts[:len(audioParts)-1], "/")
+	bestScore := int(^uint(0) >> 1)
+	var best catalogFile
+	found := false
+	for _, candidate := range candidates {
+		candidateDirectory := strings.Join(candidate.parts[:len(candidate.parts)-1], "/")
+		depth := 0
+		switch {
+		case candidateDirectory == albumDirectory:
+		case strings.HasPrefix(candidateDirectory, albumDirectory+"/"):
+			depth = strings.Count(strings.TrimPrefix(candidateDirectory, albumDirectory+"/"), "/") + 1
+		default:
+			continue
+		}
+		priority := torrentArtworkPriority(candidate.parts[len(candidate.parts)-1])
+		score := depth*10 + priority
+		logicalPath := strings.Join(candidate.parts, "/")
+		if !found || score < bestScore ||
+			(score == bestScore && logicalPath < strings.Join(best.parts, "/")) {
+			best, bestScore, found = candidate, score, true
+		}
+	}
+	return best, found
+}
+
+func torrentArtworkPriority(name string) int {
+	stem := strings.ToLower(strings.TrimSuffix(name, path.Ext(name)))
+	switch stem {
+	case "cover", "folder", "front", "albumart":
+		return 0
+	}
+	for _, prefix := range []string{"cover", "folder", "front", "albumart"} {
+		if strings.HasPrefix(stem, prefix) {
+			return 1
+		}
+	}
+	for _, prefix := range []string{"scan", "img", "image", "artwork", "booklet"} {
+		if strings.HasPrefix(stem, prefix) {
+			return 30
+		}
+	}
+	for _, prefix := range []string{"cd", "disc", "disk"} {
+		if strings.HasPrefix(stem, prefix) {
+			return 40
+		}
+	}
+	if strings.HasPrefix(stem, "back") || strings.HasPrefix(stem, "rear") {
+		return 80
+	}
+	return 50
+}
+
+// boundedReader prevents a piece shared with the next torrent file from being
+// exposed past the selected file's logical end.
+type boundedReader struct {
+	ports.ReadSeekCloser
+	position    int64
+	length      int64
+	readStarted bool
+	contiguous  bool
+	completed   bool
+	onComplete  func()
+	onClose     func()
+	closeOnce   sync.Once
+}
+
+func (r *boundedReader) Read(buffer []byte) (int, error) {
+	if r.position >= r.length {
+		return 0, io.EOF
+	}
+	remaining := r.length - r.position
+	if int64(len(buffer)) > remaining {
+		buffer = buffer[:remaining]
+	}
+	read, err := r.ReadSeekCloser.Read(buffer)
+	r.readStarted = r.readStarted || read > 0
+	r.position += int64(read)
+	if r.position >= r.length && r.contiguous && !r.completed && r.onComplete != nil {
+		r.completed = true
+		r.onComplete()
+	}
+	if err == nil && r.position >= r.length {
+		err = io.EOF
+	}
+	return read, err
+}
+
+func (r *boundedReader) Seek(offset int64, whence int) (int64, error) {
+	previous := r.position
+	position, err := r.ReadSeekCloser.Seek(offset, whence)
+	if err == nil {
+		r.position = position
+		if !r.readStarted {
+			r.contiguous = position == 0
+		} else if position != previous {
+			r.contiguous = false
+		}
+	}
+	return position, err
+}
+
+func (r *boundedReader) Close() error {
+	err := r.ReadSeekCloser.Close()
+	r.closeOnce.Do(func() {
+		if r.onClose != nil {
+			r.onClose()
+		}
+	})
+	return err
+}
+
+func safePath(root string, fileParts []string) ([]string, error) {
+	parts := make([]string, 0, len(fileParts)+1)
+	parts = append(parts, root)
+	for _, part := range fileParts {
+		part = strings.TrimSpace(part)
+		if part == "" || part == "." || part == ".." || strings.ContainsAny(part, `/\\`) {
+			return nil, fmt.Errorf("torrent contains unsafe path component %q", part)
+		}
+		parts = append(parts, part)
+	}
+	return parts, nil
+}
+
+func makeTrack(infoHash string, parts []string, size int64, extension, contentType string) domain.TrackSource {
+	fileName := parts[len(parts)-1]
+	title, trackNumber := titleAndNumber(strings.TrimSuffix(fileName, path.Ext(fileName)))
+	if len(parts) == 1 {
+		if _, candidate, ok := strings.Cut(title, " - "); ok && strings.TrimSpace(candidate) != "" {
+			title = strings.TrimSpace(candidate)
+		}
+	}
+	artist, album, discNumber := provisionalArtistAlbum(parts)
+	artistID := domain.CanonicalArtistID(artist)
+	albumID := domain.CanonicalAlbumID(artist, album)
+	logicalPath := strings.Join(parts, "/")
+	track := domain.Track{
+		Title:  title,
+		Artist: artist, ArtistID: artistID, Album: album, AlbumID: albumID,
+		AlbumArtist: artist, AlbumArtistID: artistID, TrackNumber: trackNumber,
+		DiscNumber: discNumber, Year: leadingYear(album), Size: size,
+		Suffix: strings.TrimPrefix(extension, "."), ContentType: contentType,
+	}
+	track.ID = domain.CanonicalTrackID(track)
+	return domain.TrackSource{
+		Track: track,
+		Ref:   domain.SourceRef{Provider: Name, Key: infoHash + "/" + logicalPath},
+	}
+}
+
+func logicalTrackID(infoHash, logicalPath string, size int64) string {
+	extension := strings.ToLower(path.Ext(logicalPath))
+	format, _ := audioformat.ByExtension(extension)
+	return makeTrack(infoHash, strings.Split(logicalPath, "/"), size, extension, format.ContentType).Track.ID
+}
+
+func provisionalArtistAlbum(parts []string) (artist, album string, discNumber int) {
+	root := parts[0]
+	if len(parts) == 1 {
+		root = strings.TrimSuffix(root, path.Ext(root))
+	}
+	rootArtist, rootAlbum, rootSplit := strings.Cut(root, " - ")
+	directories := parts[:len(parts)-1]
+	if len(parts) == 1 && rootSplit {
+		artist, album = strings.TrimSpace(rootArtist), "Unknown Album"
+	} else if len(directories) <= 1 && rootSplit {
+		artist, album = strings.TrimSpace(rootArtist), strings.TrimSpace(rootAlbum)
+	} else if len(directories) <= 1 {
+		artist, album = "Unknown Artist", root
+	} else {
+		albumIndex := len(directories) - 1
+		if number, ok := discDirectoryNumber(directories[albumIndex]); ok && albumIndex > 1 {
+			discNumber = number
+			albumIndex--
+		}
+		album = directories[albumIndex]
+		artistIndex := albumIndex - 1
+		for index := 1; index < albumIndex; index++ {
+			if collectionDirectory(directories[index]) {
+				artistIndex = index - 1
+				break
+			}
+		}
+		if artistIndex >= 0 {
+			artist = directories[artistIndex]
+		}
+		if artistIndex == 0 && rootSplit {
+			artist = strings.TrimSpace(rootArtist)
+		}
+	}
+	if artist == "" {
+		artist = "Unknown Artist"
+	}
+	artist = normalizedArtistDirectory(artist)
+	if album == "" {
+		album = root
+	}
+	return artist, album, discNumber
+}
+
+func normalizedArtistDirectory(value string) string {
+	value = strings.TrimSpace(value)
+	lower := strings.ToLower(value)
+	for _, prefix := range []string{"группа ", "группа: "} {
+		if strings.HasPrefix(lower, prefix) {
+			name := strings.TrimSpace(value[len(prefix):])
+			if name != "" {
+				return name
+			}
+		}
+	}
+	return value
+}
+
+func collectionDirectory(value string) bool {
+	value = strings.ToLower(strings.TrimSpace(value))
+	value = strings.TrimLeftFunc(value, func(character rune) bool {
+		return unicode.IsDigit(character) || unicode.IsSpace(character) ||
+			character == '.' || character == '-' || character == '_'
+	})
+	for _, marker := range []string{
+		"альбом", "сингл", "сборник", "компиляц", "юбилей", "неофициаль",
+		"релиз", "albums", "singles", "compilation", "collection", "bootleg", "releases",
+	} {
+		if strings.Contains(value, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+func discDirectoryNumber(value string) (int, bool) {
+	value = strings.ToLower(strings.TrimSpace(value))
+	for _, prefix := range []string{"cd", "disc", "disk", "диск"} {
+		if !strings.HasPrefix(value, prefix) {
+			continue
+		}
+		remainder := strings.TrimLeftFunc(strings.TrimPrefix(value, prefix), func(character rune) bool {
+			return unicode.IsSpace(character) || character == '.' || character == '-' ||
+				character == '_' || character == '№'
+		})
+		end := 0
+		for end < len(remainder) && remainder[end] >= '0' && remainder[end] <= '9' {
+			end++
+		}
+		if end == 0 {
+			return 0, false
+		}
+		number, err := strconv.Atoi(remainder[:end])
+		return number, err == nil && number > 0
+	}
+	return 0, false
+}
+
+func leadingYear(value string) int {
+	value = strings.TrimLeft(value, " ([{")
+	if len(value) < 4 {
+		return 0
+	}
+	year, err := strconv.Atoi(value[:4])
+	if err != nil || year < 1900 || year > 2100 {
+		return 0
+	}
+	return year
+}
+
+func titleAndNumber(value string) (string, int) {
+	value = strings.TrimSpace(value)
+	index := 0
+	for index < len(value) && index < 3 && value[index] >= '0' && value[index] <= '9' {
+		index++
+	}
+	if index == 0 || index == len(value) || !isTrackSeparator(rune(value[index])) {
+		return value, 0
+	}
+	number, err := strconv.Atoi(value[:index])
+	if err != nil {
+		return value, 0
+	}
+	title := strings.TrimLeftFunc(value[index:], isTrackSeparator)
+	if title == "" {
+		return value, 0
+	}
+	return title, number
+}
+
+func isTrackSeparator(value rune) bool {
+	return unicode.IsSpace(value) || value == '.' || value == '-' || value == '_'
+}

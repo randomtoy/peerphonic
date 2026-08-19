@@ -1,0 +1,262 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "peerphonic.fullname" . }}
+  labels:
+    {{- include "peerphonic.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      {{- include "peerphonic.selectorLabels" . | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "peerphonic.selectorLabels" . | nindent 8 }}
+      annotations:
+        checksum/auth: {{ include (print $.Template.BasePath "/secret.yaml") . | sha256sum }}
+    spec:
+      automountServiceAccountToken: false
+      {{- with .Values.peerphonic.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.peerphonic.podSecurityContext | nindent 8 }}
+      {{- if .Values.slskd.enabled }}
+      initContainers:
+        - name: initialize-shared-storage
+          image: "{{ .Values.initContainer.image.repository }}:{{ .Values.initContainer.image.tag }}"
+          imagePullPolicy: {{ .Values.initContainer.image.pullPolicy }}
+          command: ["sh", "-ec"]
+          args:
+            - mkdir -p /data/cache/soulseek/downloads /data/cache/soulseek/incomplete /data/slskd /data/torrents;
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            runAsNonRoot: true
+            runAsUser: 65532
+            runAsGroup: 65532
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      {{- end }}
+      containers:
+        - name: peerphonic
+          image: "{{ .Values.peerphonic.image.repository }}:{{ default .Chart.AppVersion .Values.peerphonic.image.tag }}"
+          imagePullPolicy: {{ .Values.peerphonic.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.peerphonic.securityContext | nindent 12 }}
+          env:
+            - name: PEERPHONIC_ADDRESS
+              value: ":8080"
+            - name: PEERPHONIC_MUSIC_DIR
+              value: /music
+            - name: PEERPHONIC_METADATA_DRIVER
+              value: {{ .Values.database.driver | quote }}
+            - name: PEERPHONIC_DATABASE
+              value: /data/peerphonic.db
+            - name: PEERPHONIC_CREDENTIAL_KEY_PATH
+              value: /data/peerphonic.auth.key
+            {{- if eq .Values.database.driver "postgres" }}
+            - name: PEERPHONIC_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "peerphonic.databaseSecretName" . }}
+                  key: {{ .Values.database.secretKey }}
+            {{- end }}
+            - name: PEERPHONIC_CACHE_DIR
+              value: /data/cache
+            - name: PEERPHONIC_CACHE_SIZE_BYTES
+              value: {{ .Values.peerphonic.cacheSizeBytes | quote }}
+            - name: PEERPHONIC_TORRENT_DIR
+              value: /data/torrents
+            - name: PEERPHONIC_TORRENT_SEED
+              value: {{ .Values.peerphonic.torrent.seed | quote }}
+            - name: PEERPHONIC_TORRENT_PORT
+              value: {{ .Values.peerphonic.torrent.port | quote }}
+            - name: PEERPHONIC_TORRENT_PORT_FORWARDING
+              value: {{ .Values.peerphonic.torrent.portForwarding | quote }}
+            - name: PEERPHONIC_TORRENT_MAX_ACTIVE_DOWNLOADS
+              value: {{ .Values.peerphonic.torrent.maxActiveDownloads | quote }}
+            - name: PEERPHONIC_SCAN_ON_START
+              value: {{ .Values.peerphonic.scanOnStart | quote }}
+            - name: PEERPHONIC_SCAN_INTERVAL_SECONDS
+              value: {{ .Values.peerphonic.scanIntervalSeconds | quote }}
+            - name: PEERPHONIC_AUTH_FAILURE_LIMIT
+              value: {{ .Values.peerphonic.authFailureLimit | quote }}
+            - name: PEERPHONIC_AUTH_FAILURE_WINDOW_SECONDS
+              value: {{ .Values.peerphonic.authFailureWindowSeconds | quote }}
+            - name: PEERPHONIC_AUTH_BLOCK_SECONDS
+              value: {{ .Values.peerphonic.authBlockSeconds | quote }}
+            - name: PEERPHONIC_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "peerphonic.secretName" . }}
+                  key: {{ .Values.auth.keys.adminUsername }}
+            - name: PEERPHONIC_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "peerphonic.secretName" . }}
+                  key: {{ .Values.auth.keys.adminPassword }}
+            {{- if .Values.slskd.enabled }}
+            - name: PEERPHONIC_SLSKD_URL
+              value: http://127.0.0.1:5030
+            - name: PEERPHONIC_SLSKD_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "peerphonic.secretName" . }}
+                  key: {{ .Values.auth.keys.slskdApiKey }}
+            - name: PEERPHONIC_SLSKD_DOWNLOADS_DIR
+              value: /data/cache/soulseek/downloads
+            - name: PEERPHONIC_SLSKD_INCOMPLETE_DIR
+              value: /data/cache/soulseek/incomplete
+            - name: PEERPHONIC_SLSKD_MAX_ACTIVE_DOWNLOADS
+              value: {{ .Values.slskd.maxActiveDownloads | quote }}
+            - name: PEERPHONIC_SLSKD_RETRY_ATTEMPTS
+              value: {{ .Values.slskd.retryAttempts | quote }}
+            - name: PEERPHONIC_SLSKD_PREBUFFER_BYTES
+              value: {{ .Values.slskd.prebufferBytes | quote }}
+            - name: PEERPHONIC_SLSKD_PREBUFFER_TIMEOUT_SECONDS
+              value: {{ .Values.slskd.prebufferTimeoutSeconds | quote }}
+            {{- end }}
+          ports:
+            - name: http
+              containerPort: 8080
+              protocol: TCP
+            - name: torrent-tcp
+              containerPort: {{ .Values.peerphonic.torrent.port }}
+              protocol: TCP
+            - name: torrent-udp
+              containerPort: {{ .Values.peerphonic.torrent.port }}
+              protocol: UDP
+          readinessProbe:
+            httpGet:
+              path: /api/v1/ready
+              port: http
+            initialDelaySeconds: 2
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /api/v1/health
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          resources:
+            {{- toYaml .Values.peerphonic.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            - name: music
+              mountPath: /music
+              readOnly: {{ .Values.music.readOnly }}
+            - name: tmp
+              mountPath: /tmp
+        {{- if .Values.slskd.enabled }}
+        - name: slskd
+          image: "{{ .Values.slskd.image.repository }}:{{ .Values.slskd.image.tag }}"
+          imagePullPolicy: {{ .Values.slskd.image.pullPolicy }}
+          securityContext:
+            {{- toYaml .Values.slskd.securityContext | nindent 12 }}
+          env:
+            - name: APP_DIR
+              value: /data/slskd
+            - name: SLSKD_NO_HTTPS
+              value: "true"
+            - name: SLSKD_REMOTE_CONFIGURATION
+              value: {{ .Values.slskd.remoteConfiguration | quote }}
+            - name: SLSKD_DOWNLOADS_DIR
+              value: /data/cache/soulseek/downloads
+            - name: SLSKD_INCOMPLETE_DIR
+              value: /data/cache/soulseek/incomplete
+            - name: SLSKD_SLSK_LISTEN_IP_ADDRESS
+              value: 0.0.0.0
+            - name: SLSKD_SLSK_LISTEN_PORT
+              value: {{ .Values.slskd.listenPort | quote }}
+            - name: SLSKD_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "peerphonic.secretName" . }}
+                  key: {{ .Values.auth.keys.slskdApiKey }}
+            - name: SLSKD_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "peerphonic.secretName" . }}
+                  key: {{ .Values.auth.keys.slskdWebUsername }}
+            - name: SLSKD_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "peerphonic.secretName" . }}
+                  key: {{ .Values.auth.keys.slskdWebPassword }}
+            - name: SLSKD_SLSK_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "peerphonic.secretName" . }}
+                  key: {{ .Values.auth.keys.soulseekUsername }}
+            - name: SLSKD_SLSK_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "peerphonic.secretName" . }}
+                  key: {{ .Values.auth.keys.soulseekPassword }}
+          ports:
+            - name: slskd-http
+              containerPort: 5030
+              protocol: TCP
+            - name: soulseek
+              containerPort: {{ .Values.slskd.listenPort }}
+              protocol: TCP
+          readinessProbe:
+            tcpSocket:
+              port: slskd-http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: slskd-http
+            initialDelaySeconds: 20
+            periodSeconds: 15
+          resources:
+            {{- toYaml .Values.slskd.resources | nindent 12 }}
+          volumeMounts:
+            - name: data
+              mountPath: /data
+        {{- end }}
+      volumes:
+        - name: data
+          {{- if .Values.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "peerphonic.dataClaimName" . }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: music
+          {{- if .Values.music.existingClaim }}
+          persistentVolumeClaim:
+            claimName: {{ .Values.music.existingClaim }}
+          {{- else if .Values.music.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "peerphonic.musicClaimName" . }}
+          {{- else if .Values.music.hostPath }}
+          hostPath:
+            path: {{ .Values.music.hostPath | quote }}
+            type: {{ .Values.music.hostPathType }}
+          {{- else }}
+          emptyDir: {}
+          {{- end }}
+        - name: tmp
+          emptyDir: {}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

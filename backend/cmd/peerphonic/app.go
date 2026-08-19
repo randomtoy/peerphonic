@@ -1,0 +1,299 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"log/slog"
+	"net/http"
+	"path/filepath"
+	"time"
+
+	authadapter "github.com/randomtoy/peerphonic/backend/internal/adapters/auth"
+	"github.com/randomtoy/peerphonic/backend/internal/adapters/blob/filesystem"
+	"github.com/randomtoy/peerphonic/backend/internal/adapters/metadata"
+	"github.com/randomtoy/peerphonic/backend/internal/adapters/providers/local"
+	soulseekprovider "github.com/randomtoy/peerphonic/backend/internal/adapters/providers/soulseek"
+	torrentprovider "github.com/randomtoy/peerphonic/backend/internal/adapters/providers/torrent"
+	postgresstore "github.com/randomtoy/peerphonic/backend/internal/adapters/storage/postgres"
+	"github.com/randomtoy/peerphonic/backend/internal/adapters/storage/sqlite"
+	"github.com/randomtoy/peerphonic/backend/internal/api/opensubsonic"
+	"github.com/randomtoy/peerphonic/backend/internal/api/peerphonic"
+	"github.com/randomtoy/peerphonic/backend/internal/config"
+	"github.com/randomtoy/peerphonic/backend/internal/core/ports"
+	"github.com/randomtoy/peerphonic/backend/internal/core/services"
+	"github.com/randomtoy/peerphonic/backend/internal/observability"
+	"github.com/randomtoy/peerphonic/backend/internal/scanner"
+	torrentscanner "github.com/randomtoy/peerphonic/backend/internal/scanner/torrents"
+	streamingadapter "github.com/randomtoy/peerphonic/backend/internal/streaming"
+)
+
+type application struct {
+	handler          http.Handler
+	catalog          metadataCatalog
+	torrentProvider  *torrentprovider.Provider
+	soulseekProvider *soulseekprovider.Client
+	magnetImporter   *torrentscanner.MagnetImporter
+}
+
+type metadataCatalog interface {
+	ports.Catalog
+	ports.TrackSourceWriter
+	ports.TrackAliasWriter
+	ports.CatalogManager
+	ports.CacheMetadataStore
+	ports.MediaAnnotationStore
+	ports.PlayQueueStore
+	ports.UserStore
+	ports.TransferLimitStore
+	ports.TrackPinStore
+	ports.AuditStore
+	Ping(ctx context.Context) error
+	Close() error
+}
+
+func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logger) (*application, error) {
+	var catalog metadataCatalog
+	var err error
+	if cfg.MetadataDriver == "postgres" {
+		catalog, err = postgresstore.Open(ctx, cfg.DatabaseURL)
+	} else {
+		catalog, err = sqlite.Open(ctx, cfg.Database)
+	}
+	if err != nil {
+		return nil, err
+	}
+	var torrentProvider *torrentprovider.Provider
+	var soulseekClient *soulseekprovider.Client
+	var magnetImporter *torrentscanner.MagnetImporter
+	fail := func(err error) (*application, error) {
+		if magnetImporter != nil {
+			magnetImporter.Close()
+		}
+		if torrentProvider != nil {
+			_ = torrentProvider.Close()
+		}
+		if soulseekClient != nil {
+			_ = soulseekClient.Close()
+		}
+		catalog.Close()
+		return nil, err
+	}
+	credentialKeyPath := cfg.CredentialKeyPath
+	if credentialKeyPath == "" {
+		credentialKeyPath = cfg.Database + ".auth.key"
+	}
+	credentialCodec, err := authadapter.NewCredentialCodec(credentialKeyPath)
+	if err != nil {
+		return fail(fmt.Errorf("initialize user credentials: %w", err))
+	}
+	userService := services.NewUserService(catalog, credentialCodec)
+	if err := userService.EnsureBootstrapAdmin(ctx, cfg.Username, cfg.Password); err != nil {
+		return fail(fmt.Errorf("initialize bootstrap administrator: %w", err))
+	}
+
+	provider, err := local.New(cfg.MusicDir)
+	if err != nil {
+		return fail(err)
+	}
+	torrentProvider, err = torrentprovider.NewStreaming(
+		cfg.TorrentDir, filepath.Join(cfg.CacheDir, "torrents"),
+		torrentprovider.StreamingOptions{
+			Seed:               cfg.TorrentSeed,
+			ListenPort:         cfg.TorrentPort,
+			PortForwarding:     cfg.TorrentPortForwarding,
+			UploadLimit:        cfg.TorrentUploadLimit,
+			DownloadLimit:      cfg.TorrentDownloadLimit,
+			MaxActiveDownloads: cfg.TorrentMaxDownloads,
+		},
+	)
+	if err != nil {
+		return fail(err)
+	}
+	transferSettings := services.NewTransferSettingsService(catalog, torrentProvider)
+	if err := transferSettings.Initialize(ctx); err != nil {
+		return fail(fmt.Errorf("initialize transfer settings: %w", err))
+	}
+	var soulseekMonitor ports.ProviderStatusMonitor
+	var soulseekSearch ports.SourceSearcher
+	var soulseekDiscovery *services.DiscoveryService
+	if cfg.SlskdURL != "" {
+		var clientErr error
+		soulseekClient, clientErr = soulseekprovider.NewSlskd(
+			cfg.SlskdURL, cfg.SlskdAPIKey, time.Duration(cfg.SlskdTimeoutSeconds)*time.Second,
+			soulseekprovider.DownloadPolicy{
+				MaxActive: cfg.SlskdMaxDownloads, RetryAttempts: cfg.SlskdRetryAttempts,
+				PrebufferBytes:   cfg.SlskdPrebufferBytes,
+				PrebufferTimeout: time.Duration(cfg.SlskdPrebufferSeconds) * time.Second,
+			},
+		)
+		if clientErr != nil {
+			return fail(fmt.Errorf("initialize slskd client: %w", clientErr))
+		}
+		if clientErr := soulseekClient.SetMediaDirectories(
+			cfg.SlskdDownloadsDir, cfg.SlskdIncompleteDir,
+		); clientErr != nil {
+			return fail(fmt.Errorf("initialize slskd media directories: %w", clientErr))
+		}
+		soulseekMonitor = soulseekClient
+		soulseekDiscovery = services.NewDiscoveryService(soulseekClient, catalog)
+		soulseekSearch = soulseekDiscovery
+	}
+	blobs, err := filesystem.New(cfg.CacheDir)
+	if err != nil {
+		return fail(err)
+	}
+	artworkSources := []services.ArtworkSource{torrentProvider}
+	if soulseekClient != nil {
+		artworkSources = append(artworkSources, soulseekClient)
+	}
+	artwork := services.NewArtworkService(blobs, artworkSources...)
+	completedEnricher := scanner.NewEnricher(catalog, metadata.TagExtractor{}, artwork)
+	torrentProvider.SetCompletedHandler(func(file torrentprovider.CompletedFile) {
+		if err := completedEnricher.Enrich(ctx, file.TrackID, file.Path); err != nil {
+			logger.Warn("torrent metadata enrichment failed", "track", file.TrackID, "error", err)
+			return
+		}
+		logger.Info("torrent metadata enriched", "track", file.TrackID)
+	})
+	if soulseekClient != nil {
+		soulseekClient.SetCompletedHandler(func(file soulseekprovider.CompletedFile) {
+			if err := completedEnricher.EnrichWithExpectedSize(
+				context.WithoutCancel(ctx), file.TrackID, file.Path, file.Size,
+			); err != nil {
+				logger.Warn("Soulseek metadata enrichment failed", "track", file.TrackID, "error", err)
+				return
+			}
+			logger.Info("Soulseek metadata enriched", "track", file.TrackID)
+		})
+	}
+	mediaCache, err := services.NewMediaCache(blobs, catalog, cfg.CacheSizeBytes)
+	if err != nil {
+		return fail(err)
+	}
+	if err := mediaCache.Prune(ctx); err != nil {
+		return fail(fmt.Errorf("prune media cache: %w", err))
+	}
+	cacheStatus := services.NewCacheStatus(mediaCache, torrentProvider)
+	if soulseekClient != nil {
+		cacheStatus = services.NewCacheStatus(mediaCache, torrentProvider, soulseekClient)
+	}
+	torrentProvider.SetCacheChangedHandler(func() {
+		if err := cacheStatus.Prune(context.WithoutCancel(ctx)); err != nil {
+			logger.Warn("media cache pruning failed", "error", err)
+		}
+	})
+	if soulseekClient != nil {
+		soulseekClient.SetCacheChangedHandler(func() {
+			if err := cacheStatus.Prune(context.WithoutCancel(ctx)); err != nil {
+				logger.Warn("media cache pruning failed", "provider", soulseekprovider.Name, "error", err)
+			}
+		})
+	}
+	if err := cacheStatus.Prune(ctx); err != nil {
+		return fail(fmt.Errorf("prune provider cache: %w", err))
+	}
+	localScanner := scanner.New(cfg.MusicDir, catalog, metadata.TagExtractor{}, artwork)
+	torrentScanner := torrentscanner.NewWithEnrichment(
+		cfg.TorrentDir, catalog, torrentProvider, metadata.TagExtractor{}, artwork,
+	)
+	scanManager := scanner.NewManager(ctx, scanner.NewGroup(localScanner, torrentScanner))
+	torrentImporter := torrentscanner.NewImporter(cfg.TorrentDir, torrentProvider, scanManager)
+	torrentManager := torrentscanner.NewSourceManager(torrentProvider, scanManager)
+	if cfg.Scan {
+		report, err := scanManager.ScanNow(ctx)
+		if err != nil {
+			return fail(err)
+		}
+		logger.Info("music scan completed", "tracks", report.Tracks, "warnings", len(report.Warnings))
+		for _, warning := range report.Warnings {
+			logger.Warn("music scan warning", "path", warning.Path, "error", warning.Err)
+		}
+		if err := cacheStatus.Prune(ctx); err != nil {
+			return fail(fmt.Errorf("prune provider cache: %w", err))
+		}
+	}
+	magnetImporter, err = torrentscanner.NewMagnetImporter(ctx, cfg.TorrentDir, torrentProvider, torrentImporter)
+	if err != nil {
+		return fail(fmt.Errorf("initialize magnet imports: %w", err))
+	}
+	scanManager.StartPeriodic(time.Duration(cfg.ScanIntervalSeconds) * time.Second)
+	if err := torrentProvider.ResumeTrackDownloads(ctx); err != nil {
+		logger.Warn("some torrent track downloads could not be resumed", "error", err)
+	}
+	if soulseekClient != nil {
+		if err := soulseekClient.ResumeTrackDownloads(ctx); err != nil {
+			logger.Warn("some Soulseek track downloads could not be resumed", "error", err)
+		}
+	}
+
+	streamingProviders := []ports.SourceProvider{provider, torrentProvider}
+	downloadMonitors := []ports.TrackDownloadMonitor{torrentProvider}
+	if soulseekClient != nil {
+		streamingProviders = append(streamingProviders, soulseekClient)
+		downloadMonitors = append(downloadMonitors, soulseekClient)
+	}
+	streaming := services.NewStreamingService(catalog, streamingProviders...)
+	libraryCache := services.NewLibraryCacheService(ctx, catalog, streaming, catalog, torrentManager)
+	if soulseekClient != nil {
+		soulseekClient.SetTrackPinChecker(func(checkCtx context.Context, trackID string) bool {
+			pinned, err := catalog.TrackPinned(checkCtx, trackID)
+			return err == nil && pinned
+		})
+	}
+	var transcoder ports.AudioTranscoder
+	if cfg.FFmpegPath != "" {
+		ffmpeg, ffmpegErr := streamingadapter.NewFFmpeg(cfg.FFmpegPath)
+		if ffmpegErr != nil {
+			logger.Warn("audio transcoding is unavailable", "error", ffmpegErr)
+		} else {
+			cachedTranscoder := services.NewCachedAudioTranscoder(ffmpeg, mediaCache)
+			transcoder = cachedTranscoder
+			downloadMonitors = append(downloadMonitors, cachedTranscoder)
+		}
+	}
+	downloadService := services.NewDownloadService(downloadMonitors...)
+	httpMetrics := observability.NewHTTPMetrics()
+	mux := http.NewServeMux()
+	mux.Handle("/api/v1/ready", peerphonic.NewReadinessHandler(catalog))
+	mux.Handle("/api/v1/metrics", peerphonic.NewMetricsHandler(httpMetrics, userService))
+	mux.Handle("/api/v1/audit", peerphonic.NewAuditHandler(catalog, userService))
+	mux.Handle("/rest/", opensubsonic.NewHandlerWithAuthenticatorDiscoveryAndTranscoder(
+		catalog, streaming, artwork, userService, soulseekDiscovery, transcoder, scanManager,
+	))
+	mux.Handle("/", peerphonic.NewHandlerWithAuthenticatorAndCatalog(
+		cacheStatus, torrentImporter, magnetImporter, torrentManager, torrentProvider, downloadService,
+		userService, userService, soulseekMonitor, soulseekSearch, transferSettings, catalog, libraryCache,
+		scanManager,
+	))
+	audit := observability.NewAuditMiddleware(catalog, logger)
+	authLimiter := observability.NewAuthFailureLimiter(
+		cfg.AuthFailureLimit, time.Duration(cfg.AuthFailureWindow)*time.Second,
+		time.Duration(cfg.AuthBlockSeconds)*time.Second,
+	)
+	return &application{
+		handler: httpMetrics.Wrap(audit.Wrap(authLimiter.Wrap(mux))), catalog: catalog, torrentProvider: torrentProvider,
+		soulseekProvider: soulseekClient, magnetImporter: magnetImporter,
+	}, nil
+}
+
+func (a *application) Close() error {
+	var closeErrors []error
+	if a.magnetImporter != nil {
+		a.magnetImporter.Close()
+	}
+	if a.torrentProvider != nil {
+		if err := a.torrentProvider.Close(); err != nil {
+			closeErrors = append(closeErrors, fmt.Errorf("close torrent provider: %w", err))
+		}
+	}
+	if a.soulseekProvider != nil {
+		if err := a.soulseekProvider.Close(); err != nil {
+			closeErrors = append(closeErrors, fmt.Errorf("close Soulseek provider: %w", err))
+		}
+	}
+	if err := a.catalog.Close(); err != nil {
+		closeErrors = append(closeErrors, fmt.Errorf("close catalog: %w", err))
+	}
+	return errors.Join(closeErrors...)
+}

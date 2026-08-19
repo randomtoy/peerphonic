@@ -1,0 +1,19 @@
+Peerphonic is installed.
+
+{{- if .Values.web.enabled }}
+Dashboard:
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "peerphonic.fullname" . }}-web 8081:{{ .Values.web.service.port }}
+  open http://127.0.0.1:8081
+{{- end }}
+
+OpenSubsonic API:
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "peerphonic.fullname" . }} 8080:{{ .Values.peerphonic.service.port }}
+
+{{- if .Values.slskd.enabled }}
+slskd UI (kept cluster-internal by default):
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "peerphonic.fullname" . }}-slskd 5030:{{ .Values.slskd.service.port }}
+
+For inbound Soulseek connections, expose service/{{ include "peerphonic.fullname" . }}-soulseek
+with a reachable TCP address and forward port {{ .Values.slskd.listenPort }}.
+{{- end }}
+

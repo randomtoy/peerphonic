@@ -1,0 +1,290 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Peerphonic</title>
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/" aria-label="Peerphonic dashboard">
+      <span class="brand-mark" aria-hidden="true">P</span>
+      <span>Peerphonic</span>
+    </a>
+    <div class="topbar-actions">
+      <span id="connection-state" class="connection-state">Not connected</span>
+      <button id="refresh" class="button secondary" type="button">Refresh</button>
+      <button id="logout" class="button ghost" type="button" hidden>Log out</button>
+    </div>
+  </header>
+
+  <main id="app-main">
+    <section id="login-panel" class="login-panel" aria-labelledby="login-title">
+      <div>
+        <p class="eyebrow">SELF-HOSTED MUSIC</p>
+        <h1 id="login-title">Your library, from every source.</h1>
+        <p class="lede">Connect with the same account used by your OpenSubsonic client.</p>
+      </div>
+      <form id="login-form" class="login-form">
+        <label>Username<input id="username" name="username" autocomplete="username" value="admin" required></label>
+        <label>Password<input id="password" name="password" type="password" autocomplete="current-password" required></label>
+        <button class="button primary" type="submit">Connect</button>
+        <p id="login-error" class="form-error" role="alert"></p>
+      </form>
+    </section>
+
+    <section id="dashboard" class="dashboard-shell" hidden>
+      <aside class="sidebar" aria-label="Dashboard navigation">
+        <nav class="sidebar-nav">
+          <p class="nav-label">Workspace</p>
+          <button class="nav-item" type="button" data-page="overview" aria-current="page">
+            <span class="nav-icon" aria-hidden="true">01</span>
+            <span><strong>Overview</strong><small>Server health</small></span>
+          </button>
+          <button class="nav-item" type="button" data-page="sources" data-required-permission="sources.manage">
+            <span class="nav-icon" aria-hidden="true">02</span>
+            <span><strong>Sources</strong><small>Import and manage</small></span>
+          </button>
+          <button class="nav-item" type="button" data-page="search" data-required-permission="soulseek.search">
+            <span class="nav-icon" aria-hidden="true">03</span>
+            <span><strong>Search</strong><small>Find on Soulseek</small></span>
+          </button>
+          <button class="nav-item" type="button" data-page="activity" data-required-permission="monitoring.view">
+            <span class="nav-icon" aria-hidden="true">04</span>
+            <span><strong>Activity</strong><small>Downloads and peers</small></span>
+          </button>
+          <button class="nav-item" type="button" data-page="catalog" data-required-permission="catalog.manage">
+            <span class="nav-icon" aria-hidden="true">05</span>
+            <span><strong>Catalog</strong><small>Aliases and metadata</small></span>
+          </button>
+          <button class="nav-item" type="button" data-page="users" data-required-permission="users.manage">
+            <span class="nav-icon" aria-hidden="true">06</span>
+            <span><strong>Users</strong><small>Accounts and access</small></span>
+          </button>
+          <button class="nav-item" type="button" data-page="settings" data-required-permission="sources.manage">
+            <span class="nav-icon" aria-hidden="true">07</span>
+            <span><strong>Settings</strong><small>Transfer limits</small></span>
+          </button>
+        </nav>
+        <div class="account-card">
+          <span id="account-avatar" class="account-avatar" aria-hidden="true">A</span>
+          <span><strong id="account-name">—</strong><small id="account-role">—</small></span>
+        </div>
+      </aside>
+
+      <div class="workspace">
+        <header class="workspace-header">
+          <div>
+            <p id="page-eyebrow" class="eyebrow">CONTROL ROOM</p>
+            <h1 id="page-title">Server overview</h1>
+            <p id="page-description" class="page-description">A quick look at Peerphonic right now.</p>
+          </div>
+          <p id="updated-at" class="updated-at"></p>
+        </header>
+
+        <section class="dashboard-page" data-page-panel="overview" aria-labelledby="page-title">
+          <div id="summary" class="summary-grid" aria-live="polite"></div>
+          <div class="overview-note">
+            <span class="health-indicator" aria-hidden="true"></span>
+            <div><strong>Peerphonic is online</strong><p>Music clients can browse and stream available tracks.</p></div>
+          </div>
+        </section>
+
+        <section class="dashboard-page" data-page-panel="sources" hidden>
+          <section id="library-scan-section" class="sync-card" aria-labelledby="library-scan-title">
+            <div class="sync-icon" aria-hidden="true">↻</div>
+            <div class="sync-copy">
+              <p class="eyebrow">CATALOG SYNC</p>
+              <h2 id="library-scan-title">Library scan</h2>
+              <p id="scan-summary" class="section-description">Loading scan status…</p>
+            </div>
+            <div class="sync-actions">
+              <span id="scan-state" class="pill">Unknown</span>
+              <button id="scan-now" class="button primary" type="button">Scan now</button>
+            </div>
+          </section>
+          <section class="panel" aria-labelledby="scan-history-title">
+            <div class="section-heading"><div><p class="eyebrow">MAINTENANCE LOG</p><h2 id="scan-history-title">Recent scans</h2><p class="section-description">Periodic and manually requested catalog maintenance, including warnings.</p></div></div>
+            <div id="scan-history" class="source-list"></div>
+          </section>
+
+          <section id="sources-section" class="panel" aria-labelledby="sources-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">LIBRARY SOURCES</p><h2 id="sources-title">Imported torrents</h2><p class="section-description">Pause, pin or remove sources already connected to the library.</p></div>
+              <span id="source-count" class="pill"></span>
+            </div>
+            <div id="sources" class="source-list"></div>
+          </section>
+
+          <section id="add-source-section" class="panel" aria-labelledby="add-source-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">ADD MUSIC</p><h2 id="add-source-title">Import a new source</h2><p class="section-description">Use a magnet link or upload a torrent file.</p></div>
+            </div>
+            <div class="import-grid">
+              <form id="magnet-form" class="import-card">
+                <div><span class="card-kicker">MAGNET</span><h3>Paste a magnet link</h3><p>Metadata is fetched in the background. Audio downloads only when a track is played.</p></div>
+                <label>Magnet URI<textarea id="magnet-uri" name="magnet" rows="3" placeholder="magnet:?xt=urn:btih:…" required></textarea></label>
+                <button class="button primary" type="submit">Add magnet</button>
+              </form>
+              <form id="torrent-form" class="import-card">
+                <div><span class="card-kicker">FILE</span><h3>Upload a torrent file</h3><p>Catalog metadata is imported now; audio stays remote until playback.</p></div>
+                <label class="file-field">Torrent file<input id="torrent-file" name="torrent" type="file" accept=".torrent,application/x-bittorrent" required></label>
+                <button class="button primary" type="submit">Upload .torrent</button>
+              </form>
+            </div>
+            <p id="import-message" class="form-message" role="status"></p>
+            <div class="section-heading compact">
+              <div><p class="eyebrow">IMPORT QUEUE</p><h3>Recent magnet imports</h3></div>
+              <span id="import-count" class="pill"></span>
+            </div>
+            <div id="imports" class="source-list"></div>
+          </section>
+        </section>
+
+        <section class="dashboard-page" data-page-panel="search" hidden>
+          <section class="panel" aria-labelledby="soulseek-search-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">SOULSEEK NETWORK</p><h2 id="soulseek-search-title">Find remote music</h2><p class="section-description">Add one track or review and import a whole remote album. Audio is downloaded only when playback starts.</p></div>
+              <span id="search-result-count" class="pill">No search</span>
+            </div>
+            <form id="soulseek-search-form" class="search-form">
+              <label>Artist, album or track<input id="soulseek-query" name="query" type="search" minlength="3" maxlength="200" placeholder="Massive Attack Mezzanine" autocomplete="off" required></label>
+              <label>Result limit<input id="soulseek-limit" name="limit" type="number" min="1" max="200" value="50" required></label>
+              <button class="button primary" type="submit">Search</button>
+            </form>
+            <p id="soulseek-search-message" class="form-message" role="status"></p>
+            <div id="soulseek-search-results" class="source-list search-results" aria-live="polite"></div>
+          </section>
+        </section>
+
+        <section class="dashboard-page" data-page-panel="activity" hidden>
+          <section class="panel" data-required-permission="sources.manage" aria-labelledby="prefetch-title">
+            <div class="section-heading"><div><p class="eyebrow">OFFLINE CACHE</p><h2 id="prefetch-title">Prefetch music</h2><p class="section-description">Download a track or complete album in the background. Pinned music is protected from automatic eviction.</p></div></div>
+            <form id="prefetch-form" class="settings-form">
+              <label>Item type<select id="prefetch-type"><option value="tracks">Track</option><option value="albums">Album</option></select></label>
+              <label>OpenSubsonic ID<input id="prefetch-id" required></label>
+              <label class="permission-option"><input id="prefetch-pinned" type="checkbox"><span>Keep cached</span></label>
+              <button class="button primary" type="submit">Start prefetch</button>
+              <button id="unpin-track" class="button secondary" type="button">Unpin track ID</button>
+            </form>
+            <p id="prefetch-message" class="form-message" role="status"></p>
+          </section>
+          <section id="downloads-section" class="panel" aria-labelledby="downloads-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">CACHE</p><h2 id="downloads-title">Track downloads</h2><p class="section-description">Live progress, current speed, peer availability and cached history. Torrent seed counts are connected seeds, not the swarm-wide total.</p></div>
+              <span id="download-count" class="pill"></span>
+            </div>
+            <div id="downloads" class="card-grid"></div>
+          </section>
+
+          <section id="transfers-section" class="panel" aria-labelledby="transfers-title">
+            <div class="section-heading"><div><p class="eyebrow">NETWORK</p><h2 id="transfers-title">Live transfers</h2><p class="section-description">Peer availability, transfer progress and uploaded data.</p></div></div>
+            <div id="transfers" class="card-grid"></div>
+          </section>
+          <section class="panel" aria-labelledby="audit-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">SECURITY</p><h2 id="audit-title">Administrative audit</h2><p class="section-description">Recent changes made through the Peerphonic API. Passwords and query strings are never recorded.</p></div>
+              <span id="audit-count" class="pill"></span>
+            </div>
+            <div id="audit-entries" class="source-list"></div>
+          </section>
+        </section>
+
+        <section class="dashboard-page" data-page-panel="users" hidden>
+          <section id="users-section" class="panel" aria-labelledby="users-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">ACCESS CONTROL</p><h2 id="users-title">Users and permissions</h2><p class="section-description">Create accounts and choose which parts of the dashboard they can manage.</p></div>
+              <span id="user-count" class="pill"></span>
+            </div>
+            <details class="create-user-panel">
+              <summary><span>Create a user</span><small>Add a new OpenSubsonic account</small></summary>
+              <form id="user-form" class="user-form">
+                <label>Username<input id="new-username" name="username" autocomplete="off" required></label>
+                <label>Password<input id="new-password" name="password" type="password" minlength="8" maxlength="72" autocomplete="new-password" required></label>
+                <label>Role<select id="new-user-role" name="role"><option value="user">User</option><option value="admin">Administrator</option></select></label>
+                <button class="button primary" type="submit">Create user</button>
+              </form>
+            </details>
+            <p id="user-message" class="form-message" role="status"></p>
+            <div id="users" class="source-list"></div>
+          </section>
+        </section>
+
+        <section class="dashboard-page" data-page-panel="catalog" hidden>
+          <section class="panel" aria-labelledby="artist-alias-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">CATALOG IDENTITY</p><h2 id="artist-alias-title">Artist aliases</h2><p class="section-description">Merge alternate spellings in clients without modifying files. Removing an alias restores the separate artists.</p></div>
+              <span id="artist-alias-count" class="pill"></span>
+            </div>
+            <form id="artist-alias-form" class="settings-form">
+              <label>Alternate artist<select id="artist-alias-source" required></select></label>
+              <label>Show as<select id="artist-alias-target" required></select></label>
+              <button class="button primary" type="submit">Create alias</button>
+            </form>
+            <p id="catalog-message" class="form-message" role="status"></p>
+            <div id="artist-aliases" class="source-list"></div>
+          </section>
+          <section class="panel" aria-labelledby="track-metadata-title">
+            <div class="section-heading"><div><p class="eyebrow">METADATA OVERRIDE</p><h2 id="track-metadata-title">Edit a track</h2><p class="section-description">Use the OpenSubsonic track ID. Empty fields are left unchanged.</p></div></div>
+            <form id="track-metadata-form" class="settings-form">
+              <label>Track ID<input id="metadata-track-id" required></label>
+              <label>Title<input id="metadata-title"></label>
+              <label>Artist<input id="metadata-artist"></label>
+              <label>Album<input id="metadata-album"></label>
+              <label>Album artist<input id="metadata-album-artist"></label>
+              <label>Genre<input id="metadata-genre"></label>
+              <label>Year<input id="metadata-year" type="number" min="0"></label>
+              <label>Track number<input id="metadata-track-number" type="number" min="0"></label>
+              <label>Disc number<input id="metadata-disc-number" type="number" min="0"></label>
+              <button class="button primary" type="submit">Save metadata</button>
+            </form>
+          </section>
+        </section>
+
+        <section class="dashboard-page" data-page-panel="settings" hidden>
+          <section class="panel" aria-labelledby="soulseek-settings-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">MUSIC PROVIDER</p><h2 id="soulseek-settings-title">Soulseek via slskd</h2><p class="section-description">Peerphonic uses the slskd HTTP API as an isolated Soulseek adapter.</p></div>
+              <span id="soulseek-state" class="pill">Checking</span>
+            </div>
+            <div class="provider-status-card">
+              <div class="provider-status-copy">
+                <span id="soulseek-indicator" class="provider-indicator" aria-hidden="true"></span>
+                <div><h3>slskd connection</h3><p id="soulseek-message">Loading provider status…</p></div>
+              </div>
+              <dl class="provider-facts">
+                <div><dt>Configured</dt><dd id="soulseek-configured">—</dd></div>
+                <div><dt>Reachable</dt><dd id="soulseek-reachable">—</dd></div>
+                <div><dt>API access</dt><dd id="soulseek-authenticated">—</dd></div>
+              </dl>
+            </div>
+            <p class="integration-hint">Configure <code>PEERPHONIC_SLSKD_URL</code> and <code>PEERPHONIC_SLSKD_API_KEY</code>, then restart Peerphonic. The API key is never returned to the browser.</p>
+          </section>
+
+          <section class="panel" aria-labelledby="transfer-settings-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">TORRENT NETWORK</p><h2 id="transfer-settings-title">Bandwidth limits</h2><p class="section-description">Limit total torrent traffic across all active sources. Changes apply immediately and persist across restarts.</p></div>
+            </div>
+            <form id="transfer-settings-form" class="settings-form">
+              <label>Download limit <span>MiB/s · 0 is unlimited</span><input id="download-limit" name="downloadLimit" type="number" min="0" step="any" inputmode="decimal" required></label>
+              <label>Upload limit <span>MiB/s · 0 is unlimited</span><input id="upload-limit" name="uploadLimit" type="number" min="0" step="any" inputmode="decimal" required></label>
+              <div class="settings-submit">
+                <p id="transfer-settings-summary" class="section-description"></p>
+                <button class="button primary" type="submit">Save limits</button>
+              </div>
+            </form>
+            <p id="transfer-settings-message" class="form-message" role="status"></p>
+          </section>
+        </section>
+      </div>
+    </section>
+  </main>
+
+  <template id="empty-template">
+    <div class="empty-state"><span class="empty-icon">◇</span><p></p></div>
+  </template>
+</body>
+</html>

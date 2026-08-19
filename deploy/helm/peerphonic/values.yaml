@@ -1,0 +1,205 @@
+nameOverride: ""
+fullnameOverride: ""
+
+peerphonic:
+  image:
+    repository: ghcr.io/randomtoy/peerphonic
+    tag: ""
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+  cacheSizeBytes: "10737418240"
+  scanOnStart: true
+  scanIntervalSeconds: 300
+  authFailureLimit: 10
+  authFailureWindowSeconds: 60
+  authBlockSeconds: 60
+  torrent:
+    seed: true
+    port: 42069
+    portForwarding: false
+    maxActiveDownloads: 3
+  service:
+    type: ClusterIP
+    port: 8080
+  torrentService:
+    enabled: true
+    type: ClusterIP
+    annotations: {}
+    nodePort: null
+    externalTrafficPolicy: null
+  resources: {}
+  podSecurityContext:
+    fsGroup: 65532
+    fsGroupChangePolicy: OnRootMismatch
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    readOnlyRootFilesystem: true
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+
+web:
+  enabled: true
+  replicaCount: 1
+  image:
+    repository: ghcr.io/randomtoy/peerphonic-web
+    tag: ""
+    pullPolicy: IfNotPresent
+  imagePullSecrets: []
+  service:
+    type: ClusterIP
+    port: 80
+  resources: {}
+  podSecurityContext: {}
+  securityContext:
+    allowPrivilegeEscalation: false
+    capabilities:
+      drop: ["ALL"]
+    runAsNonRoot: true
+    runAsUser: 101
+    runAsGroup: 101
+
+slskd:
+  enabled: true
+  image:
+    repository: slskd/slskd
+    tag: latest
+    pullPolicy: IfNotPresent
+  apiKey: ""
+  webUsername: slskd
+  webPassword: ""
+  soulseekUsername: ""
+  soulseekPassword: ""
+  remoteConfiguration: false
+  listenPort: 50300
+  maxActiveDownloads: 2
+  retryAttempts: 3
+  prebufferBytes: 1048576
+  prebufferTimeoutSeconds: 15
+  service:
+    port: 5030
+  networkService:
+    enabled: true
+    type: ClusterIP
+    annotations: {}
+    nodePort: null
+    externalTrafficPolicy: null
+  resources: {}
+  securityContext:
+    allowPrivilegeEscalation: false
+    runAsNonRoot: true
+    runAsUser: 65532
+    runAsGroup: 65532
+
+auth:
+  existingSecret: ""
+  adminUsername: admin
+  adminPassword: ""
+  keys:
+    adminUsername: admin-username
+    adminPassword: admin-password
+    slskdApiKey: slskd-api-key
+    slskdWebUsername: slskd-web-username
+    slskdWebPassword: slskd-web-password
+    soulseekUsername: soulseek-username
+    soulseekPassword: soulseek-password
+    databaseURL: database-url
+
+database:
+  driver: postgres
+  existingSecret: ""
+  secretKey: database-url
+  url: ""
+
+postgresql:
+  enabled: true
+  image:
+    repository: postgres
+    tag: "17-alpine"
+    pullPolicy: IfNotPresent
+  auth:
+    username: peerphonic
+    database: peerphonic
+    existingSecret: ""
+    password: ""
+    postgresPassword: ""
+    secretKeys:
+      adminPasswordKey: postgres-password
+      userPasswordKey: password
+  service:
+    port: 5432
+  primary:
+    podSecurityContext:
+      fsGroup: 999
+      fsGroupChangePolicy: OnRootMismatch
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+    persistence:
+      enabled: true
+      storageClass: local-path
+      accessModes: ["ReadWriteOnce"]
+      size: 10Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
+
+persistence:
+  enabled: true
+  existingClaim: ""
+  storageClass: ""
+  accessModes:
+    - ReadWriteOnce
+  size: 20Gi
+  annotations: {}
+
+music:
+  existingClaim: ""
+  hostPath: ""
+  hostPathType: Directory
+  readOnly: true
+  persistence:
+    enabled: false
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 10Gi
+    annotations: {}
+
+initContainer:
+  image:
+    repository: busybox
+    tag: "1.37"
+    pullPolicy: IfNotPresent
+
+backup:
+  enabled: false
+  schedule: "0 3 * * *"
+  activeDeadlineSeconds: 3600
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  resources: {}
+  postgresImage:
+    repository: postgres
+    tag: "17-alpine"
+    pullPolicy: IfNotPresent
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: peerphonic.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
