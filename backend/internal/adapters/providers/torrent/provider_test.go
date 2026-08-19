@@ -971,6 +971,19 @@ func TestStreamingProviderReadsPersistedTorrentFileAndArtwork(t *testing.T) {
 	provider.cacheMu.Lock()
 	provider.lastAccessed[catalog.Tracks[0].Ref.Key] = time.Unix(1, 0)
 	provider.cacheMu.Unlock()
+	deadline := time.Now().Add(time.Second)
+	for {
+		provider.cacheMu.Lock()
+		active := provider.active[catalog.InfoHash]
+		provider.cacheMu.Unlock()
+		if active == 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("torrent remained active after completed reads: %d", active)
+		}
+		time.Sleep(time.Millisecond)
+	}
 	freed, err := provider.Evict(context.Background(), 1)
 	if err != nil || freed <= 0 {
 		t.Fatalf("Evict() freed = %d, error = %v", freed, err)
