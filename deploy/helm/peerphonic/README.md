@@ -1,13 +1,15 @@
 # Peerphonic Helm chart
 
-This chart installs Peerphonic, its administration dashboard, and optionally
-slskd. Peerphonic and slskd run in the same pod and mount the same data volume.
-This sidecar layout guarantees that growing Soulseek downloads are immediately
-visible to Peerphonic and keeps the slskd API off the public network.
+This chart installs Peerphonic, its administration dashboard, a dedicated
+PostgreSQL StatefulSet, and optionally slskd. PostgreSQL runs in its own pod with
+its own PVC. Peerphonic and slskd run in the same pod and mount the same data
+volume. This sidecar layout guarantees that growing Soulseek downloads are
+immediately visible to Peerphonic and keeps the slskd API off the public network.
 
 The backend deployment intentionally uses one replica and the `Recreate`
-strategy. SQLite and slskd are single-writer components; horizontal backend
-scaling requires a different metadata and provider topology.
+strategy. PostgreSQL removes the metadata single-writer limitation, but slskd,
+torrent sessions, cache state, and the `ReadWriteOnce` data PVC still require a
+single backend pod.
 
 ## Images
 
@@ -31,6 +33,15 @@ Create a values file that is not committed to source control:
 auth:
   adminPassword: replace-this-password
 
+database:
+  driver: postgres
+  url: postgres://peerphonic:replace-this-password@peerphonic-postgresql:5432/peerphonic?sslmode=disable
+
+postgresql:
+  auth:
+    password: replace-this-password
+    postgresPassword: replace-this-admin-password
+
 slskd:
   apiKey: replace-with-at-least-16-characters
   webPassword: replace-this-password
@@ -43,6 +54,16 @@ music:
 persistence:
   size: 50Gi
 ```
+
+For production, keep credentials out of the values file. Create one Secret for
+Peerphonic and one for PostgreSQL, then set `auth.existingSecret`,
+`database.existingSecret`, and `postgresql.auth.existingSecret`. The default key
+names are documented in `values.yaml`.
+
+PostgreSQL uses the official `postgres:17-alpine` image. The chart creates a
+ClusterIP Service, a single-replica StatefulSet, and a dedicated PVC. Disable it
+with `postgresql.enabled=false` when using an external PostgreSQL service or the
+SQLite metadata driver.
 
 Install the chart:
 
@@ -71,7 +92,7 @@ git push origin v0.1.0
 
 ## Metadata backups
 
-Enable a scheduled, consistent SQLite and credential-key backup on the data PVC:
+Enable a scheduled metadata and credential-key backup on the data PVC:
 
 ```yaml
 backup:
@@ -79,12 +100,14 @@ backup:
   schedule: "0 3 * * *"
 ```
 
-Each run writes a protected, timestamped archive under `/data/backups`. The job
+For PostgreSQL, the job runs `pg_dump --format=custom`; for SQLite it uses the
+application's consistent snapshot command. Each run writes a protected,
+timestamped archive under `/data/backups`. The job
 does not stop Peerphonic and uses pod affinity to stay on the backend node for
 `ReadWriteOnce` volumes. `concurrencyPolicy: Forbid` prevents overlapping runs.
 The chart does not delete old archives automatically; apply retention through
 the storage platform or a separate reviewed cleanup policy. These archives cover
-SQLite metadata and the credential key, not music, cache, or `.torrent` files.
+metadata and the credential key, not music, cache, or `.torrent` files.
 
 Instead of placing credentials in a values file, create a Secret and set
 `auth.existingSecret`. Its key names are configurable under `auth.keys`.
@@ -124,8 +147,10 @@ does not own the node's LAN address; use a Service or explicit router forwarding
 
 ## Storage
 
-The data claim contains SQLite, torrent metadata and cache, Soulseek application
-state, completed files, and partial files. Peerphonic and slskd use the same
+The Peerphonic data claim contains the credential key, torrent metadata and
+cache, Soulseek application state, completed files, and partial files. SQLite
+also lives there when selected. PostgreSQL uses its own claim. Peerphonic and
+slskd use the same
 paths under `/data/cache/soulseek`, which enables progressive playback while a
 file is still downloading.
 

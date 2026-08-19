@@ -74,6 +74,57 @@
         "adminPassword": { "type": "string" }
       }
     },
+    "database": {
+      "type": "object",
+      "required": ["driver"],
+      "properties": {
+        "driver": { "type": "string", "enum": ["sqlite", "postgres"] },
+        "existingSecret": { "type": "string" },
+        "secretKey": { "type": "string", "minLength": 1 },
+        "url": { "type": "string" }
+      }
+    },
+    "postgresql": {
+      "type": "object",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "image": {
+          "type": "object",
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string", "minLength": 1 }
+          }
+        },
+        "auth": {
+          "type": "object",
+          "properties": {
+            "username": { "type": "string", "minLength": 1 },
+            "database": { "type": "string", "minLength": 1 },
+            "existingSecret": { "type": "string" },
+            "password": { "type": "string" },
+            "postgresPassword": { "type": "string" }
+          }
+        },
+        "primary": {
+          "type": "object",
+          "properties": {
+            "persistence": {
+              "type": "object",
+              "properties": {
+                "enabled": { "type": "boolean" },
+                "storageClass": { "type": "string" },
+                "size": { "type": "string", "minLength": 1 },
+                "accessModes": {
+                  "type": "array",
+                  "minItems": 1,
+                  "items": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "backup": {
       "type": "object",
       "properties": {
@@ -92,6 +143,19 @@
           "type": "array",
           "minItems": 1,
           "items": { "type": "string" }
+        }
+      }
+    },
+    "music": {
+      "type": "object",
+      "properties": {
+        "readOnly": { "type": "boolean" },
+        "persistence": {
+          "type": "object",
+          "properties": {
+            "enabled": { "type": "boolean" },
+            "size": { "type": "string", "minLength": 1 }
+          }
         }
       }
     }

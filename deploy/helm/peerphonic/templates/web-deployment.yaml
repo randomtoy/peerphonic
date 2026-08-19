@@ -18,6 +18,10 @@ spec:
         checksum/config: {{ include (print $.Template.BasePath "/web-configmap.yaml") . | sha256sum }}
     spec:
       automountServiceAccountToken: false
+      {{- with .Values.web.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
       securityContext:
         {{- toYaml .Values.web.podSecurityContext | nindent 8 }}
       containers:

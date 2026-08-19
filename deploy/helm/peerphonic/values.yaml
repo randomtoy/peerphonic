@@ -47,6 +47,7 @@ web:
     repository: ghcr.io/randomtoy/peerphonic-web
     tag: ""
     pullPolicy: IfNotPresent
+  imagePullSecrets: []
   service:
     type: ClusterIP
     port: 80
@@ -104,6 +105,49 @@ auth:
     slskdWebPassword: slskd-web-password
     soulseekUsername: soulseek-username
     soulseekPassword: soulseek-password
+    databaseURL: database-url
+
+database:
+  driver: postgres
+  existingSecret: ""
+  secretKey: database-url
+  url: ""
+
+postgresql:
+  enabled: true
+  image:
+    repository: postgres
+    tag: "17-alpine"
+    pullPolicy: IfNotPresent
+  auth:
+    username: peerphonic
+    database: peerphonic
+    existingSecret: ""
+    password: ""
+    postgresPassword: ""
+    secretKeys:
+      adminPasswordKey: postgres-password
+      userPasswordKey: password
+  service:
+    port: 5432
+  primary:
+    podSecurityContext:
+      fsGroup: 999
+      fsGroupChangePolicy: OnRootMismatch
+    containerSecurityContext:
+      allowPrivilegeEscalation: false
+    persistence:
+      enabled: true
+      storageClass: local-path
+      accessModes: ["ReadWriteOnce"]
+      size: 10Gi
+    resources:
+      requests:
+        cpu: 100m
+        memory: 128Mi
+      limits:
+        cpu: 500m
+        memory: 512Mi
 
 persistence:
   enabled: true
@@ -119,6 +163,13 @@ music:
   hostPath: ""
   hostPathType: Directory
   readOnly: true
+  persistence:
+    enabled: false
+    storageClass: ""
+    accessModes:
+      - ReadWriteOnce
+    size: 10Gi
+    annotations: {}
 
 initContainer:
   image:
@@ -133,6 +184,10 @@ backup:
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   resources: {}
+  postgresImage:
+    repository: postgres
+    tag: "17-alpine"
+    pullPolicy: IfNotPresent
 
 ingress:
   enabled: false

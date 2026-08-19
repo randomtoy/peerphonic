@@ -55,8 +55,19 @@ spec:
               value: ":8080"
             - name: PEERPHONIC_MUSIC_DIR
               value: /music
+            - name: PEERPHONIC_METADATA_DRIVER
+              value: {{ .Values.database.driver | quote }}
             - name: PEERPHONIC_DATABASE
               value: /data/peerphonic.db
+            - name: PEERPHONIC_CREDENTIAL_KEY_PATH
+              value: /data/peerphonic.auth.key
+            {{- if eq .Values.database.driver "postgres" }}
+            - name: PEERPHONIC_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ include "peerphonic.databaseSecretName" . }}
+                  key: {{ .Values.database.secretKey }}
+            {{- end }}
             - name: PEERPHONIC_CACHE_DIR
               value: /data/cache
             - name: PEERPHONIC_CACHE_SIZE_BYTES
@@ -225,6 +236,9 @@ spec:
           {{- if .Values.music.existingClaim }}
           persistentVolumeClaim:
             claimName: {{ .Values.music.existingClaim }}
+          {{- else if .Values.music.persistence.enabled }}
+          persistentVolumeClaim:
+            claimName: {{ include "peerphonic.musicClaimName" . }}
           {{- else if .Values.music.hostPath }}
           hostPath:
             path: {{ .Values.music.hostPath | quote }}

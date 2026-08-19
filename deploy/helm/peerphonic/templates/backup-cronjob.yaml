@@ -47,6 +47,29 @@ spec:
           {{- end }}
           containers:
             - name: backup
+              {{- if eq .Values.database.driver "postgres" }}
+              image: "{{ .Values.backup.postgresImage.repository }}:{{ .Values.backup.postgresImage.tag }}"
+              imagePullPolicy: {{ .Values.backup.postgresImage.pullPolicy }}
+              command: ["sh", "-ec"]
+              args:
+                - |
+                  umask 077
+                  timestamp="$(date -u +%Y%m%dT%H%M%SZ)"
+                  workspace="$(mktemp -d /tmp/peerphonic-backup.XXXXXX)"
+                  pg_dump --format=custom --file="${workspace}/peerphonic.dump" "$DATABASE_URL"
+                  cp /data/peerphonic.auth.key "${workspace}/peerphonic.auth.key"
+                  (cd "$workspace" && sha256sum peerphonic.dump peerphonic.auth.key > manifest.sha256)
+                  mkdir -p /data/backups
+                  tar -C "$workspace" -czf "/data/backups/peerphonic-${timestamp}.tar.gz" \
+                    manifest.sha256 peerphonic.dump peerphonic.auth.key
+                  rm -rf "$workspace"
+              env:
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ include "peerphonic.databaseSecretName" . }}
+                      key: {{ .Values.database.secretKey }}
+              {{- else }}
               image: "{{ .Values.peerphonic.image.repository }}:{{ default .Chart.AppVersion .Values.peerphonic.image.tag }}"
               imagePullPolicy: {{ .Values.peerphonic.image.pullPolicy }}
               command: ["/peerphonic"]
@@ -56,6 +79,7 @@ spec:
                 - /data/peerphonic.db
                 - --output-dir
                 - /data/backups
+              {{- end }}
               securityContext:
                 {{- toYaml .Values.peerphonic.securityContext | nindent 16 }}
               resources:
@@ -63,6 +87,10 @@ spec:
               volumeMounts:
                 - name: data
                   mountPath: /data
+                {{- if eq .Values.database.driver "postgres" }}
+                - name: tmp
+                  mountPath: /tmp
+                {{- end }}
           volumes:
             - name: data
               {{- if .Values.persistence.enabled }}
@@ -71,4 +99,8 @@ spec:
               {{- else }}
               emptyDir: {}
               {{- end }}
+            {{- if eq .Values.database.driver "postgres" }}
+            - name: tmp
+              emptyDir: {}
+            {{- end }}
 {{- end }}

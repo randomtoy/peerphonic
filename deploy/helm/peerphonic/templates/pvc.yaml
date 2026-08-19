@@ -20,3 +20,25 @@ spec:
       storage: {{ .Values.persistence.size }}
 {{- end }}
 
+{{- if and .Values.music.persistence.enabled (not .Values.music.existingClaim) (not .Values.music.hostPath) }}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "peerphonic.musicClaimName" . }}
+  labels:
+    {{- include "peerphonic.labels" . | nindent 4 }}
+  {{- with .Values.music.persistence.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  accessModes:
+    {{- toYaml .Values.music.persistence.accessModes | nindent 4 }}
+  {{- if .Values.music.persistence.storageClass }}
+  storageClassName: {{ .Values.music.persistence.storageClass | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.music.persistence.size }}
+{{- end }}

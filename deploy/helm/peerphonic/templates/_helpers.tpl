@@ -47,3 +47,24 @@ app.kubernetes.io/component: web
 {{- default (printf "%s-data" (include "peerphonic.fullname" .)) .Values.persistence.existingClaim }}
 {{- end }}
 
+{{- define "peerphonic.databaseSecretName" -}}
+{{- default (include "peerphonic.secretName" .) .Values.database.existingSecret }}
+{{- end }}
+
+{{- define "peerphonic.musicClaimName" -}}
+{{- default (printf "%s-music" (include "peerphonic.fullname" .)) .Values.music.existingClaim }}
+{{- end }}
+
+{{- define "peerphonic.postgresqlName" -}}
+{{- printf "%s-postgresql" (include "peerphonic.fullname" .) | trunc 63 | trimSuffix "-" }}
+{{- end }}
+
+{{- define "peerphonic.postgresqlSecretName" -}}
+{{- default (include "peerphonic.postgresqlName" .) .Values.postgresql.auth.existingSecret }}
+{{- end }}
+
+{{- define "peerphonic.postgresqlSelectorLabels" -}}
+app.kubernetes.io/name: {{ include "peerphonic.name" . }}
+app.kubernetes.io/instance: {{ .Release.Name }}
+app.kubernetes.io/component: postgresql
+{{- end }}

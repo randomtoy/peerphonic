@@ -1,0 +1,173 @@
+name: Deploy K3s
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-k3s
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+env:
+  LOCAL_K8S_PORT: "16443"
+  NAMESPACE: peerphonic
+  RELEASE_NAME: peerphonic
+
+jobs:
+  build:
+    name: Build ${{ matrix.name }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: backend
+            image: peerphonic
+            dockerfile: deploy/Dockerfile
+          - name: web
+            image: peerphonic-web
+            dockerfile: web/Dockerfile
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4.2.0
+      - name: Log in to GHCR
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: .
+          file: ${{ matrix.dockerfile }}
+          platforms: linux/amd64
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:sha-${{ github.sha }}
+            ghcr.io/${{ github.repository_owner }}/${{ matrix.image }}:k3s-latest
+          cache-from: type=gha,scope=k3s-${{ matrix.name }}
+          cache-to: type=gha,mode=max,scope=k3s-${{ matrix.name }}
+
+  deploy:
+    name: Deploy to k3s
+    needs: build
+    runs-on: ubuntu-latest
+    environment: k3s
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+      - name: Set up Helm
+        uses: azure/setup-helm@v5.0.1
+        with:
+          version: v4.1.1
+      - name: Install kubectl
+        uses: azure/setup-kubectl@v4
+        with:
+          version: v1.31.12
+      - name: Configure SSH
+        shell: bash
+        run: |
+          install -d -m 0700 ~/.ssh
+          install -m 0600 /dev/null ~/.ssh/deploy_key
+          printf '%s\n' "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+      - name: Start Kubernetes API tunnel
+        id: tunnel
+        shell: bash
+        run: |
+          ssh -o StrictHostKeyChecking=no \
+            -o UserKnownHostsFile=/dev/null \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=3 \
+            -o ExitOnForwardFailure=yes \
+            -o LogLevel=ERROR \
+            -i ~/.ssh/deploy_key -N \
+            -L "${LOCAL_K8S_PORT}:127.0.0.1:6443" \
+            "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}" &
+          tunnel_pid=$!
+          echo "pid=${tunnel_pid}" >> "$GITHUB_OUTPUT"
+          for _ in {1..30}; do
+            nc -z 127.0.0.1 "$LOCAL_K8S_PORT" && exit 0
+            kill -0 "$tunnel_pid"
+            sleep 1
+          done
+          exit 1
+      - name: Configure Kubernetes
+        shell: bash
+        run: |
+          install -d -m 0700 ~/.kube
+          printf '%s' "${{ secrets.KUBECONFIG_B64 }}" | base64 -d > ~/.kube/config
+          chmod 0600 ~/.kube/config
+          sed -i -E "s|(server: https?://)[^:]+:[0-9]+|\1127.0.0.1:${LOCAL_K8S_PORT}|g" ~/.kube/config
+          kubectl get nodes --request-timeout=15s
+      - name: Create namespace and runtime secrets
+        shell: bash
+        env:
+          ADMIN_PASSWORD: ${{ secrets.PEERPHONIC_ADMIN_PASSWORD }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          POSTGRES_ADMIN_PASSWORD: ${{ secrets.POSTGRES_ADMIN_PASSWORD }}
+          SLSKD_API_KEY: ${{ secrets.SLSKD_API_KEY }}
+          SLSKD_WEB_PASSWORD: ${{ secrets.SLSKD_WEB_PASSWORD }}
+          SOULSEEK_USERNAME: ${{ secrets.SOULSEEK_USERNAME }}
+          SOULSEEK_PASSWORD: ${{ secrets.SOULSEEK_PASSWORD }}
+          GHCR_PULL_TOKEN: ${{ secrets.GHCR_PULL_TOKEN }}
+        run: |
+          kubectl create namespace "$NAMESPACE" --dry-run=client -o yaml | kubectl apply -f -
+          database_url="postgres://peerphonic:${POSTGRES_PASSWORD}@peerphonic-postgresql:5432/peerphonic?sslmode=disable"
+          kubectl create secret generic peerphonic-auth -n "$NAMESPACE" \
+            --from-literal=admin-username=admin \
+            --from-literal=admin-password="$ADMIN_PASSWORD" \
+            --from-literal=database-url="$database_url" \
+            --from-literal=slskd-api-key="$SLSKD_API_KEY" \
+            --from-literal=slskd-web-username=slskd \
+            --from-literal=slskd-web-password="$SLSKD_WEB_PASSWORD" \
+            --from-literal=soulseek-username="$SOULSEEK_USERNAME" \
+            --from-literal=soulseek-password="$SOULSEEK_PASSWORD" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret generic peerphonic-postgresql -n "$NAMESPACE" \
+            --from-literal=password="$POSTGRES_PASSWORD" \
+            --from-literal=postgres-password="$POSTGRES_ADMIN_PASSWORD" \
+            --dry-run=client -o yaml | kubectl apply -f -
+          kubectl create secret docker-registry peerphonic-ghcr -n "$NAMESPACE" \
+            --docker-server=ghcr.io \
+            --docker-username="${{ vars.GHCR_USERNAME }}" \
+            --docker-password="$GHCR_PULL_TOKEN" \
+            --dry-run=client -o yaml | kubectl apply -f -
+      - name: Validate Helm chart
+        run: >-
+          helm lint --strict deploy/helm/peerphonic
+          --values deploy/values-k3s.yaml
+      - name: Deploy
+        run: |
+          helm upgrade --install "$RELEASE_NAME" deploy/helm/peerphonic \
+            --namespace "$NAMESPACE" \
+            --values deploy/values-k3s.yaml \
+            --set-string "peerphonic.image.tag=sha-${GITHUB_SHA}" \
+            --set-string "web.image.tag=sha-${GITHUB_SHA}" \
+            --atomic --wait --timeout 12m
+      - name: Verify PostgreSQL and Peerphonic
+        shell: bash
+        run: |
+          kubectl rollout status statefulset/peerphonic-postgresql -n "$NAMESPACE" --timeout=5m
+          kubectl rollout status deployment/peerphonic -n "$NAMESPACE" --timeout=5m
+          kubectl rollout status deployment/peerphonic-web -n "$NAMESPACE" --timeout=5m
+          kubectl exec -n "$NAMESPACE" statefulset/peerphonic-postgresql -- \
+            pg_isready -U peerphonic -d peerphonic
+          kubectl exec -n "$NAMESPACE" deployment/peerphonic -c peerphonic -- sh -ec \
+            'wget -qO- http://127.0.0.1:8080/api/v1/ready | grep -q "ready"'
+          kubectl get pods,services,ingress,pvc -n "$NAMESPACE"
+      - name: Cleanup credentials and tunnel
+        if: always()
+        shell: bash
+        run: |
+          rm -f ~/.ssh/deploy_key ~/.kube/config
+          if [[ -n "${{ steps.tunnel.outputs.pid }}" ]]; then
+            kill "${{ steps.tunnel.outputs.pid }}" 2>/dev/null || true
+          fi

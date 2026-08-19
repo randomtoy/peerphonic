@@ -96,6 +96,7 @@ jobs:
         run: >-
           helm lint --strict deploy/helm/peerphonic
           --set auth.existingSecret=peerphonic-auth
+          --set postgresql.auth.existingSecret=peerphonic-postgresql
       - name: Package chart
         run: >-
           helm package deploy/helm/peerphonic
