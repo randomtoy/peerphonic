@@ -239,6 +239,73 @@ func TestPingSupportsTokenAuthenticationAndJSON(t *testing.T) {
 	}
 }
 
+func TestGetUserSupportsFeishinLogin(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newTestHandler(t)
+	salt := "feishin-salt"
+	token := fmt.Sprintf("%x", md5.Sum([]byte("secret"+salt)))
+	request := httptest.NewRequest(http.MethodGet,
+		"/rest/getUser.view?u=alice&s="+salt+"&t="+token+
+			"&v=1.13.0&c=Feishin&f=json&username=alice", nil,
+	)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, body = %s", response.Code, response.Body.String())
+	}
+	var payload struct {
+		Response struct {
+			Status string `json:"status"`
+			User   user   `json:"user"`
+		} `json:"subsonic-response"`
+	}
+	if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Response.Status != "ok" || payload.Response.User.Username != "alice" {
+		t.Fatalf("response = %#v", payload.Response)
+	}
+	if !payload.Response.User.AdminRole || !payload.Response.User.StreamRole ||
+		!payload.Response.User.DownloadRole || !payload.Response.User.PlaylistRole {
+		t.Fatalf("roles = %#v", payload.Response.User)
+	}
+	if len(payload.Response.User.Folders) != 1 || payload.Response.User.Folders[0] != musicFolderID {
+		t.Fatalf("folders = %#v", payload.Response.User.Folders)
+	}
+}
+
+func TestGetUserRejectsMissingOrDifferentUsername(t *testing.T) {
+	t.Parallel()
+
+	handler, _ := newTestHandler(t)
+	for _, test := range []struct {
+		name string
+		path string
+		code int
+	}{
+		{name: "missing", path: "/rest/getUser.view?u=alice&p=secret&f=json", code: 10},
+		{name: "different", path: "/rest/getUser.view?u=alice&p=secret&f=json&username=bob", code: 50},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, test.path, nil))
+			var payload struct {
+				Response struct {
+					Error apiError `json:"error"`
+				} `json:"subsonic-response"`
+			}
+			if err := json.Unmarshal(response.Body.Bytes(), &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload.Response.Error.Code != test.code {
+				t.Fatalf("error = %#v, body = %s", payload.Response.Error, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestMediaAnnotationLifecycle(t *testing.T) {
 	t.Parallel()
 
