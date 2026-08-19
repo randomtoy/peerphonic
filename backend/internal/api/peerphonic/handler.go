@@ -251,6 +251,10 @@ type catalogTrackPatchRequest struct {
 	DiscNumber  *int    `json:"discNumber"`
 }
 
+type cachePrefetchRequest struct {
+	Pinned bool `json:"pinned"`
+}
+
 func NewHandler(
 	cache cacheStatus,
 	torrentImporter ports.SourceImporter,
@@ -308,6 +312,7 @@ func NewHandlerWithAuthenticatorAndCatalog(
 	providerSearch ports.SourceSearcher,
 	settings ports.TransferSettingsManager,
 	catalog ports.CatalogManager,
+	libraryCache ports.LibraryCacheManager,
 	scans ...scanController,
 ) http.Handler {
 	var scan scanController
@@ -316,7 +321,7 @@ func NewHandlerWithAuthenticatorAndCatalog(
 	}
 	return newHandlerWithCatalog(
 		cache, torrentImporter, uriImporter, sources, transfers, downloads,
-		authenticator, users, providerStatus, providerSearch, settings, catalog, scan,
+		authenticator, users, providerStatus, providerSearch, settings, catalog, libraryCache, scan,
 	)
 }
 
@@ -336,7 +341,7 @@ func newHandler(
 ) http.Handler {
 	return newHandlerWithCatalog(
 		cache, torrentImporter, uriImporter, sources, transfers, downloads,
-		authenticator, users, providerStatus, providerSearch, settings, nil, scans,
+		authenticator, users, providerStatus, providerSearch, settings, nil, nil, scans,
 	)
 }
 
@@ -353,6 +358,7 @@ func newHandlerWithCatalog(
 	providerSearch ports.SourceSearcher,
 	settings ports.TransferSettingsManager,
 	catalog ports.CatalogManager,
+	libraryCache ports.LibraryCacheManager,
 	scans scanController,
 ) http.Handler {
 	mux := http.NewServeMux()
@@ -444,6 +450,51 @@ func newHandlerWithCatalog(
 				return
 			}
 			writeJSON(writer, http.StatusOK, track)
+		})
+	}
+	if libraryCache != nil {
+		mux.HandleFunc("POST /api/v1/cache/tracks/{id}", func(writer http.ResponseWriter, request *http.Request) {
+			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
+				return
+			}
+			var payload cachePrefetchRequest
+			if request.ContentLength > 0 && !decodeJSONRequest(writer, request, 16<<10, &payload) {
+				return
+			}
+			if err := libraryCache.PrefetchTrack(request.Context(), request.PathValue("id"), payload.Pinned); err != nil {
+				writeCatalogManagementError(writer, err)
+				return
+			}
+			writeJSON(writer, http.StatusAccepted, map[string]int{"tracks": 1})
+		})
+		mux.HandleFunc("POST /api/v1/cache/albums/{id}", func(writer http.ResponseWriter, request *http.Request) {
+			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
+				return
+			}
+			var payload cachePrefetchRequest
+			if request.ContentLength > 0 && !decodeJSONRequest(writer, request, 16<<10, &payload) {
+				return
+			}
+			count, err := libraryCache.PrefetchAlbum(request.Context(), request.PathValue("id"), payload.Pinned)
+			if err != nil {
+				writeCatalogManagementError(writer, err)
+				return
+			}
+			writeJSON(writer, http.StatusAccepted, map[string]int{"tracks": count})
+		})
+		mux.HandleFunc("PUT /api/v1/cache/tracks/{id}/pin", func(writer http.ResponseWriter, request *http.Request) {
+			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
+				return
+			}
+			var payload cachePrefetchRequest
+			if !decodeJSONRequest(writer, request, 16<<10, &payload) {
+				return
+			}
+			if err := libraryCache.SetTrackPinned(request.Context(), request.PathValue("id"), payload.Pinned); err != nil {
+				writeCatalogManagementError(writer, err)
+				return
+			}
+			writer.WriteHeader(http.StatusNoContent)
 		})
 	}
 	if scans != nil {

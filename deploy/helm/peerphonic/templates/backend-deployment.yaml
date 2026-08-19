@@ -101,6 +101,10 @@ spec:
               value: {{ .Values.slskd.maxActiveDownloads | quote }}
             - name: PEERPHONIC_SLSKD_RETRY_ATTEMPTS
               value: {{ .Values.slskd.retryAttempts | quote }}
+            - name: PEERPHONIC_SLSKD_PREBUFFER_BYTES
+              value: {{ .Values.slskd.prebufferBytes | quote }}
+            - name: PEERPHONIC_SLSKD_PREBUFFER_TIMEOUT_SECONDS
+              value: {{ .Values.slskd.prebufferTimeoutSeconds | quote }}
             {{- end }}
           ports:
             - name: http

@@ -96,6 +96,8 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 			cfg.SlskdURL, cfg.SlskdAPIKey, time.Duration(cfg.SlskdTimeoutSeconds)*time.Second,
 			soulseekprovider.DownloadPolicy{
 				MaxActive: cfg.SlskdMaxDownloads, RetryAttempts: cfg.SlskdRetryAttempts,
+				PrebufferBytes:   cfg.SlskdPrebufferBytes,
+				PrebufferTimeout: time.Duration(cfg.SlskdPrebufferSeconds) * time.Second,
 			},
 		)
 		if clientErr != nil {
@@ -205,6 +207,13 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 		downloadMonitors = append(downloadMonitors, soulseekClient)
 	}
 	streaming := services.NewStreamingService(catalog, streamingProviders...)
+	libraryCache := services.NewLibraryCacheService(ctx, catalog, streaming, catalog, torrentManager)
+	if soulseekClient != nil {
+		soulseekClient.SetTrackPinChecker(func(checkCtx context.Context, trackID string) bool {
+			pinned, err := catalog.TrackPinned(checkCtx, trackID)
+			return err == nil && pinned
+		})
+	}
 	var transcoder ports.AudioTranscoder
 	if cfg.FFmpegPath != "" {
 		ffmpeg, ffmpegErr := streamingadapter.NewFFmpeg(cfg.FFmpegPath)
@@ -226,7 +235,8 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	))
 	mux.Handle("/", peerphonic.NewHandlerWithAuthenticatorAndCatalog(
 		cacheStatus, torrentImporter, magnetImporter, torrentManager, torrentProvider, downloadService,
-		userService, userService, soulseekMonitor, soulseekSearch, transferSettings, catalog, scanManager,
+		userService, userService, soulseekMonitor, soulseekSearch, transferSettings, catalog, libraryCache,
+		scanManager,
 	))
 	return &application{
 		handler: httpMetrics.Wrap(mux), catalog: catalog, torrentProvider: torrentProvider,

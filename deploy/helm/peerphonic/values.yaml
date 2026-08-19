@@ -72,6 +72,8 @@ slskd:
   listenPort: 50300
   maxActiveDownloads: 2
   retryAttempts: 3
+  prebufferBytes: 1048576
+  prebufferTimeoutSeconds: 15
   service:
     port: 5030
   networkService:

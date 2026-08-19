@@ -37,6 +37,8 @@ const (
 	peerBusyRetryDelay        = 150 * time.Millisecond
 	defaultMaxDownloads       = 2
 	defaultDownloadRetries    = 3
+	defaultPrebufferBytes     = 1 << 20
+	defaultPrebufferTimeout   = 15 * time.Second
 )
 
 var artworkExtensions = map[string]struct{}{
@@ -53,6 +55,8 @@ type Client struct {
 	completedMu      sync.RWMutex
 	completedHandler func(CompletedFile)
 	cacheChanged     func()
+	trackPinMu       sync.RWMutex
+	trackPinChecker  func(context.Context, string) bool
 	searchCleanupCtx context.Context
 	searchCleanupEnd context.CancelFunc
 	searchCleanupMu  sync.Mutex
@@ -74,8 +78,10 @@ type CompletedFile struct {
 }
 
 type DownloadPolicy struct {
-	MaxActive     int
-	RetryAttempts int
+	MaxActive        int
+	RetryAttempts    int
+	PrebufferBytes   int64
+	PrebufferTimeout time.Duration
 }
 
 func NewSlskd(endpoint, apiKey string, timeout time.Duration, policies ...DownloadPolicy) (*Client, error) {
@@ -93,13 +99,22 @@ func NewSlskd(endpoint, apiKey string, timeout time.Duration, policies ...Downlo
 	if timeout <= 0 {
 		timeout = 5 * time.Second
 	}
-	policy := DownloadPolicy{MaxActive: defaultMaxDownloads, RetryAttempts: defaultDownloadRetries}
+	policy := DownloadPolicy{
+		MaxActive: defaultMaxDownloads, RetryAttempts: defaultDownloadRetries,
+		PrebufferBytes: defaultPrebufferBytes, PrebufferTimeout: defaultPrebufferTimeout,
+	}
 	if len(policies) > 0 {
 		if policies[0].MaxActive > 0 {
 			policy.MaxActive = policies[0].MaxActive
 		}
 		if policies[0].RetryAttempts > 0 {
 			policy.RetryAttempts = policies[0].RetryAttempts
+		}
+		if policies[0].PrebufferBytes > 0 {
+			policy.PrebufferBytes = policies[0].PrebufferBytes
+		}
+		if policies[0].PrebufferTimeout > 0 {
+			policy.PrebufferTimeout = policies[0].PrebufferTimeout
 		}
 	}
 	cleanupCtx, cleanupCancel := context.WithCancel(context.Background())
@@ -112,6 +127,19 @@ func NewSlskd(endpoint, apiKey string, timeout time.Duration, policies ...Downlo
 }
 
 func (c *Client) Name() string { return Name }
+
+func (c *Client) SetTrackPinChecker(checker func(context.Context, string) bool) {
+	c.trackPinMu.Lock()
+	c.trackPinChecker = checker
+	c.trackPinMu.Unlock()
+}
+
+func (c *Client) isTrackPinned(ctx context.Context, trackID string) bool {
+	c.trackPinMu.RLock()
+	checker := c.trackPinChecker
+	c.trackPinMu.RUnlock()
+	return checker != nil && checker(ctx, trackID)
+}
 
 func (c *Client) SetCompletedHandler(handler func(CompletedFile)) {
 	c.completedMu.Lock()

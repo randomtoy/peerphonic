@@ -129,5 +129,9 @@ state, completed files, and partial files. Peerphonic and slskd use the same
 paths under `/data/cache/soulseek`, which enables progressive playback while a
 file is still downloading.
 
+`slskd.prebufferBytes` and `slskd.prebufferTimeoutSeconds` control how much of a
+Soulseek track Peerphonic attempts to collect before handing playback to a music
+client. Larger buffers reduce stalls on slow peers at the cost of a longer start.
+
 Use `persistence.existingClaim` to retain an already provisioned PVC. Set
 `persistence.enabled=false` only for disposable testing.

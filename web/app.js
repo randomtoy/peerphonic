@@ -60,6 +60,12 @@ const elements = {
   updatedAt: document.querySelector("#updated-at"),
   addSourceSection: document.querySelector("#add-source-section"),
   downloadsSection: document.querySelector("#downloads-section"),
+  prefetchForm: document.querySelector("#prefetch-form"),
+  prefetchType: document.querySelector("#prefetch-type"),
+  prefetchID: document.querySelector("#prefetch-id"),
+  prefetchPinned: document.querySelector("#prefetch-pinned"),
+  prefetchMessage: document.querySelector("#prefetch-message"),
+  unpinTrack: document.querySelector("#unpin-track"),
   usersSection: document.querySelector("#users-section"),
   artistAliasForm: document.querySelector("#artist-alias-form"),
   artistAliasSource: document.querySelector("#artist-alias-source"),
@@ -1027,6 +1033,51 @@ elements.artistAliasForm.addEventListener("submit", async (event) => {
     elements.catalogMessage.textContent = error.message;
   } finally {
     button.disabled = false;
+  }
+});
+
+elements.prefetchForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = elements.prefetchForm.querySelector("button[type=submit]");
+  button.disabled = true;
+  elements.prefetchMessage.className = "form-message";
+  elements.prefetchMessage.textContent = "Adding music to the background cache queue…";
+  try {
+    const result = await api(`/api/v1/cache/${elements.prefetchType.value}/${encodeURIComponent(elements.prefetchID.value.trim())}`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ pinned: elements.prefetchPinned.checked }),
+    });
+    const count = result?.tracks;
+    elements.prefetchMessage.textContent = count ? `Queued ${count} tracks.` : "Track queued for caching.";
+    elements.prefetchForm.reset();
+    await refresh();
+  } catch (error) {
+    elements.prefetchMessage.className = "form-message error";
+    elements.prefetchMessage.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+elements.unpinTrack.addEventListener("click", async () => {
+  const id = elements.prefetchID.value.trim();
+  if (!id || elements.prefetchType.value !== "tracks") {
+    elements.prefetchMessage.className = "form-message error";
+    elements.prefetchMessage.textContent = "Enter a track ID and select Track.";
+    return;
+  }
+  elements.unpinTrack.disabled = true;
+  try {
+    await api(`/api/v1/cache/tracks/${encodeURIComponent(id)}/pin`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ pinned: false }),
+    });
+    elements.prefetchMessage.className = "form-message";
+    elements.prefetchMessage.textContent = "Track is no longer protected from eviction.";
+  } catch (error) {
+    elements.prefetchMessage.className = "form-message error";
+    elements.prefetchMessage.textContent = error.message;
+  } finally {
+    elements.unpinTrack.disabled = false;
   }
 });
 

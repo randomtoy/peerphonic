@@ -27,6 +27,7 @@ changing the client-facing streaming flow.
 - embedded and folder cover artwork stored through the blob storage boundary;
 - cached OpenSubsonic artwork resizing for mobile clients;
 - shared media cache with a size limit, LRU eviction, and pinned entries;
+- background track/album prefetch with persistent track pin intent across restarts;
 - `.torrent` catalog import with on-demand, seekable track streaming;
 - persistent background completion of a selected torrent track after its first playback request;
 - on-demand album artwork from image files included in torrents;
@@ -165,6 +166,8 @@ then CLI flags.
 | `slskd_incomplete_dir` | `PEERPHONIC_SLSKD_INCOMPLETE_DIR` | `--slskd-incomplete` | `<cache>/soulseek/incomplete` |
 | `slskd_max_active_downloads` | `PEERPHONIC_SLSKD_MAX_ACTIVE_DOWNLOADS` | `--slskd-max-downloads` | `2` |
 | `slskd_retry_attempts` | `PEERPHONIC_SLSKD_RETRY_ATTEMPTS` | `--slskd-retry-attempts` | `3` |
+| `slskd_prebuffer_bytes` | `PEERPHONIC_SLSKD_PREBUFFER_BYTES` | `--slskd-prebuffer-bytes` | `1048576` |
+| `slskd_prebuffer_timeout_seconds` | `PEERPHONIC_SLSKD_PREBUFFER_TIMEOUT_SECONDS` | `--slskd-prebuffer-timeout` | `15` |
 | `ffmpeg_path` | `PEERPHONIC_FFMPEG_PATH` | `--ffmpeg` | `ffmpeg` |
 
 Use a config file with `--config peerphonic.json` or set its path through
@@ -354,6 +357,16 @@ slot. Soulseek uses a separate two-transfer limit and retries temporary slskd,
 timeout, disconnect, and aborted-transfer failures up to three times. Permanent
 errors such as a peer no longer sharing a file fail immediately so another
 catalog source can be tried.
+
+Tracks and complete albums can be prefetched without starting client playback;
+`pinned` also protects completed provider data from automatic eviction:
+
+```bash
+curl -u admin:admin -H 'Content-Type: application/json' -d '{"pinned":true}' \
+  http://localhost:8080/api/v1/cache/tracks/TRACK_ID
+curl -u admin:admin -H 'Content-Type: application/json' -d '{"pinned":true}' \
+  http://localhost:8080/api/v1/cache/albums/ALBUM_ID
+```
 
 Soulseek single-track jobs use the same endpoint and add queued and cancelled
 states. Users with `sources.manage` can cancel an active slskd transfer or retry

@@ -161,6 +161,17 @@
         </section>
 
         <section class="dashboard-page" data-page-panel="activity" hidden>
+          <section class="panel" data-required-permission="sources.manage" aria-labelledby="prefetch-title">
+            <div class="section-heading"><div><p class="eyebrow">OFFLINE CACHE</p><h2 id="prefetch-title">Prefetch music</h2><p class="section-description">Download a track or complete album in the background. Pinned music is protected from automatic eviction.</p></div></div>
+            <form id="prefetch-form" class="settings-form">
+              <label>Item type<select id="prefetch-type"><option value="tracks">Track</option><option value="albums">Album</option></select></label>
+              <label>OpenSubsonic ID<input id="prefetch-id" required></label>
+              <label class="permission-option"><input id="prefetch-pinned" type="checkbox"><span>Keep cached</span></label>
+              <button class="button primary" type="submit">Start prefetch</button>
+              <button id="unpin-track" class="button secondary" type="button">Unpin track ID</button>
+            </form>
+            <p id="prefetch-message" class="form-message" role="status"></p>
+          </section>
           <section id="downloads-section" class="panel" aria-labelledby="downloads-title">
             <div class="section-heading">
               <div><p class="eyebrow">CACHE</p><h2 id="downloads-title">Track downloads</h2><p class="section-description">Live progress, current speed, peer availability and cached history. Torrent seed counts are connected seeds, not the swarm-wide total.</p></div>

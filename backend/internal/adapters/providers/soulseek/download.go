@@ -23,7 +23,6 @@ import (
 
 const (
 	downloadPollInterval = 500 * time.Millisecond
-	initialDataWait      = 1500 * time.Millisecond
 )
 
 var (
@@ -261,7 +260,10 @@ func (c *downloadCoordinator) resolve(
 		c.endRead(key)
 		return ports.ResolvedSource{}, err
 	}
-	if err := waitForInitialData(ctx, job, initialDataWait); err != nil {
+	if err := waitForInitialData(
+		ctx, job, c.client.downloadPolicy.PrebufferTimeout,
+		min(c.client.downloadPolicy.PrebufferBytes, remote.Size),
+	); err != nil {
 		c.endRead(key)
 		return ports.ResolvedSource{}, fmt.Errorf("%w: %v", ports.ErrSourceUnavailable, err)
 	}
@@ -269,14 +271,14 @@ func (c *downloadCoordinator) resolve(
 	return resolvedRemoteSource(c.trackReader(key, reader), name, remote.Size, time.Now()), nil
 }
 
-func waitForInitialData(ctx context.Context, job *downloadJob, timeout time.Duration) error {
+func waitForInitialData(ctx context.Context, job *downloadJob, timeout time.Duration, bytes int64) error {
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		for _, path := range []string{job.finalPath, job.incompletePath} {
-			if info, err := os.Stat(path); err == nil && info.Size() > 0 {
+			if info, err := os.Stat(path); err == nil && info.Size() >= max(bytes, 1) {
 				return nil
 			}
 		}

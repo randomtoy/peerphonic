@@ -36,27 +36,31 @@ type Config struct {
 	SlskdIncompleteDir    string `json:"slskd_incomplete_dir"`
 	SlskdMaxDownloads     int    `json:"slskd_max_active_downloads"`
 	SlskdRetryAttempts    int    `json:"slskd_retry_attempts"`
+	SlskdPrebufferBytes   int64  `json:"slskd_prebuffer_bytes"`
+	SlskdPrebufferSeconds int    `json:"slskd_prebuffer_timeout_seconds"`
 	FFmpegPath            string `json:"ffmpeg_path"`
 }
 
 func Defaults() Config {
 	return Config{
-		Address:             ":8080",
-		Database:            "peerphonic.db",
-		CacheDir:            "cache",
-		CacheSizeBytes:      10 << 30,
-		TorrentDir:          "torrents",
-		TorrentSeed:         true,
-		TorrentPort:         42069,
-		TorrentMaxDownloads: 3,
-		Username:            "admin",
-		Password:            "admin",
-		Scan:                true,
-		ScanIntervalSeconds: 300,
-		SlskdTimeoutSeconds: 15,
-		SlskdMaxDownloads:   2,
-		SlskdRetryAttempts:  3,
-		FFmpegPath:          "ffmpeg",
+		Address:               ":8080",
+		Database:              "peerphonic.db",
+		CacheDir:              "cache",
+		CacheSizeBytes:        10 << 30,
+		TorrentDir:            "torrents",
+		TorrentSeed:           true,
+		TorrentPort:           42069,
+		TorrentMaxDownloads:   3,
+		Username:              "admin",
+		Password:              "admin",
+		Scan:                  true,
+		ScanIntervalSeconds:   300,
+		SlskdTimeoutSeconds:   15,
+		SlskdMaxDownloads:     2,
+		SlskdRetryAttempts:    3,
+		SlskdPrebufferBytes:   1 << 20,
+		SlskdPrebufferSeconds: 15,
+		FFmpegPath:            "ffmpeg",
 	}
 }
 
@@ -104,6 +108,8 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	flags.StringVar(&cfg.SlskdIncompleteDir, "slskd-incomplete", cfg.SlskdIncompleteDir, "shared slskd incomplete downloads directory")
 	flags.IntVar(&cfg.SlskdMaxDownloads, "slskd-max-downloads", cfg.SlskdMaxDownloads, "maximum concurrent Soulseek track downloads")
 	flags.IntVar(&cfg.SlskdRetryAttempts, "slskd-retry-attempts", cfg.SlskdRetryAttempts, "attempts for temporary Soulseek enqueue failures")
+	flags.Int64Var(&cfg.SlskdPrebufferBytes, "slskd-prebuffer-bytes", cfg.SlskdPrebufferBytes, "Soulseek bytes buffered before playback")
+	flags.IntVar(&cfg.SlskdPrebufferSeconds, "slskd-prebuffer-timeout", cfg.SlskdPrebufferSeconds, "maximum Soulseek prebuffer wait in seconds")
 	flags.StringVar(&cfg.FFmpegPath, "ffmpeg", cfg.FFmpegPath, "FFmpeg executable for OpenSubsonic transcoding (empty disables it)")
 	if err := flags.Parse(args); err != nil {
 		return Config{}, err
@@ -134,6 +140,9 @@ func Load(args []string, lookupEnv func(string) (string, bool)) (Config, error) 
 	}
 	if cfg.SlskdMaxDownloads <= 0 || cfg.SlskdRetryAttempts <= 0 {
 		return Config{}, errors.New("slskd download concurrency and retry attempts must be positive")
+	}
+	if cfg.SlskdPrebufferBytes <= 0 || cfg.SlskdPrebufferSeconds <= 0 {
+		return Config{}, errors.New("slskd prebuffer size and timeout must be positive")
 	}
 
 	var err error
@@ -253,6 +262,13 @@ func applyEnv(cfg *Config, lookup func(string) (string, bool)) error {
 		}
 		cfg.CacheSizeBytes = parsed
 	}
+	if value, ok := lookup("PEERPHONIC_SLSKD_PREBUFFER_BYTES"); ok {
+		parsed, err := strconv.ParseInt(value, 10, 64)
+		if err != nil {
+			return fmt.Errorf("parse PEERPHONIC_SLSKD_PREBUFFER_BYTES: %w", err)
+		}
+		cfg.SlskdPrebufferBytes = parsed
+	}
 	if value, ok := lookup("PEERPHONIC_TORRENT_PORT"); ok {
 		parsed, err := strconv.Atoi(value)
 		if err != nil {
@@ -275,9 +291,10 @@ func applyEnv(cfg *Config, lookup func(string) (string, bool)) error {
 		cfg.TorrentDownloadLimit = parsed
 	}
 	for key, target := range map[string]*int{
-		"PEERPHONIC_TORRENT_MAX_ACTIVE_DOWNLOADS": &cfg.TorrentMaxDownloads,
-		"PEERPHONIC_SLSKD_MAX_ACTIVE_DOWNLOADS":   &cfg.SlskdMaxDownloads,
-		"PEERPHONIC_SLSKD_RETRY_ATTEMPTS":         &cfg.SlskdRetryAttempts,
+		"PEERPHONIC_TORRENT_MAX_ACTIVE_DOWNLOADS":    &cfg.TorrentMaxDownloads,
+		"PEERPHONIC_SLSKD_MAX_ACTIVE_DOWNLOADS":      &cfg.SlskdMaxDownloads,
+		"PEERPHONIC_SLSKD_RETRY_ATTEMPTS":            &cfg.SlskdRetryAttempts,
+		"PEERPHONIC_SLSKD_PREBUFFER_TIMEOUT_SECONDS": &cfg.SlskdPrebufferSeconds,
 	} {
 		if value, ok := lookup(key); ok {
 			parsed, err := strconv.Atoi(value)

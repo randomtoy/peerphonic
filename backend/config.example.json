@@ -22,5 +22,7 @@
   "slskd_incomplete_dir": "/srv/peerphonic/cache/soulseek/incomplete",
   "slskd_max_active_downloads": 2,
   "slskd_retry_attempts": 3,
+  "slskd_prebuffer_bytes": 1048576,
+  "slskd_prebuffer_timeout_seconds": 15,
   "ffmpeg_path": "ffmpeg"
 }

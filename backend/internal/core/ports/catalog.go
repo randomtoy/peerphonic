@@ -54,6 +54,18 @@ type CatalogManager interface {
 	UpdateTrackMetadata(ctx context.Context, id string, patch domain.TrackMetadataPatch) (domain.Track, error)
 }
 
+type TrackPinStore interface {
+	SetTrackPinned(ctx context.Context, trackID string, pinned bool) error
+	PinnedTracks(ctx context.Context) ([]string, error)
+	TrackPinned(ctx context.Context, trackID string) (bool, error)
+}
+
+type LibraryCacheManager interface {
+	PrefetchTrack(ctx context.Context, trackID string, pinned bool) error
+	PrefetchAlbum(ctx context.Context, albumID string, pinned bool) (int, error)
+	SetTrackPinned(ctx context.Context, trackID string, pinned bool) error
+}
+
 type AlbumOrder string
 
 const (

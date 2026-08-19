@@ -34,7 +34,8 @@ including waiting, downloading, transcoding, cached, and cancelled states.
 Completed MP3 transcodes are kept in the shared LRU cache and reused for later
 OpenSubsonic range requests. Accounts with
 source-management access can cancel an active Soulseek transfer or retry a
-failed, cancelled, or evicted one. Active Soulseek job monitoring resumes after
+failed, cancelled, or evicted one. The same workspace can prefetch and pin a
+track or album by its OpenSubsonic ID. Active Soulseek job monitoring resumes after
 a Peerphonic restart without enqueueing a duplicate slskd transfer.
 
 Soulseek access is delegated independently: `soulseek.search` exposes the Search

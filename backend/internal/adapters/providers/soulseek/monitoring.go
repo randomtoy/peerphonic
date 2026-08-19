@@ -254,9 +254,10 @@ func (c *downloadCoordinator) evict(ctx context.Context, bytesToFree int64) (int
 		job.mu.Lock()
 		state := job.download.State
 		updatedAt := job.download.UpdatedAt
-		key, finalPath := job.key, job.finalPath
+		key, finalPath, trackID := job.key, job.finalPath, job.trackID
 		job.mu.Unlock()
-		if state == domain.DownloadStateCached && c.active[key] == 0 {
+		if state == domain.DownloadStateCached && c.active[key] == 0 &&
+			!c.client.isTrackPinned(ctx, trackID) {
 			candidates = append(candidates, soulseekCacheCandidate{
 				job: job, key: key, path: finalPath, lastAccessed: updatedAt,
 			})
