@@ -30,6 +30,8 @@ const (
 	searchTimeoutMilliseconds = 5_000
 	searchMaxLimit            = 200
 	searchMaxWait             = 8 * time.Second
+	searchStartRetryAttempts  = 3
+	searchStartRetryDelay     = 200 * time.Millisecond
 	searchCleanupDelay        = time.Minute
 	pollInterval              = 250 * time.Millisecond
 	maxResponse               = 8 << 20
@@ -220,11 +222,40 @@ func (c *Client) ProviderStatus(ctx context.Context) domain.ProviderStatus {
 	switch response.StatusCode {
 	case http.StatusOK, http.StatusNoContent:
 		status.Authenticated = true
-		status.Message = "slskd API is ready"
+		status.Message = "slskd API is ready; Soulseek status is unavailable"
 	case http.StatusUnauthorized, http.StatusForbidden:
 		status.Message = "slskd rejected the API key"
+		return status
 	default:
 		status.Message = fmt.Sprintf("slskd returned HTTP %d", response.StatusCode)
+		return status
+	}
+
+	var application struct {
+		Server struct {
+			State       string `json:"state"`
+			IsConnected bool   `json:"isConnected"`
+			IsLoggedIn  bool   `json:"isLoggedIn"`
+		} `json:"server"`
+		User struct {
+			Username string `json:"username"`
+		} `json:"user"`
+	}
+	if err := c.doJSON(ctx, http.MethodGet, "/api/v0/application", nil, &application); err != nil {
+		return status
+	}
+	if application.Server.IsConnected && application.Server.IsLoggedIn {
+		username := strings.TrimSpace(application.User.Username)
+		if username == "" {
+			status.Message = "slskd is logged in to Soulseek"
+		} else {
+			status.Message = "slskd is logged in to Soulseek as " + username
+		}
+		return status
+	}
+	status.Message = "slskd API is ready; Soulseek is not logged in"
+	if state := strings.TrimSpace(application.Server.State); state != "" {
+		status.Message += " (" + state + ")"
 	}
 	return status
 }
@@ -267,8 +298,8 @@ func (c *Client) searchOnce(ctx context.Context, text string, limit int) ([]doma
 		SearchText: text, SearchTimeout: searchTimeoutMilliseconds,
 		ResponseLimit: limit, FileLimit: limit * 4,
 	}
-	var search slskdSearch
-	if err := c.doJSON(ctx, http.MethodPost, "/api/v0/searches", payload, &search); err != nil {
+	search, err := c.startSearch(ctx, payload)
+	if err != nil {
 		return nil, fmt.Errorf("start slskd search: %w", err)
 	}
 	if search.ID == "" {
@@ -300,6 +331,28 @@ func (c *Client) searchOnce(ctx context.Context, text string, limit int) ([]doma
 		case <-ticker.C:
 		}
 	}
+}
+
+func (c *Client) startSearch(ctx context.Context, payload any) (slskdSearch, error) {
+	var lastErr error
+	for attempt := 0; attempt < searchStartRetryAttempts; attempt++ {
+		var search slskdSearch
+		lastErr = c.doJSON(ctx, http.MethodPost, "/api/v0/searches", payload, &search)
+		if lastErr == nil {
+			return search, nil
+		}
+		if !temporarySlskdError(lastErr) || attempt == searchStartRetryAttempts-1 {
+			return slskdSearch{}, lastErr
+		}
+		timer := time.NewTimer(time.Duration(attempt+1) * searchStartRetryDelay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return slskdSearch{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+	return slskdSearch{}, lastErr
 }
 
 func searchFallbackTerm(query string) string {
