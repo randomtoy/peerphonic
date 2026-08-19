@@ -36,6 +36,10 @@ func Open(ctx context.Context, path string) (*Catalog, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := catalog.migrateCanonicalCatalogIdentities(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return catalog, nil
 }
 
@@ -460,13 +464,14 @@ func (c *Catalog) Albums(ctx context.Context, query ports.AlbumListQuery) ([]dom
 		SELECT track_id, MAX(discovered_at) AS discovered_at
 		FROM track_sources GROUP BY track_id
 	), albums AS (
-		SELECT album_id, album, album_artist, album_artist_id,
+		SELECT album_id, MIN(album) AS album, MIN(album_artist) AS album_artist,
+			MIN(album_artist_id) AS album_artist_id,
 			MIN(NULLIF(year, 0)) AS album_year, COUNT(*) AS song_count,
 			SUM(duration_ms) AS duration_ms, MIN(NULLIF(cover_art_id, '')) AS cover_art_id,
 			MIN(NULLIF(genre, '')) AS genre,
 			MAX(source_dates.discovered_at) AS discovered_at
 		FROM tracks LEFT JOIN source_dates ON source_dates.track_id = tracks.id
-		GROUP BY album_id, album, album_artist, album_artist_id
+		GROUP BY album_id
 	)
 	SELECT album_id, album, album_artist, album_artist_id, album_year,
 		song_count, duration_ms, cover_art_id, genre FROM albums `+where+`
@@ -479,13 +484,14 @@ func (c *Catalog) Albums(ctx context.Context, query ports.AlbumListQuery) ([]dom
 }
 
 func (c *Catalog) AlbumsByArtist(ctx context.Context, artistID string) ([]domain.Album, error) {
-	rows, err := c.db.QueryContext(ctx, `SELECT album_id, album, album_artist, album_artist_id,
+	rows, err := c.db.QueryContext(ctx, `SELECT album_id, MIN(album), MIN(album_artist),
+		MIN(album_artist_id),
 		MIN(NULLIF(year, 0)), COUNT(*), SUM(duration_ms), MIN(NULLIF(cover_art_id, '')),
 		MIN(NULLIF(genre, ''))
 		FROM tracks WHERE album_id IN (
 			SELECT DISTINCT album_id FROM tracks WHERE album_artist_id = ? OR artist_id = ?
 		)
-		GROUP BY album_id, album, album_artist, album_artist_id
+		GROUP BY album_id
 		ORDER BY album COLLATE NOCASE`, artistID, artistID)
 	if err != nil {
 		return nil, fmt.Errorf("query albums: %w", err)

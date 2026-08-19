@@ -1233,8 +1233,8 @@ func makeTrack(infoHash string, parts []string, size int64, extension, contentTy
 		}
 	}
 	artist, album, discNumber := provisionalArtistAlbum(parts)
-	artistID := domain.StableID("artist", strings.ToLower(artist))
-	albumID := domain.StableID("album", artistID, strings.ToLower(album))
+	artistID := domain.CanonicalArtistID(artist)
+	albumID := domain.CanonicalAlbumID(artist, album)
 	logicalPath := strings.Join(parts, "/")
 	return domain.TrackSource{
 		Track: domain.Track{

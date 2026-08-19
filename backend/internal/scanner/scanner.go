@@ -204,9 +204,9 @@ func ApplyMetadata(track *domain.Track, metadata Metadata) {
 	if title == "" {
 		title = track.Title
 	}
-	trackArtistID := domain.StableID("artist", strings.ToLower(trackArtist))
-	albumArtistID := domain.StableID("artist", strings.ToLower(albumArtistName))
-	albumID := domain.StableID("album", albumArtistID, strings.ToLower(albumName))
+	trackArtistID := domain.CanonicalArtistID(trackArtist)
+	albumArtistID := domain.CanonicalArtistID(albumArtistName)
+	albumID := domain.CanonicalAlbumID(albumArtistName, albumName)
 	track.Title = title
 	track.Artist = trackArtist
 	track.ArtistID = trackArtistID
@@ -264,8 +264,8 @@ func normalizeCompilationAlbums(tracks []domain.TrackSource, explicitAlbumArtist
 		}
 		albumName := compilationAlbumName(tracks, indexes, directory)
 		albumArtist := "Various Artists"
-		albumArtistID := domain.StableID("artist", strings.ToLower(albumArtist))
-		albumID := domain.StableID("album", albumArtistID, strings.ToLower(albumName))
+		albumArtistID := domain.CanonicalArtistID(albumArtist)
+		albumID := domain.CanonicalAlbumID(albumArtist, albumName)
 		for _, index := range indexes {
 			tracks[index].Track.Album = albumName
 			tracks[index].Track.AlbumArtist = albumArtist

@@ -5,6 +5,9 @@ import (
 	"encoding/base64"
 	"strings"
 	"time"
+
+	"golang.org/x/text/cases"
+	"golang.org/x/text/unicode/norm"
 )
 
 // SourceRef identifies media without exposing provider-specific details to callers.
@@ -147,4 +150,21 @@ func StableID(kind string, parts ...string) string {
 	values := append([]string{kind}, parts...)
 	sum := sha256.Sum256([]byte(strings.Join(values, "\x00")))
 	return kind + "_" + base64.RawURLEncoding.EncodeToString(sum[:12])
+}
+
+// CatalogNameKey normalizes a display name for provider-independent catalog identity.
+// Display spelling remains untouched; only opaque artist and album IDs use this key.
+func CatalogNameKey(name string) string {
+	return cases.Fold().String(norm.NFKC.String(strings.Join(strings.Fields(name), " ")))
+}
+
+// CanonicalArtistID identifies an artist independently of the source provider.
+func CanonicalArtistID(name string) string {
+	return StableID("artist", CatalogNameKey(name))
+}
+
+// CanonicalAlbumID identifies an album by its album artist and name independently
+// of the source provider.
+func CanonicalAlbumID(albumArtist, album string) string {
+	return StableID("album", CanonicalArtistID(albumArtist), CatalogNameKey(album))
 }

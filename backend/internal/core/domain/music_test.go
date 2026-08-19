@@ -16,3 +16,25 @@ func TestStableID(t *testing.T) {
 		t.Fatalf("StableID collision for different input: %q", first)
 	}
 }
+
+func TestCanonicalCatalogIdentityIgnoresDisplayVariants(t *testing.T) {
+	t.Parallel()
+
+	artistVariants := []string{
+		"Ron Pope",
+		"ron pope",
+		"  RON\u00a0\u00a0POPE  ",
+		"Ｒｏｎ Ｐｏｐｅ",
+	}
+	wantArtistID := CanonicalArtistID(artistVariants[0])
+	for _, variant := range artistVariants[1:] {
+		if got := CanonicalArtistID(variant); got != wantArtistID {
+			t.Errorf("CanonicalArtistID(%q) = %q, want %q", variant, got, wantArtistID)
+		}
+	}
+
+	wantAlbumID := CanonicalAlbumID("System of a Down", "Toxicity")
+	if got := CanonicalAlbumID("SYSTEM OF A DOWN", " toxicity "); got != wantAlbumID {
+		t.Fatalf("CanonicalAlbumID() = %q, want %q", got, wantAlbumID)
+	}
+}

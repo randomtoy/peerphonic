@@ -375,9 +375,9 @@ func mapSearchResults(responses []slskdSearchResponse, limit int) []domain.Track
 			})
 			track := domain.Track{
 				ID:    domain.StableID(Name, response.Username, file.Filename, strconv.FormatInt(file.Size, 10)),
-				Title: title, Artist: artist, ArtistID: domain.StableID("artist", artist),
-				Album: album, AlbumID: domain.StableID("album", artist, album),
-				AlbumArtist: artist, AlbumArtistID: domain.StableID("artist", artist),
+				Title: title, Artist: artist, ArtistID: domain.CanonicalArtistID(artist),
+				Album: album, AlbumID: domain.CanonicalAlbumID(artist, album),
+				AlbumArtist: artist, AlbumArtistID: domain.CanonicalArtistID(artist),
 				Size: file.Size, Suffix: format.Suffix, ContentType: format.ContentType,
 			}
 			if file.Length != nil && *file.Length > 0 {
@@ -462,9 +462,9 @@ func (c *Client) BrowseCollection(
 		track := domain.Track{
 			ID:     domain.StableID(Name, remote.Peer, file.Filename, strconv.FormatInt(file.Size, 10)),
 			Title:  strings.TrimSuffix(filepath.Base(displayPath), filepath.Ext(displayPath)),
-			Artist: artist, ArtistID: domain.StableID("artist", artist),
-			Album: album, AlbumID: domain.StableID("album", artist, album),
-			AlbumArtist: artist, AlbumArtistID: domain.StableID("artist", artist),
+			Artist: artist, ArtistID: domain.CanonicalArtistID(artist),
+			Album: album, AlbumID: domain.CanonicalAlbumID(artist, album),
+			AlbumArtist: artist, AlbumArtistID: domain.CanonicalArtistID(artist),
 			Size: file.Size, Suffix: format.Suffix, ContentType: format.ContentType, CoverArtID: coverID,
 		}
 		if file.Length != nil && *file.Length > 0 {
