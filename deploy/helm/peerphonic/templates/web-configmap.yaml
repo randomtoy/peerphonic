@@ -21,12 +21,27 @@ data:
             proxy_set_header X-Forwarded-Proto $scheme;
         }
 
+        location ~ ^/rest/(stream|download)(\.view)?$ {
+            proxy_pass http://{{ include "peerphonic.fullname" . }}:{{ .Values.peerphonic.service.port }};
+            proxy_http_version 1.1;
+            proxy_set_header Host $host;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_buffering off;
+            proxy_request_buffering off;
+            proxy_max_temp_file_size 0;
+            proxy_read_timeout 30m;
+            proxy_send_timeout 30m;
+        }
+
         location /rest/ {
             proxy_pass http://{{ include "peerphonic.fullname" . }}:{{ .Values.peerphonic.service.port }};
             proxy_http_version 1.1;
             proxy_set_header Host $host;
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
             proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_read_timeout 5m;
+            proxy_send_timeout 5m;
         }
 
         location / {
@@ -34,4 +49,3 @@ data:
         }
     }
 {{- end }}
-
