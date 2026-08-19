@@ -125,8 +125,8 @@ func (s *Scanner) Scan(ctx context.Context) (Report, error) {
 		}
 		track := makeTrack(filepath.ToSlash(key), metadata)
 		track.DiscoveredAt = info.ModTime().UTC()
-		explicitAlbumArtists[track.Track.ID] = metadata.AlbumArtistExplicit
-		originalAlbumIDs[track.Track.ID] = track.Track.AlbumID
+		explicitAlbumArtists[track.Ref.Key] = metadata.AlbumArtistExplicit
+		originalAlbumIDs[track.Ref.Key] = track.Track.AlbumID
 		if metadata.Artwork != nil && s.artwork != nil {
 			digest := sha256.Sum256(metadata.Artwork.Data)
 			if coverArtID, ok := artworkIDs[digest]; ok {
@@ -148,9 +148,20 @@ func (s *Scanner) Scan(ctx context.Context) (Report, error) {
 		return Report{}, fmt.Errorf("walk music directory: %w", err)
 	}
 	normalizeCompilationAlbums(tracks, explicitAlbumArtists)
+	for index := range tracks {
+		tracks[index].Track.ID = domain.CanonicalTrackID(tracks[index].Track)
+	}
 	aliases := changedAlbumAliases(tracks, originalAlbumIDs)
 	if err := s.catalog.ReplaceProviderTracks(ctx, LocalProvider, tracks, aliases); err != nil {
 		return Report{}, fmt.Errorf("replace local catalog: %w", err)
+	}
+	if aliasWriter, ok := s.catalog.(ports.TrackAliasWriter); ok {
+		for _, source := range tracks {
+			legacyID := domain.StableID("track", LocalProvider, source.Ref.Key)
+			if err := aliasWriter.SaveTrackAlias(ctx, legacyID, source.Track.ID); err != nil {
+				return Report{}, fmt.Errorf("save local track alias: %w", err)
+			}
+		}
 	}
 	return Report{Tracks: len(tracks), Warnings: warnings}, nil
 }
@@ -158,7 +169,7 @@ func (s *Scanner) Scan(ctx context.Context) (Report, error) {
 func changedAlbumAliases(tracks []domain.TrackSource, originalAlbumIDs map[string]string) []ports.AlbumAlias {
 	unique := make(map[ports.AlbumAlias]struct{})
 	for _, source := range tracks {
-		originalID := originalAlbumIDs[source.Track.ID]
+		originalID := originalAlbumIDs[source.Ref.Key]
 		if originalID != "" && originalID != source.Track.AlbumID {
 			unique[ports.AlbumAlias{AliasID: originalID, TrackID: source.Track.ID}] = struct{}{}
 		}
@@ -176,6 +187,7 @@ func makeTrack(key string, metadata Metadata) domain.TrackSource {
 		Title: strings.TrimSuffix(filepath.Base(key), filepath.Ext(key)),
 	}
 	ApplyMetadata(&track, metadata)
+	track.ID = domain.CanonicalTrackID(track)
 	return domain.TrackSource{
 		Track: track,
 		Ref:   domain.SourceRef{Provider: LocalProvider, Key: key},
@@ -223,7 +235,6 @@ func ApplyMetadata(track *domain.Track, metadata Metadata) {
 	track.BitRate = metadata.BitRate
 	track.Suffix = metadata.Suffix
 	track.ContentType = metadata.ContentType
-	track.ID = domain.CanonicalTrackID(*track)
 }
 
 func normalizeCompilationAlbums(tracks []domain.TrackSource, explicitAlbumArtists map[string]bool) {
@@ -245,7 +256,7 @@ func normalizeCompilationAlbums(tracks []domain.TrackSource, explicitAlbumArtist
 			track := tracks[index].Track
 			artists[strings.ToLower(strings.TrimSpace(track.Artist))] = struct{}{}
 			albumArtists[strings.ToLower(strings.TrimSpace(track.AlbumArtist))] = struct{}{}
-			if explicitAlbumArtists[track.ID] {
+			if explicitAlbumArtists[tracks[index].Ref.Key] {
 				hasExplicitAlbumArtist = true
 			}
 		}
