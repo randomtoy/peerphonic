@@ -29,6 +29,11 @@ func NewStreamingService(catalog ports.Catalog, providers ...ports.SourceProvide
 }
 
 func (s *StreamingService) Open(ctx context.Context, trackID string) (ports.ResolvedSource, error) {
+	track, err := s.catalog.Track(ctx, trackID)
+	if err != nil {
+		return ports.ResolvedSource{}, fmt.Errorf("find track %q: %w", trackID, err)
+	}
+	trackID = track.ID
 	sources, err := s.catalog.Sources(ctx, trackID)
 	if err != nil {
 		return ports.ResolvedSource{}, fmt.Errorf("find sources for track %q: %w", trackID, err)

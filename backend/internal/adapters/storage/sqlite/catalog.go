@@ -40,6 +40,10 @@ func Open(ctx context.Context, path string) (*Catalog, error) {
 		db.Close()
 		return nil, err
 	}
+	if err := catalog.migrateLogicalTracks(ctx); err != nil {
+		db.Close()
+		return nil, err
+	}
 	return catalog, nil
 }
 
@@ -278,7 +282,11 @@ const trackColumns = `id, title, artist, artist_id, album, album_id, album_artis
 	size_bytes, bit_rate, suffix, content_type, cover_art_id`
 
 func (c *Catalog) Track(ctx context.Context, id string) (domain.Track, error) {
-	row := c.db.QueryRowContext(ctx, "SELECT "+trackColumns+" FROM tracks WHERE id = ?", id)
+	resolvedID, err := c.resolveTrackID(ctx, id)
+	if err != nil {
+		return domain.Track{}, err
+	}
+	row := c.db.QueryRowContext(ctx, "SELECT "+trackColumns+" FROM tracks WHERE id = ?", resolvedID)
 	track, err := scanTrack(row)
 	if errors.Is(err, sql.ErrNoRows) {
 		return domain.Track{}, ports.ErrNotFound
@@ -290,8 +298,14 @@ func (c *Catalog) Track(ctx context.Context, id string) (domain.Track, error) {
 }
 
 func (c *Catalog) Sources(ctx context.Context, trackID string) ([]domain.SourceRef, error) {
+	resolvedID, err := c.resolveTrackID(ctx, trackID)
+	if err != nil {
+		return nil, err
+	}
 	rows, err := c.db.QueryContext(ctx, `SELECT provider, source_key FROM track_sources
-		WHERE track_id = ? ORDER BY provider, discovered_at DESC, source_key`, trackID)
+		WHERE track_id = ? ORDER BY CASE provider
+			WHEN 'local' THEN 0 WHEN 'torrent' THEN 1 WHEN 'soulseek' THEN 2 ELSE 3 END,
+			discovered_at DESC, source_key`, resolvedID)
 	if err != nil {
 		return nil, fmt.Errorf("query track sources: %w", err)
 	}
@@ -312,6 +326,19 @@ func (c *Catalog) Sources(ctx context.Context, trackID string) ([]domain.SourceR
 		return nil, ports.ErrNotFound
 	}
 	return sources, nil
+}
+
+func (c *Catalog) resolveTrackID(ctx context.Context, id string) (string, error) {
+	var resolved string
+	err := c.db.QueryRowContext(ctx, `SELECT id FROM tracks WHERE id = ?
+		UNION ALL SELECT track_id FROM track_aliases WHERE alias_id = ? LIMIT 1`, id, id).Scan(&resolved)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", ports.ErrNotFound
+	}
+	if err != nil {
+		return "", fmt.Errorf("resolve track ID: %w", err)
+	}
+	return resolved, nil
 }
 
 func (c *Catalog) Artists(ctx context.Context) ([]domain.Artist, error) {

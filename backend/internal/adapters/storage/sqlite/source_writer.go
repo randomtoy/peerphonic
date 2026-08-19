@@ -33,6 +33,18 @@ func (c *Catalog) SaveTrackSources(ctx context.Context, sources []domain.TrackSo
 	return nil
 }
 
+func (c *Catalog) SaveTrackAlias(ctx context.Context, aliasID, trackID string) error {
+	if aliasID == "" || trackID == "" || aliasID == trackID {
+		return nil
+	}
+	if _, err := c.db.ExecContext(ctx, `INSERT INTO track_aliases(alias_id, track_id)
+		VALUES (?, ?) ON CONFLICT(alias_id) DO UPDATE SET track_id = excluded.track_id`,
+		aliasID, trackID); err != nil {
+		return fmt.Errorf("save track alias %q: %w", aliasID, err)
+	}
+	return nil
+}
+
 func saveTrackSource(ctx context.Context, tx *sql.Tx, source domain.TrackSource) error {
 	if source.Track.ID == "" || source.Ref.Provider == "" || source.Ref.Key == "" {
 		return fmt.Errorf("track id, provider, and source key are required")

@@ -3,8 +3,10 @@ package domain
 import (
 	"crypto/sha256"
 	"encoding/base64"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
@@ -167,4 +169,56 @@ func CanonicalArtistID(name string) string {
 // of the source provider.
 func CanonicalAlbumID(albumArtist, album string) string {
 	return StableID("album", CanonicalArtistID(albumArtist), CatalogNameKey(album))
+}
+
+// CanonicalTrackID identifies one logical recording in an album. Physical
+// providers and peers remain separate source references for this identity.
+func CanonicalTrackID(track Track) string {
+	albumArtist := strings.TrimSpace(track.AlbumArtist)
+	if albumArtist == "" {
+		albumArtist = track.Artist
+	}
+	title, inferredNumber := canonicalTrackTitle(track.Title)
+	trackNumber := track.TrackNumber
+	if trackNumber == 0 {
+		trackNumber = inferredNumber
+	}
+	return StableID(
+		"track",
+		CanonicalAlbumID(albumArtist, track.Album),
+		CanonicalArtistID(track.Artist),
+		strconv.Itoa(track.DiscNumber),
+		strconv.Itoa(trackNumber),
+		title,
+	)
+}
+
+// HasCanonicalTrackIdentity reports whether the fields needed for safe
+// provider-independent matching are available.
+func HasCanonicalTrackIdentity(track Track) bool {
+	return strings.TrimSpace(track.Title) != "" && strings.TrimSpace(track.Artist) != "" &&
+		strings.TrimSpace(track.Album) != ""
+}
+
+func canonicalTrackTitle(value string) (string, int) {
+	key := CatalogNameKey(value)
+	runes := []rune(key)
+	index := 0
+	for index < len(runes) && unicode.IsDigit(runes[index]) && index < 3 {
+		index++
+	}
+	if index == 0 || index == len(runes) || unicode.IsLetter(runes[index]) || unicode.IsDigit(runes[index]) {
+		return key, 0
+	}
+	number, err := strconv.Atoi(string(runes[:index]))
+	if err != nil {
+		return key, 0
+	}
+	for index < len(runes) && !unicode.IsLetter(runes[index]) && !unicode.IsDigit(runes[index]) {
+		index++
+	}
+	if index == len(runes) {
+		return key, 0
+	}
+	return strings.TrimSpace(string(runes[index:])), number
 }

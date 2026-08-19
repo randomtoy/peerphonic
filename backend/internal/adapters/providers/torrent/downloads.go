@@ -123,7 +123,7 @@ func (p *Provider) queueTrackDownload(
 	trackID := p.trackIDs[ref.Key]
 	p.completionMu.Unlock()
 	if trackID == "" {
-		trackID = domain.StableID("track", Name, infoHash, logicalPath)
+		trackID = logicalTrackID(infoHash, logicalPath, file.Length())
 		p.registerTrack(ref.Key, trackID)
 	}
 	now := time.Now().UTC()
@@ -366,7 +366,9 @@ func (p *Provider) readDownloadRecord(recordPath string) (downloadRecord, error)
 		return downloadRecord{}, fmt.Errorf("invalid torrent download job %q", filepath.Base(recordPath))
 	}
 	if record.Download.TrackID == "" {
-		record.Download.TrackID = domain.StableID("track", Name, infoHash, logicalPath)
+		record.Download.TrackID = logicalTrackID(
+			infoHash, logicalPath, record.Download.TotalBytes,
+		)
 	}
 	return record, nil
 }

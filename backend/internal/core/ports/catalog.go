@@ -39,6 +39,12 @@ type TrackSourceWriter interface {
 	SaveTrackSources(ctx context.Context, sources []domain.TrackSource) error
 }
 
+// TrackAliasWriter preserves a provider result ID after it is attached to a
+// provider-independent logical track.
+type TrackAliasWriter interface {
+	SaveTrackAlias(ctx context.Context, aliasID, trackID string) error
+}
+
 type AlbumOrder string
 
 const (

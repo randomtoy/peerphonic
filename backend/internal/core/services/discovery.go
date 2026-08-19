@@ -86,17 +86,28 @@ func (s *DiscoveryService) Add(ctx context.Context, id string) (domain.Track, er
 		return domain.Track{}, ErrDiscoveryResultNotFound
 	}
 	alternatives := s.findAlternativeSources(ctx, result.Track)
+	logicalTrack := result.Track
+	if domain.HasCanonicalTrackIdentity(logicalTrack) {
+		logicalTrack.ID = domain.CanonicalTrackID(logicalTrack)
+	}
 	sources := make([]domain.TrackSource, 0, len(alternatives)+1)
 	for _, alternative := range alternatives {
 		if alternative.Ref != result.Ref {
+			alternative.Track = logicalTrack
 			sources = append(sources, alternative)
 		}
 	}
+	result.Track = logicalTrack
 	sources = append(sources, result)
 	if err := s.catalog.SaveTrackSources(ctx, sources); err != nil {
 		return domain.Track{}, fmt.Errorf("save discovered track: %w", err)
 	}
-	return result.Track, nil
+	if aliases, ok := s.catalog.(ports.TrackAliasWriter); ok && id != logicalTrack.ID {
+		if err := aliases.SaveTrackAlias(ctx, id, logicalTrack.ID); err != nil {
+			return domain.Track{}, fmt.Errorf("save discovered track alias: %w", err)
+		}
+	}
+	return logicalTrack, nil
 }
 
 func (s *DiscoveryService) Refresh(ctx context.Context, track domain.Track) error {

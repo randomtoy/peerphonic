@@ -474,6 +474,7 @@ func (c *Client) BrowseCollection(
 			track.BitRate = *file.BitRate
 		}
 		track.TrackNumber = provisionalTrackNumber(track.Title)
+		track.ID = domain.CanonicalTrackID(track)
 		tracks = append(tracks, domain.TrackSource{
 			Track:       track,
 			Ref:         domain.SourceRef{Provider: Name, Key: base64.RawURLEncoding.EncodeToString(refPayload)},

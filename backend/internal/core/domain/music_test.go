@@ -38,3 +38,25 @@ func TestCanonicalCatalogIdentityIgnoresDisplayVariants(t *testing.T) {
 		t.Fatalf("CanonicalAlbumID() = %q, want %q", got, wantAlbumID)
 	}
 }
+
+func TestCanonicalTrackIDIgnoresProviderFilenameFormatting(t *testing.T) {
+	t.Parallel()
+
+	local := Track{
+		Title: "Prison Song", Artist: "System of a Down", Album: "Toxicity",
+		AlbumArtist: "System of a Down", TrackNumber: 1,
+	}
+	remote := Track{
+		Title: "01 - PRISON SONG", Artist: "system of a down", Album: " toxicity ",
+		AlbumArtist: "SYSTEM OF A DOWN",
+	}
+	if got, want := CanonicalTrackID(remote), CanonicalTrackID(local); got != want {
+		t.Fatalf("remote track ID = %q, want %q", got, want)
+	}
+	other := local
+	other.Title = "Needles"
+	other.TrackNumber = 2
+	if CanonicalTrackID(other) == CanonicalTrackID(local) {
+		t.Fatal("different album tracks received the same logical ID")
+	}
+}

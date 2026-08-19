@@ -199,9 +199,12 @@ func (*Provider) Search(context.Context, domain.SearchQuery) ([]domain.TrackSour
 	return nil, nil
 }
 
-func (p *Provider) Resolve(ctx context.Context, _ string, ref domain.SourceRef) (ports.ResolvedSource, error) {
+func (p *Provider) Resolve(ctx context.Context, trackID string, ref domain.SourceRef) (ports.ResolvedSource, error) {
 	if ref.Provider != Name {
 		return ports.ResolvedSource{}, fmt.Errorf("cannot resolve provider %q", ref.Provider)
+	}
+	if trackID != "" {
+		p.registerTrack(ref.Key, trackID)
 	}
 	return p.open(ctx, ref)
 }
@@ -1236,16 +1239,24 @@ func makeTrack(infoHash string, parts []string, size int64, extension, contentTy
 	artistID := domain.CanonicalArtistID(artist)
 	albumID := domain.CanonicalAlbumID(artist, album)
 	logicalPath := strings.Join(parts, "/")
-	return domain.TrackSource{
-		Track: domain.Track{
-			ID: domain.StableID("track", Name, infoHash, logicalPath), Title: title,
-			Artist: artist, ArtistID: artistID, Album: album, AlbumID: albumID,
-			AlbumArtist: artist, AlbumArtistID: artistID, TrackNumber: trackNumber,
-			DiscNumber: discNumber, Year: leadingYear(album), Size: size,
-			Suffix: strings.TrimPrefix(extension, "."), ContentType: contentType,
-		},
-		Ref: domain.SourceRef{Provider: Name, Key: infoHash + "/" + logicalPath},
+	track := domain.Track{
+		Title:  title,
+		Artist: artist, ArtistID: artistID, Album: album, AlbumID: albumID,
+		AlbumArtist: artist, AlbumArtistID: artistID, TrackNumber: trackNumber,
+		DiscNumber: discNumber, Year: leadingYear(album), Size: size,
+		Suffix: strings.TrimPrefix(extension, "."), ContentType: contentType,
 	}
+	track.ID = domain.CanonicalTrackID(track)
+	return domain.TrackSource{
+		Track: track,
+		Ref:   domain.SourceRef{Provider: Name, Key: infoHash + "/" + logicalPath},
+	}
+}
+
+func logicalTrackID(infoHash, logicalPath string, size int64) string {
+	extension := strings.ToLower(path.Ext(logicalPath))
+	format, _ := audioformat.ByExtension(extension)
+	return makeTrack(infoHash, strings.Split(logicalPath, "/"), size, extension, format.ContentType).Track.ID
 }
 
 func provisionalArtistAlbum(parts []string) (artist, album string, discNumber int) {

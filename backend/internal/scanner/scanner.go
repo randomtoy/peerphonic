@@ -223,6 +223,7 @@ func ApplyMetadata(track *domain.Track, metadata Metadata) {
 	track.BitRate = metadata.BitRate
 	track.Suffix = metadata.Suffix
 	track.ContentType = metadata.ContentType
+	track.ID = domain.CanonicalTrackID(*track)
 }
 
 func normalizeCompilationAlbums(tracks []domain.TrackSource, explicitAlbumArtists map[string]bool) {

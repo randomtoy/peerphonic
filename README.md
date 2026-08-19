@@ -12,6 +12,8 @@ changing the client-facing streaming flow.
 - periodic background synchronization of local music and torrent metadata;
 - tag extraction with directory/filename fallbacks and conservative repair of legacy Cyrillic encodings;
 - a migrated SQLite metadata catalog;
+- provider-independent artist, album, and logical track identities with local,
+  torrent, and Soulseek sources aggregated behind one catalog item;
 - XML and JSON OpenSubsonic responses;
 - password, hex-encoded password, and token/salt authentication;
 - persistent administrator and listener accounts with isolated personal library state;
