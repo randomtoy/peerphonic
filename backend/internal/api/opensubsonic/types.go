@@ -12,6 +12,7 @@ type response struct {
 	OpenSubsonic  bool             `xml:"openSubsonic,attr" json:"openSubsonic"`
 	Error         *apiError        `xml:"error,omitempty" json:"error,omitempty"`
 	License       *license         `xml:"license,omitempty" json:"license,omitempty"`
+	User          *user            `xml:"user,omitempty" json:"user,omitempty"`
 	MusicFolders  *musicFolders    `xml:"musicFolders,omitempty" json:"musicFolders,omitempty"`
 	Indexes       *indexesResponse `xml:"indexes,omitempty" json:"indexes,omitempty"`
 	Directory     *musicDirectory  `xml:"directory,omitempty" json:"directory,omitempty"`
@@ -42,6 +43,23 @@ type apiError struct {
 
 type license struct {
 	Valid bool `xml:"valid,attr" json:"valid"`
+}
+
+type user struct {
+	Username          string   `xml:"username,attr" json:"username"`
+	ScrobblingEnabled bool     `xml:"scrobblingEnabled,attr" json:"scrobblingEnabled"`
+	AdminRole         bool     `xml:"adminRole,attr" json:"adminRole"`
+	SettingsRole      bool     `xml:"settingsRole,attr" json:"settingsRole"`
+	DownloadRole      bool     `xml:"downloadRole,attr" json:"downloadRole"`
+	UploadRole        bool     `xml:"uploadRole,attr" json:"uploadRole"`
+	PlaylistRole      bool     `xml:"playlistRole,attr" json:"playlistRole"`
+	CoverArtRole      bool     `xml:"coverArtRole,attr" json:"coverArtRole"`
+	CommentRole       bool     `xml:"commentRole,attr" json:"commentRole"`
+	PodcastRole       bool     `xml:"podcastRole,attr" json:"podcastRole"`
+	StreamRole        bool     `xml:"streamRole,attr" json:"streamRole"`
+	JukeboxRole       bool     `xml:"jukeboxRole,attr" json:"jukeboxRole"`
+	ShareRole         bool     `xml:"shareRole,attr" json:"shareRole"`
+	Folders           []string `xml:"folder" json:"folder"`
 }
 
 type musicFolders struct {

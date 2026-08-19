@@ -148,6 +148,8 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 		h.write(writer, request, http.StatusOK, response{})
 	case "getLicense":
 		h.write(writer, request, http.StatusOK, response{License: &license{Valid: true}})
+	case "getUser":
+		h.getUser(writer, request)
 	case "getMusicFolders":
 		h.write(writer, request, http.StatusOK, response{MusicFolders: &musicFolders{
 			Folders: []musicFolder{{ID: musicFolderID, Name: "Music"}},
@@ -217,6 +219,24 @@ func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
 	default:
 		h.writeError(writer, request, http.StatusNotFound, 0, "Endpoint not implemented")
 	}
+}
+
+func (h *Handler) getUser(writer http.ResponseWriter, request *http.Request) {
+	username := strings.TrimSpace(request.Form.Get("username"))
+	if username == "" {
+		h.writeError(writer, request, http.StatusBadRequest, 10, "Required parameter username is missing")
+		return
+	}
+	actor := authenticatedUser(request.Context())
+	if username != actor.Username {
+		h.writeError(writer, request, http.StatusForbidden, 50, "User is not authorized for the given operation")
+		return
+	}
+	h.write(writer, request, http.StatusOK, response{User: &user{
+		Username: username, ScrobblingEnabled: true, AdminRole: actor.IsAdmin(),
+		SettingsRole: true, DownloadRole: true, PlaylistRole: true, CoverArtRole: true,
+		CommentRole: h.annotations != nil, StreamRole: true, Folders: []string{musicFolderID},
+	}})
 }
 
 func (h *Handler) search2(writer http.ResponseWriter, request *http.Request) {
