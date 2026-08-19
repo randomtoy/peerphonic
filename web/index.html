@@ -161,36 +161,42 @@
         </section>
 
         <section class="dashboard-page" data-page-panel="activity" hidden>
-          <section class="panel" data-required-permission="sources.manage" aria-labelledby="prefetch-title">
-            <div class="section-heading"><div><p class="eyebrow">OFFLINE CACHE</p><h2 id="prefetch-title">Prefetch music</h2><p class="section-description">Download a track or complete album in the background. Pinned music is protected from automatic eviction.</p></div></div>
-            <form id="prefetch-form" class="settings-form">
-              <label>Item type<select id="prefetch-type"><option value="tracks">Track</option><option value="albums">Album</option></select></label>
-              <label>OpenSubsonic ID<input id="prefetch-id" required></label>
-              <label class="permission-option"><input id="prefetch-pinned" type="checkbox"><span>Keep cached</span></label>
-              <button class="button primary" type="submit">Start prefetch</button>
-              <button id="unpin-track" class="button secondary" type="button">Unpin track ID</button>
-            </form>
-            <p id="prefetch-message" class="form-message" role="status"></p>
-          </section>
-          <section id="downloads-section" class="panel" aria-labelledby="downloads-title">
+          <section id="activity-summary" class="activity-summary" aria-label="Current activity"></section>
+
+          <section id="downloads-section" class="panel activity-panel" aria-labelledby="downloads-title">
             <div class="section-heading">
-              <div><p class="eyebrow">CACHE</p><h2 id="downloads-title">Track downloads</h2><p class="section-description">Live progress, current speed, peer availability and cached history. Torrent seed counts are connected seeds, not the swarm-wide total.</p></div>
+              <div><p class="eyebrow">DELIVERY</p><h2 id="downloads-title">Music activity</h2><p class="section-description">Current playback downloads first, followed by anything waiting or needing attention. Completed work stays out of the way in history.</p></div>
               <span id="download-count" class="pill"></span>
             </div>
-            <div id="downloads" class="card-grid"></div>
+            <div id="downloads" class="activity-feed" aria-live="polite"></div>
           </section>
 
-          <section id="transfers-section" class="panel" aria-labelledby="transfers-title">
-            <div class="section-heading"><div><p class="eyebrow">NETWORK</p><h2 id="transfers-title">Live transfers</h2><p class="section-description">Peer availability, transfer progress and uploaded data.</p></div></div>
-            <div id="transfers" class="card-grid"></div>
-          </section>
-          <section class="panel" aria-labelledby="audit-title">
+          <section id="transfers-section" class="panel activity-panel" aria-labelledby="transfers-title">
             <div class="section-heading">
-              <div><p class="eyebrow">SECURITY</p><h2 id="audit-title">Administrative audit</h2><p class="section-description">Recent changes made through the Peerphonic API. Passwords and query strings are never recorded.</p></div>
-              <span id="audit-count" class="pill"></span>
+              <div><p class="eyebrow">NETWORK</p><h2 id="transfers-title">Peer connections</h2><p class="section-description">A quiet overview of connected peers, connected seeds and data shared by each source.</p></div>
+              <span id="transfer-count" class="pill"></span>
             </div>
-            <div id="audit-entries" class="source-list"></div>
+            <div id="transfers" class="network-overview"></div>
           </section>
+
+          <details id="prefetch-section" class="activity-drawer" data-required-permission="sources.manage">
+            <summary><span><strong>Offline cache</strong><small>Prefetch a track or album and optionally keep it cached</small></span><span class="drawer-action">Manage</span></summary>
+            <div class="activity-drawer-content">
+              <form id="prefetch-form" class="settings-form">
+                <label>Item type<select id="prefetch-type"><option value="tracks">Track</option><option value="albums">Album</option></select></label>
+                <label>OpenSubsonic ID<input id="prefetch-id" required></label>
+                <label class="permission-option"><input id="prefetch-pinned" type="checkbox"><span>Keep cached</span></label>
+                <button class="button primary" type="submit">Start prefetch</button>
+                <button id="unpin-track" class="button secondary" type="button">Unpin track ID</button>
+              </form>
+              <p id="prefetch-message" class="form-message" role="status"></p>
+            </div>
+          </details>
+
+          <details class="activity-drawer">
+            <summary><span><strong>Administrative audit</strong><small>Recent configuration and library changes</small></span><span id="audit-count" class="drawer-action"></span></summary>
+            <div class="activity-drawer-content"><div id="audit-entries" class="source-list"></div></div>
+          </details>
         </section>
 
         <section class="dashboard-page" data-page-panel="users" hidden>
