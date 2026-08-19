@@ -57,6 +57,7 @@
         "soulseekUsername": { "type": "string" },
         "soulseekPassword": { "type": "string" },
         "listenPort": { "type": "integer", "minimum": 1, "maximum": 65535 },
+        "prebufferBytes": { "type": "integer", "minimum": 0 },
         "networkService": {
           "type": "object",
           "properties": {
