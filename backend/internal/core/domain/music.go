@@ -40,9 +40,28 @@ type Track struct {
 }
 
 type Artist struct {
-	ID         string
-	Name       string
-	AlbumCount int
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	AlbumCount int    `json:"albumCount"`
+}
+
+type ArtistAlias struct {
+	AliasID    string    `json:"aliasId"`
+	AliasName  string    `json:"aliasName"`
+	TargetID   string    `json:"targetId"`
+	TargetName string    `json:"targetName"`
+	CreatedAt  time.Time `json:"createdAt"`
+}
+
+type TrackMetadataPatch struct {
+	Title       *string
+	Artist      *string
+	Album       *string
+	AlbumArtist *string
+	Genre       *string
+	Year        *int
+	TrackNumber *int
+	DiscNumber  *int
 }
 
 type Album struct {

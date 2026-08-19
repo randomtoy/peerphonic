@@ -225,6 +225,21 @@ type sourceCollectionPreviewTrackResponse struct {
 	Suffix          string `json:"suffix,omitempty"`
 }
 
+type catalogArtistAliasRequest struct {
+	TargetID string `json:"targetId"`
+}
+
+type catalogTrackPatchRequest struct {
+	Title       *string `json:"title"`
+	Artist      *string `json:"artist"`
+	Album       *string `json:"album"`
+	AlbumArtist *string `json:"albumArtist"`
+	Genre       *string `json:"genre"`
+	Year        *int    `json:"year"`
+	TrackNumber *int    `json:"trackNumber"`
+	DiscNumber  *int    `json:"discNumber"`
+}
+
 func NewHandler(
 	cache cacheStatus,
 	torrentImporter ports.SourceImporter,
@@ -269,6 +284,31 @@ func NewHandlerWithAuthenticator(
 	)
 }
 
+func NewHandlerWithAuthenticatorAndCatalog(
+	cache cacheStatus,
+	torrentImporter ports.SourceImporter,
+	uriImporter ports.SourceURIImporter,
+	sources ports.SourceManager,
+	transfers ports.SourceTransferMonitor,
+	downloads ports.TrackDownloadMonitor,
+	authenticator ports.Authenticator,
+	users ports.UserManager,
+	providerStatus ports.ProviderStatusMonitor,
+	providerSearch ports.SourceSearcher,
+	settings ports.TransferSettingsManager,
+	catalog ports.CatalogManager,
+	scans ...scanController,
+) http.Handler {
+	var scan scanController
+	if len(scans) > 0 {
+		scan = scans[0]
+	}
+	return newHandlerWithCatalog(
+		cache, torrentImporter, uriImporter, sources, transfers, downloads,
+		authenticator, users, providerStatus, providerSearch, settings, catalog, scan,
+	)
+}
+
 func newHandler(
 	cache cacheStatus,
 	torrentImporter ports.SourceImporter,
@@ -281,6 +321,27 @@ func newHandler(
 	providerStatus ports.ProviderStatusMonitor,
 	providerSearch ports.SourceSearcher,
 	settings ports.TransferSettingsManager,
+	scans scanController,
+) http.Handler {
+	return newHandlerWithCatalog(
+		cache, torrentImporter, uriImporter, sources, transfers, downloads,
+		authenticator, users, providerStatus, providerSearch, settings, nil, scans,
+	)
+}
+
+func newHandlerWithCatalog(
+	cache cacheStatus,
+	torrentImporter ports.SourceImporter,
+	uriImporter ports.SourceURIImporter,
+	sources ports.SourceManager,
+	transfers ports.SourceTransferMonitor,
+	downloads ports.TrackDownloadMonitor,
+	authenticator ports.Authenticator,
+	users ports.UserManager,
+	providerStatus ports.ProviderStatusMonitor,
+	providerSearch ports.SourceSearcher,
+	settings ports.TransferSettingsManager,
+	catalog ports.CatalogManager,
 	scans scanController,
 ) http.Handler {
 	mux := http.NewServeMux()
@@ -298,6 +359,82 @@ func newHandler(
 			"service": "peerphonic",
 		})
 	})
+	if catalog != nil {
+		mux.HandleFunc("GET /api/v1/catalog/artists", func(writer http.ResponseWriter, request *http.Request) {
+			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionCatalogManage); !ok {
+				return
+			}
+			artists, err := catalog.Artists(request.Context())
+			if err != nil {
+				http.Error(writer, "read catalog artists", http.StatusInternalServerError)
+				return
+			}
+			aliases, err := catalog.ArtistAliases(request.Context())
+			if err != nil {
+				http.Error(writer, "read artist aliases", http.StatusInternalServerError)
+				return
+			}
+			writeJSON(writer, http.StatusOK, struct {
+				Artists []domain.Artist      `json:"artists"`
+				Aliases []domain.ArtistAlias `json:"aliases"`
+			}{Artists: artists, Aliases: aliases})
+		})
+		mux.HandleFunc("PUT /api/v1/catalog/artist-aliases/{id}", func(writer http.ResponseWriter, request *http.Request) {
+			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionCatalogManage); !ok {
+				return
+			}
+			var payload catalogArtistAliasRequest
+			if !decodeJSONRequest(writer, request, 16<<10, &payload) {
+				return
+			}
+			alias, err := catalog.SetArtistAlias(request.Context(), request.PathValue("id"), payload.TargetID)
+			if err != nil {
+				writeCatalogManagementError(writer, err)
+				return
+			}
+			writeJSON(writer, http.StatusOK, alias)
+		})
+		mux.HandleFunc("DELETE /api/v1/catalog/artist-aliases/{id}", func(writer http.ResponseWriter, request *http.Request) {
+			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionCatalogManage); !ok {
+				return
+			}
+			if err := catalog.DeleteArtistAlias(request.Context(), request.PathValue("id")); err != nil {
+				writeCatalogManagementError(writer, err)
+				return
+			}
+			writer.WriteHeader(http.StatusNoContent)
+		})
+		mux.HandleFunc("GET /api/v1/catalog/tracks/{id}", func(writer http.ResponseWriter, request *http.Request) {
+			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionCatalogManage); !ok {
+				return
+			}
+			track, err := catalog.Track(request.Context(), request.PathValue("id"))
+			if err != nil {
+				writeCatalogManagementError(writer, err)
+				return
+			}
+			writeJSON(writer, http.StatusOK, track)
+		})
+		mux.HandleFunc("PATCH /api/v1/catalog/tracks/{id}", func(writer http.ResponseWriter, request *http.Request) {
+			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionCatalogManage); !ok {
+				return
+			}
+			var payload catalogTrackPatchRequest
+			if !decodeJSONRequest(writer, request, 32<<10, &payload) {
+				return
+			}
+			track, err := catalog.UpdateTrackMetadata(request.Context(), request.PathValue("id"), domain.TrackMetadataPatch{
+				Title: payload.Title, Artist: payload.Artist, Album: payload.Album,
+				AlbumArtist: payload.AlbumArtist, Genre: payload.Genre, Year: payload.Year,
+				TrackNumber: payload.TrackNumber, DiscNumber: payload.DiscNumber,
+			})
+			if err != nil {
+				writeCatalogManagementError(writer, err)
+				return
+			}
+			writeJSON(writer, http.StatusOK, track)
+		})
+	}
 	if scans != nil {
 		mux.HandleFunc("GET /api/v1/library/scan", func(writer http.ResponseWriter, request *http.Request) {
 			if _, ok := requirePermission(writer, request, authenticator, domain.PermissionSourcesManage); !ok {
@@ -864,6 +1001,33 @@ func writeTransferSettingsError(writer http.ResponseWriter, err error) {
 		http.Error(writer, "operation is not permitted", http.StatusForbidden)
 	default:
 		http.Error(writer, "manage transfer settings", http.StatusInternalServerError)
+	}
+}
+
+func decodeJSONRequest(writer http.ResponseWriter, request *http.Request, limit int64, target any) bool {
+	request.Body = http.MaxBytesReader(writer, request.Body, limit)
+	decoder := json.NewDecoder(request.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(target); err != nil {
+		http.Error(writer, "invalid JSON request", http.StatusBadRequest)
+		return false
+	}
+	if err := decoder.Decode(&struct{}{}); err != io.EOF {
+		http.Error(writer, "invalid JSON request", http.StatusBadRequest)
+		return false
+	}
+	return true
+}
+
+func writeCatalogManagementError(writer http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ports.ErrNotFound):
+		http.Error(writer, "catalog item not found", http.StatusNotFound)
+	case strings.Contains(err.Error(), "different"), strings.Contains(err.Error(), "cycle"),
+		strings.Contains(err.Error(), "cannot be"):
+		http.Error(writer, err.Error(), http.StatusBadRequest)
+	default:
+		http.Error(writer, "manage catalog", http.StatusInternalServerError)
 	}
 }
 

@@ -224,9 +224,9 @@ func buildApplication(ctx context.Context, cfg config.Config, logger *slog.Logge
 	mux.Handle("/rest/", opensubsonic.NewHandlerWithAuthenticatorDiscoveryAndTranscoder(
 		catalog, streaming, artwork, userService, soulseekDiscovery, transcoder, scanManager,
 	))
-	mux.Handle("/", peerphonic.NewHandlerWithAuthenticator(
+	mux.Handle("/", peerphonic.NewHandlerWithAuthenticatorAndCatalog(
 		cacheStatus, torrentImporter, magnetImporter, torrentManager, torrentProvider, downloadService,
-		userService, userService, soulseekMonitor, soulseekSearch, transferSettings, scanManager,
+		userService, userService, soulseekMonitor, soulseekSearch, transferSettings, catalog, scanManager,
 	))
 	return &application{
 		handler: httpMetrics.Wrap(mux), catalog: catalog, torrentProvider: torrentProvider,

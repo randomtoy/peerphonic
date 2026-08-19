@@ -60,6 +60,14 @@ const elements = {
   addSourceSection: document.querySelector("#add-source-section"),
   downloadsSection: document.querySelector("#downloads-section"),
   usersSection: document.querySelector("#users-section"),
+  artistAliasForm: document.querySelector("#artist-alias-form"),
+  artistAliasSource: document.querySelector("#artist-alias-source"),
+  artistAliasTarget: document.querySelector("#artist-alias-target"),
+  artistAliases: document.querySelector("#artist-aliases"),
+  artistAliasCount: document.querySelector("#artist-alias-count"),
+  catalogMessage: document.querySelector("#catalog-message"),
+  trackMetadataForm: document.querySelector("#track-metadata-form"),
+  metadataTrackID: document.querySelector("#metadata-track-id"),
   transfersSection: document.querySelector("#transfers-section"),
   sourcesSection: document.querySelector("#sources-section"),
   navigation: document.querySelector(".sidebar-nav"),
@@ -81,6 +89,7 @@ const permissions = {
   soulseekAdd: "soulseek.add",
   soulseekClient: "soulseek.client-search",
   users: "users.manage",
+  catalog: "catalog.manage",
 };
 
 const permissionLabels = {
@@ -91,6 +100,7 @@ const permissionLabels = {
   "soulseek.add": "Add from Soulseek",
   "soulseek.client-search": "Soulseek in music clients",
   "users.manage": "Users",
+  "catalog.manage": "Catalog metadata",
 };
 
 const pages = {
@@ -118,6 +128,11 @@ const pages = {
     eyebrow: "ACCESS CONTROL",
     title: "Users and permissions",
     description: "Manage accounts and delegate access to individual features.",
+  },
+  catalog: {
+    eyebrow: "CATALOG CURATION",
+    title: "Catalog",
+    description: "Resolve naming conflicts and correct metadata without touching source files.",
   },
   settings: {
     eyebrow: "SERVER CONFIGURATION",
@@ -520,6 +535,25 @@ function renderSoulseekStatus(status) {
   elements.soulseekAuthenticated.textContent = status.authenticated ? "Granted" : "No";
 }
 
+function renderCatalog(payload) {
+  const artists = payload.artists || [];
+  const aliases = payload.aliases || [];
+  const options = artists.map((artist) => `<option value="${escapeHTML(artist.id)}">${escapeHTML(artist.name)} · ${artist.albumCount || 0} albums</option>`).join("");
+  elements.artistAliasSource.innerHTML = options;
+  elements.artistAliasTarget.innerHTML = options;
+  if (artists.length > 1) elements.artistAliasTarget.selectedIndex = 1;
+  elements.artistAliasCount.textContent = `${aliases.length} alias${aliases.length === 1 ? "" : "es"}`;
+  elements.artistAliases.replaceChildren();
+  if (!aliases.length) {
+    elements.artistAliases.append(empty("No manual artist aliases. Exact case and spacing variants are merged automatically."));
+    return;
+  }
+  elements.artistAliases.innerHTML = aliases.map((alias) => `<article class="source-card">
+    <div class="source-main"><span class="source-name">${escapeHTML(alias.aliasName)}</span><span class="source-meta">Shown as ${escapeHTML(alias.targetName)}</span></div>
+    <div class="source-actions"><button class="button danger" type="button" data-delete-artist-alias="${escapeHTML(alias.aliasId)}">Remove alias</button></div>
+  </article>`).join("");
+}
+
 function formatDuration(seconds = 0) {
   const total = Math.max(0, Math.round(Number(seconds) || 0));
   const minutes = Math.floor(total / 60);
@@ -625,7 +659,8 @@ async function refresh() {
     const canManageSources = allowed.has(permissions.sources);
     const canSearchSoulseek = allowed.has(permissions.soulseekSearch);
     const canManageUsers = allowed.has(permissions.users);
-    const [cache, importPayload, downloadPayload, transferPayload, sourcePayload, userPayload, scanStatus, transferSettings, soulseekStatus] = await Promise.all([
+    const canManageCatalog = allowed.has(permissions.catalog);
+    const [cache, importPayload, downloadPayload, transferPayload, sourcePayload, userPayload, scanStatus, transferSettings, soulseekStatus, catalogPayload] = await Promise.all([
       canMonitor ? api("/api/v1/cache/status") : Promise.resolve({}),
       canManageSources ? api("/api/v1/imports") : Promise.resolve({ imports: [] }),
       canMonitor ? api("/api/v1/downloads") : Promise.resolve({ downloads: [] }),
@@ -635,6 +670,7 @@ async function refresh() {
       canManageSources ? api("/api/v1/library/scan") : Promise.resolve({}),
       canManageSources ? api("/api/v1/settings/transfers") : Promise.resolve({}),
       canSearchSoulseek ? api("/api/v1/providers/soulseek/status") : Promise.resolve({}),
+      canManageCatalog ? api("/api/v1/catalog/artists") : Promise.resolve({ artists: [], aliases: [] }),
     ]);
     const imports = importPayload.imports || [];
     const downloads = downloadPayload.downloads || [];
@@ -653,6 +689,7 @@ async function refresh() {
     renderTransfers(transfers);
     renderSources(sources);
     renderUsers(users, session);
+    if (canManageCatalog) renderCatalog(catalogPayload);
     if (canManageSources) renderLibraryScan(scanStatus);
     if (canManageSources) renderTransferSettings(transferSettings);
     if (canSearchSoulseek) renderSoulseekStatus(soulseekStatus);
@@ -948,6 +985,88 @@ elements.users.addEventListener("change", async (event) => {
     elements.userMessage.className = "form-message error";
     elements.userMessage.textContent = error.message;
     await refresh();
+  }
+});
+
+elements.artistAliasForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const aliasID = elements.artistAliasSource.value;
+  const targetID = elements.artistAliasTarget.value;
+  elements.catalogMessage.className = "form-message";
+  if (!aliasID || !targetID || aliasID === targetID) {
+    elements.catalogMessage.className = "form-message error";
+    elements.catalogMessage.textContent = "Choose two different artists.";
+    return;
+  }
+  const button = elements.artistAliasForm.querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    await api(`/api/v1/catalog/artist-aliases/${encodeURIComponent(aliasID)}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ targetId: targetID }),
+    });
+    elements.catalogMessage.textContent = "Artist alias saved. Music clients will see one artist after synchronization.";
+    await refresh();
+  } catch (error) {
+    elements.catalogMessage.className = "form-message error";
+    elements.catalogMessage.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+elements.artistAliases.addEventListener("click", async (event) => {
+  const button = event.target.closest("[data-delete-artist-alias]");
+  if (!button) return;
+  button.disabled = true;
+  try {
+    await api(`/api/v1/catalog/artist-aliases/${encodeURIComponent(button.dataset.deleteArtistAlias)}`, { method: "DELETE" });
+    elements.catalogMessage.textContent = "Artist alias removed.";
+    await refresh();
+  } catch (error) {
+    button.disabled = false;
+    elements.catalogMessage.className = "form-message error";
+    elements.catalogMessage.textContent = error.message;
+  }
+});
+
+elements.trackMetadataForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const payload = {};
+  for (const [key, selector] of Object.entries({
+    title: "#metadata-title", artist: "#metadata-artist", album: "#metadata-album",
+    albumArtist: "#metadata-album-artist", genre: "#metadata-genre",
+  })) {
+    const value = elements.trackMetadataForm.querySelector(selector).value.trim();
+    if (value) payload[key] = value;
+  }
+  for (const [key, selector] of Object.entries({
+    year: "#metadata-year", trackNumber: "#metadata-track-number", discNumber: "#metadata-disc-number",
+  })) {
+    const value = elements.trackMetadataForm.querySelector(selector).value;
+    if (value !== "") payload[key] = Number(value);
+  }
+  if (!Object.keys(payload).length) {
+    elements.catalogMessage.className = "form-message error";
+    elements.catalogMessage.textContent = "Enter at least one metadata value.";
+    return;
+  }
+  const button = elements.trackMetadataForm.querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    await api(`/api/v1/catalog/tracks/${encodeURIComponent(elements.metadataTrackID.value.trim())}`, {
+      method: "PATCH", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload),
+    });
+    elements.catalogMessage.className = "form-message";
+    elements.catalogMessage.textContent = "Track metadata updated.";
+    elements.trackMetadataForm.reset();
+    await refresh();
+  } catch (error) {
+    elements.catalogMessage.className = "form-message error";
+    elements.catalogMessage.textContent = error.message;
+  } finally {
+    button.disabled = false;
   }
 });
 

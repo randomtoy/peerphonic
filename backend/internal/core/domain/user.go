@@ -19,6 +19,7 @@ const (
 	PermissionSoulseekAdd     Permission = "soulseek.add"
 	PermissionSoulseekClient  Permission = "soulseek.client-search"
 	PermissionUsersManage     Permission = "users.manage"
+	PermissionCatalogManage   Permission = "catalog.manage"
 )
 
 var availablePermissions = [...]Permission{
@@ -29,6 +30,7 @@ var availablePermissions = [...]Permission{
 	PermissionSoulseekAdd,
 	PermissionSoulseekClient,
 	PermissionUsersManage,
+	PermissionCatalogManage,
 }
 
 type User struct {

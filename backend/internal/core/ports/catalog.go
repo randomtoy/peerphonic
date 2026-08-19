@@ -45,6 +45,15 @@ type TrackAliasWriter interface {
 	SaveTrackAlias(ctx context.Context, aliasID, trackID string) error
 }
 
+type CatalogManager interface {
+	Artists(ctx context.Context) ([]domain.Artist, error)
+	ArtistAliases(ctx context.Context) ([]domain.ArtistAlias, error)
+	SetArtistAlias(ctx context.Context, aliasID, targetID string) (domain.ArtistAlias, error)
+	DeleteArtistAlias(ctx context.Context, aliasID string) error
+	Track(ctx context.Context, id string) (domain.Track, error)
+	UpdateTrackMetadata(ctx context.Context, id string, patch domain.TrackMetadataPatch) (domain.Track, error)
+}
+
 type AlbumOrder string
 
 const (

@@ -56,12 +56,16 @@
             <span class="nav-icon" aria-hidden="true">04</span>
             <span><strong>Activity</strong><small>Downloads and peers</small></span>
           </button>
-          <button class="nav-item" type="button" data-page="users" data-required-permission="users.manage">
+          <button class="nav-item" type="button" data-page="catalog" data-required-permission="catalog.manage">
             <span class="nav-icon" aria-hidden="true">05</span>
+            <span><strong>Catalog</strong><small>Aliases and metadata</small></span>
+          </button>
+          <button class="nav-item" type="button" data-page="users" data-required-permission="users.manage">
+            <span class="nav-icon" aria-hidden="true">06</span>
             <span><strong>Users</strong><small>Accounts and access</small></span>
           </button>
           <button class="nav-item" type="button" data-page="settings" data-required-permission="sources.manage">
-            <span class="nav-icon" aria-hidden="true">06</span>
+            <span class="nav-icon" aria-hidden="true">07</span>
             <span><strong>Settings</strong><small>Transfer limits</small></span>
           </button>
         </nav>
@@ -184,6 +188,37 @@
             </details>
             <p id="user-message" class="form-message" role="status"></p>
             <div id="users" class="source-list"></div>
+          </section>
+        </section>
+
+        <section class="dashboard-page" data-page-panel="catalog" hidden>
+          <section class="panel" aria-labelledby="artist-alias-title">
+            <div class="section-heading">
+              <div><p class="eyebrow">CATALOG IDENTITY</p><h2 id="artist-alias-title">Artist aliases</h2><p class="section-description">Merge alternate spellings in clients without modifying files. Removing an alias restores the separate artists.</p></div>
+              <span id="artist-alias-count" class="pill"></span>
+            </div>
+            <form id="artist-alias-form" class="settings-form">
+              <label>Alternate artist<select id="artist-alias-source" required></select></label>
+              <label>Show as<select id="artist-alias-target" required></select></label>
+              <button class="button primary" type="submit">Create alias</button>
+            </form>
+            <p id="catalog-message" class="form-message" role="status"></p>
+            <div id="artist-aliases" class="source-list"></div>
+          </section>
+          <section class="panel" aria-labelledby="track-metadata-title">
+            <div class="section-heading"><div><p class="eyebrow">METADATA OVERRIDE</p><h2 id="track-metadata-title">Edit a track</h2><p class="section-description">Use the OpenSubsonic track ID. Empty fields are left unchanged.</p></div></div>
+            <form id="track-metadata-form" class="settings-form">
+              <label>Track ID<input id="metadata-track-id" required></label>
+              <label>Title<input id="metadata-title"></label>
+              <label>Artist<input id="metadata-artist"></label>
+              <label>Album<input id="metadata-album"></label>
+              <label>Album artist<input id="metadata-album-artist"></label>
+              <label>Genre<input id="metadata-genre"></label>
+              <label>Year<input id="metadata-year" type="number" min="0"></label>
+              <label>Track number<input id="metadata-track-number" type="number" min="0"></label>
+              <label>Disc number<input id="metadata-disc-number" type="number" min="0"></label>
+              <button class="button primary" type="submit">Save metadata</button>
+            </form>
           </section>
         </section>
 

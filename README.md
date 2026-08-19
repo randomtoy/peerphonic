@@ -18,6 +18,7 @@ changing the client-facing streaming flow.
 - password, hex-encoded password, and token/salt authentication;
 - persistent administrator and listener accounts with isolated personal library state;
 - per-user dashboard capabilities delegated by administrators;
+- reversible artist aliases and track metadata overrides in the catalog dashboard;
 - artist/album/track browsing and HTTP range streaming;
 - genre browsing and album filtering from embedded tags;
 - paged album lists ordered by name, artist, import time, year, or randomly;
@@ -127,6 +128,7 @@ granted these independently:
 | `soulseek.add` | Add individual Soulseek tracks or albums from the dashboard |
 | `soulseek.client-search` | Include playable Soulseek results after local results in OpenSubsonic searches |
 | `users.manage` | Create, reset, and remove regular user accounts |
+| `catalog.manage` | Merge artist display identities and edit track metadata |
 
 Only administrators can assign capabilities, create administrators, or manage
 administrator accounts. A delegated user manager cannot elevate itself or

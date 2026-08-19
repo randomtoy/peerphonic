@@ -346,8 +346,12 @@ func (c *Catalog) Artists(ctx context.Context) ([]domain.Artist, error) {
 		SELECT album_artist_id, album_artist, album_id FROM tracks
 		UNION ALL
 		SELECT artist_id, artist, album_id FROM tracks
+	), resolved_roles(id, name, album_id) AS (
+		SELECT COALESCE(artist_aliases.target_id, artist_roles.id),
+			COALESCE(artist_aliases.target_name, artist_roles.name), artist_roles.album_id
+		FROM artist_roles LEFT JOIN artist_aliases ON artist_aliases.alias_id = artist_roles.id
 	)
-	SELECT id, MIN(name), COUNT(DISTINCT album_id) FROM artist_roles
+	SELECT id, MIN(name), COUNT(DISTINCT album_id) FROM resolved_roles
 	GROUP BY id ORDER BY MIN(name) COLLATE NOCASE`)
 	if err != nil {
 		return nil, fmt.Errorf("query artists: %w", err)
@@ -369,13 +373,21 @@ func (c *Catalog) Artists(ctx context.Context) ([]domain.Artist, error) {
 }
 
 func (c *Catalog) Artist(ctx context.Context, id string) (domain.Artist, error) {
+	resolvedID, err := c.resolveArtistID(ctx, id)
+	if err != nil {
+		return domain.Artist{}, err
+	}
 	row := c.db.QueryRowContext(ctx, `WITH artist_roles(id, name, album_id) AS (
 		SELECT album_artist_id, album_artist, album_id FROM tracks
 		UNION ALL
 		SELECT artist_id, artist, album_id FROM tracks
+	), resolved_roles(id, name, album_id) AS (
+		SELECT COALESCE(artist_aliases.target_id, artist_roles.id),
+			COALESCE(artist_aliases.target_name, artist_roles.name), artist_roles.album_id
+		FROM artist_roles LEFT JOIN artist_aliases ON artist_aliases.alias_id = artist_roles.id
 	)
-	SELECT id, MIN(name), COUNT(DISTINCT album_id) FROM artist_roles
-	WHERE id = ? GROUP BY id`, id)
+	SELECT id, MIN(name), COUNT(DISTINCT album_id) FROM resolved_roles
+	WHERE id = ? GROUP BY id`, resolvedID)
 	var artist domain.Artist
 	if err := row.Scan(&artist.ID, &artist.Name, &artist.AlbumCount); errors.Is(err, sql.ErrNoRows) {
 		return domain.Artist{}, ports.ErrNotFound
@@ -511,12 +523,22 @@ func (c *Catalog) Albums(ctx context.Context, query ports.AlbumListQuery) ([]dom
 }
 
 func (c *Catalog) AlbumsByArtist(ctx context.Context, artistID string) ([]domain.Album, error) {
-	rows, err := c.db.QueryContext(ctx, `SELECT album_id, MIN(album), MIN(album_artist),
-		MIN(album_artist_id),
+	artistID, err := c.resolveArtistID(ctx, artistID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := c.db.QueryContext(ctx, `SELECT album_id, MIN(album),
+		MIN(COALESCE(artist_aliases.target_name, album_artist)),
+		MIN(COALESCE(artist_aliases.target_id, album_artist_id)),
 		MIN(NULLIF(year, 0)), COUNT(*), SUM(duration_ms), MIN(NULLIF(cover_art_id, '')),
 		MIN(NULLIF(genre, ''))
-		FROM tracks WHERE album_id IN (
-			SELECT DISTINCT album_id FROM tracks WHERE album_artist_id = ? OR artist_id = ?
+		FROM tracks LEFT JOIN artist_aliases ON artist_aliases.alias_id = tracks.album_artist_id
+		WHERE album_id IN (
+			SELECT DISTINCT candidate.album_id FROM tracks candidate
+			LEFT JOIN artist_aliases album_alias ON album_alias.alias_id = candidate.album_artist_id
+			LEFT JOIN artist_aliases track_alias ON track_alias.alias_id = candidate.artist_id
+			WHERE COALESCE(album_alias.target_id, candidate.album_artist_id) = ?
+				OR COALESCE(track_alias.target_id, candidate.artist_id) = ?
 		)
 		GROUP BY album_id
 		ORDER BY album COLLATE NOCASE`, artistID, artistID)
